@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import {
   NativeEventEmitter,
   NativeModules,
@@ -6,7 +6,6 @@ import {
   PermissionsAndroid,
 } from 'react-native';
 import { Audio } from 'expo-av';
-import type { AgentLiveSchema } from '@deepgram/sdk';
 import { AgentEvents } from '@deepgram/sdk';
 import type { VoiceAgentController } from './types';
 import type {
@@ -68,11 +67,11 @@ export const useDeepgramConversation: UseConversationHook = ({
   /* Refs --------------------------------------------------------- */
 
   const ws = useRef<WebSocket | null>(null);
-  const keepAliveTimer = useRef<NodeJS.Timeout>();
-  const audioSub = useRef<ReturnType<NativeEventEmitter['addListener']>>();
-  const convoContextRef = useRef<AgentLiveSchema['context']['messages'] | null>(
+  const keepAliveTimer = useRef<NodeJS.Timeout | null>(null);
+  const audioSub = useRef<ReturnType<NativeEventEmitter['addListener']> | null>(
     null
   );
+  const convoContextRef = useRef<any>(null);
   const instructionsRef = useRef<string | null>(null);
 
   /* Helpers ------------------------------------------------------ */
@@ -90,7 +89,7 @@ export const useDeepgramConversation: UseConversationHook = ({
 
   /* startSession ------------------------------------------------- */
 
-  const startSession = async () => {
+  const startSession = useCallback(async () => {
     try {
       onBeforeStarting();
       /* 1. Mic permissions */
@@ -99,7 +98,11 @@ export const useDeepgramConversation: UseConversationHook = ({
           ? (await Audio.requestPermissionsAsync()).granted
           : (await PermissionsAndroid.request(
               PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
-              { title: 'Microphone', message: 'Microphone permission' }
+              {
+                title: 'Microphone',
+                message: 'Microphone permission',
+                buttonPositive: 'OK',
+              }
             )) === PermissionsAndroid.RESULTS.GRANTED;
 
       if (!granted) throw new Error('Microphone permission denied');
@@ -126,7 +129,7 @@ export const useDeepgramConversation: UseConversationHook = ({
               'Deepgram API key missing – call configure() first'
             );
 
-          const settings: AgentLiveSchema = {
+          const settings: any = {
             audio: {
               input: { encoding: 'linear16', sample_rate: 16000 },
               output: {
@@ -213,21 +216,33 @@ export const useDeepgramConversation: UseConversationHook = ({
     } finally {
       onAfterStarted();
     }
-  };
+  }, [
+    apiKey,
+    onBeforeStarting,
+    onStarted,
+    onAfterStarted,
+    onError,
+    onEnd,
+    onMessage,
+  ]);
 
   /* stopSession -------------------------------------------------- */
 
-  const stopSession = async () => {
+  const stopSession = useCallback(async () => {
     try {
       closeEverything();
       onEnd();
     } catch (err) {
       onError(err);
     }
-  };
+  }, [onEnd, onError]);
 
   /* automatic cleanup on unmount */
-  useEffect(() => () => stopSession(), []);
+  useEffect(() => {
+    return () => {
+      stopSession().catch(() => {});
+    };
+  }, [stopSession]);
 
   return { startSession, stopSession };
 };

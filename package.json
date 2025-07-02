@@ -58,6 +58,10 @@
   "publishConfig": {
     "registry": "https://registry.npmjs.org/"
   },
+  "dependencies": {
+    "@deepgram/sdk": "^4.7.0",
+    "expo-av": "^15.1.7"
+  },
   "devDependencies": {
     "@commitlint/config-conventional": "^19.6.0",
     "@eslint/compat": "^1.2.7",

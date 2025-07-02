@@ -1,12 +1,12 @@
 import { Text, View, StyleSheet } from 'react-native';
-import { multiply } from 'react-native-deepgram';
+import { configure } from 'react-native-deepgram';
 
-const result = multiply(3, 7);
+configure({ apiKey: 'YOUR_API_KEY' });
 
 export default function App() {
   return (
     <View style={styles.container}>
-      <Text>Result: {result}</Text>
+      <Text>Deepgram Example</Text>
     </View>
   );
 }

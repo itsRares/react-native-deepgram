@@ -1,5 +1,5 @@
-#import <DeepgramSpec/DeepgramSpec.h>
+#import <React/RCTEventEmitter.h>
+#import <React/RCTBridgeModule.h>
 
-@interface Deepgram : NSObject <NativeDeepgramSpec>
-
+@interface Deepgram : RCTEventEmitter <RCTBridgeModule>
 @end

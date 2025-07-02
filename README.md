@@ -12,11 +12,22 @@ npm install react-native-deepgram
 
 
 ```js
-import { multiply } from 'react-native-deepgram';
+import { useDeepgramConversation, configure } from 'react-native-deepgram';
 
-// ...
+configure({ apiKey: 'YOUR_DEEPGRAM_API_KEY' });
+const { startSession, stopSession } = useDeepgramConversation({
+  onMessage: console.log,
+});
+```
 
-const result = multiply(3, 7);
+When using Expo, include the provided config plugin in your `app.json`:
+
+```json
+{
+  "expo": {
+    "plugins": ["react-native-deepgram"]
+  }
+}
 ```
 
 

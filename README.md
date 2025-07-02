@@ -29,6 +29,14 @@ package is registered automatically:
 After installing, remember to run `pod install` inside the `ios` directory when
 developing for iOS.
 
+If you're using Expo, you'll need to generate the native projects first:
+
+```sh
+npx expo prebuild
+```
+
+Then run `npx expo run:ios` (or `run:android`) to start the app.
+
 ## Usage
 
 Configure the API key once, then use the `useDeepgramConversation` hook to start

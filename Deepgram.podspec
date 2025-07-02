@@ -15,7 +15,7 @@ Pod::Spec.new do |s|
 
   s.source_files = "ios/**/*.{h,m,mm,cpp}"
   s.private_header_files = "ios/**/*.h"
-  s.frameworks = "AVFoundation"
+  s.frameworks = ["AVFoundation", "AVFAudio"]
 
 
   install_modules_dependencies(s)

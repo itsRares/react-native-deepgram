@@ -1,26 +1,22 @@
 # react-native-deepgram
 
-Package to support deepgram
+Bindings that allow a React Native app to talk to
+[Deepgram's Voice Agent](https://developers.deepgram.com)
+service. The library handles recording raw PCM audio, connecting to the
+Deepgram WebSocket and playing back the agent's audio responses.
 
 ## Installation
 
 ```sh
 npm install react-native-deepgram
+# or
+yarn add react-native-deepgram
 ```
 
-## Usage
+### Expo
 
-
-```js
-import { useDeepgramConversation, configure } from 'react-native-deepgram';
-
-configure({ apiKey: 'YOUR_DEEPGRAM_API_KEY' });
-const { startSession, stopSession } = useDeepgramConversation({
-  onMessage: console.log,
-});
-```
-
-When using Expo, include the provided config plugin in your `app.json`:
+If you use Expo, add the config plugin in your `app.json` so the native Android
+package is registered automatically:
 
 ```json
 {
@@ -29,6 +25,42 @@ When using Expo, include the provided config plugin in your `app.json`:
   }
 }
 ```
+
+After installing, remember to run `pod install` inside the `ios` directory when
+developing for iOS.
+
+## Usage
+
+Configure the API key once, then use the `useDeepgramConversation` hook to start
+and stop a voice session.
+
+```tsx
+import React, { useState } from 'react';
+import { Button, Text, View } from 'react-native';
+import { configure, useDeepgramConversation } from 'react-native-deepgram';
+
+configure({ apiKey: 'YOUR_DEEPGRAM_API_KEY' });
+
+export default function Example() {
+  const [messages, setMessages] = useState([]);
+  const { startSession, stopSession } = useDeepgramConversation({
+    onMessage: (m) => setMessages((cur) => [...cur, m]),
+    onError: console.warn,
+  });
+
+  return (
+    <View>
+      <Button title="Start" onPress={startSession} />
+      <Button title="Stop" onPress={stopSession} />
+      {messages.map((m, i) => (
+        <Text key={i}>{`${m.role}: ${m.content}`}</Text>
+      ))}
+    </View>
+  );
+}
+```
+
+See the [`example`](example) folder for a fully working application.
 
 
 ## Contributing

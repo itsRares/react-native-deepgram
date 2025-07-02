@@ -17,12 +17,15 @@ This folder contains a bare React Native application demonstrating how to use **
    yarn start
    ```
 
-3. In another terminal, build and run the platform target. If you use Expo run:
+3. In another terminal, build and run the platform target.
+
+   If you use Expo:
 
    ```sh
+   npx expo prebuild
    npx expo run:ios       # or expo run:android
    ```
-   
+
    Otherwise with plain React Native run:
 
    ```sh

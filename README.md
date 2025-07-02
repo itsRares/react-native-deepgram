@@ -15,29 +15,36 @@ yarn add react-native-deepgram
 
 ### Expo
 
-If you use Expo, add the config plugin in your `app.json` so the native Android
-package is registered automatically:
+When using Expo you can let the config plugin set up the native code for you.
+Create an `app.config.js` and include the plugin:
 
-```json
-{
-  "expo": {
-    "plugins": ["react-native-deepgram"]
-  }
-}
+```js
+module.exports = {
+  expo: {
+    plugins: [
+      [
+        'react-native-deepgram',
+        {
+          microphonePermission:
+            'Allow $(PRODUCT_NAME) to access your microphone.',
+        },
+      ],
+    ],
+  },
+};
 ```
 
 After installing, remember to run `pod install` inside the `ios` directory when
 developing for iOS.
 
-If you're using Expo, you'll need to generate the native projects first:
+If you're using Expo, generate the native projects first and then run them:
 
 ```sh
 npx expo prebuild
+npx expo run:ios       # or expo run:android
 ```
 
-Then run `npx expo run:ios` (or `run:android`) to start the app.
-
-## Usage
+### Expo
 
 Configure the API key once, then use the `useDeepgramConversation` hook to start
 and stop a voice session.
@@ -69,7 +76,6 @@ export default function Example() {
 ```
 
 See the [`example`](example) folder for a fully working application.
-
 
 ## Contributing
 

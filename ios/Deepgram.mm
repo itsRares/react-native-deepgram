@@ -17,7 +17,7 @@ RCT_EXPORT_MODULE();
 
 - (NSArray<NSString *> *)supportedEvents
 {
-  return @["DeepgramAudioPCM"];
+  return @[@"DeepgramAudioPCM"];
 }
 
 #pragma mark - Recording
@@ -31,7 +31,7 @@ RCT_EXPORT_METHOD(startRecording:(RCTPromiseResolveBlock)resolve rejecter:(RCTPr
     AVAudioInputNode *input = self.engine.inputNode;
     AVAudioFormat *format = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatInt16 sampleRate:16000 channels:1 interleaved:YES];
     [input removeTapOnBus:0];
-    __weak typeof(self) weakSelf = self;
+    __weak __typeof(self) weakSelf = self;
     [input installTapOnBus:0 bufferSize:1024 format:format block:^(AVAudioPCMBuffer *buffer, AVAudioTime *when) {
       if (!weakSelf) return;
       NSUInteger frames = buffer.frameLength;

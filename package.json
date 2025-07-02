@@ -98,7 +98,7 @@
   ],
   "expo": {
     "plugins": [
-      "./plugins/withDeepgramPackage"
+      "./plugins/withDeepgram"
     ]
   },
   "packageManager": "yarn@3.6.1",

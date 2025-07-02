@@ -95,6 +95,11 @@
   "workspaces": [
     "example"
   ],
+  "expo": {
+    "plugins": [
+      "./plugins/withDeepgramPackage"
+    ]
+  },
   "packageManager": "yarn@3.6.1",
   "jest": {
     "preset": "react-native",

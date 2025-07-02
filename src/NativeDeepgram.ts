@@ -11,7 +11,7 @@ interface DeepgramNative {
 const LINKING_ERROR = `react-native-deepgram: Native code not linked—did you run “pod install” & rebuild?`;
 
 export const Deepgram: DeepgramNative =
-  NativeModules.DeepgramNative ??
+  NativeModules.Deepgram ??
   (new Proxy(
     {},
     {

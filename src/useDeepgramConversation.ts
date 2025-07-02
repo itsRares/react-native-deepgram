@@ -167,7 +167,7 @@ export const useDeepgramConversation: UseConversationHook = ({
           };
 
           /* Forward PCM chunks ➜ WebSocket */
-          const emitter = new NativeEventEmitter(NativeModules.DeepgramNative);
+          const emitter = new NativeEventEmitter(NativeModules.Deepgram);
           audioSub.current = emitter.addListener(
             AUDIO_EVT_NATIVE,
             ({ data }: { data: number[] }) => {

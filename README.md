@@ -22,11 +22,15 @@ Create an `app.config.js` and include the plugin:
 module.exports = {
   expo: {
     plugins: [
-      ["react-native-deepgram", {
-        microphonePermission: "Allow $(PRODUCT_NAME) to access your microphone."
-      }]
-    ]
-  }
+      [
+        'react-native-deepgram',
+        {
+          microphonePermission:
+            'Allow $(PRODUCT_NAME) to access your microphone.',
+        },
+      ],
+    ],
+  },
 };
 ```
 
@@ -40,7 +44,7 @@ npx expo prebuild
 npx expo run:ios       # or expo run:android
 ```
 
-## Usage
+### Expo
 
 Configure the API key once, then use the `useDeepgramConversation` hook to start
 and stop a voice session.
@@ -72,7 +76,6 @@ export default function Example() {
 ```
 
 See the [`example`](example) folder for a fully working application.
-
 
 ## Contributing
 

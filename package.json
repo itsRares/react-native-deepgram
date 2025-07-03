@@ -28,7 +28,7 @@
     "/app.plugin.js"
   ],
   "scripts": {
-    "example": "yarn workspace react-native-deepgram-example",
+    "example": "yarn workspace react-native-deepgram-example ios",
     "test": "jest",
     "typecheck": "tsc",
     "lint": "eslint \"**/*.{js,ts,tsx}\"",

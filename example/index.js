@@ -1,4 +1,4 @@
-import { AppRegistry } from 'react-native';
+import { registerRootComponent } from 'expo';
 import App from './src/App';
 
-AppRegistry.registerComponent('Deepgram', () => App);
+registerRootComponent(App);

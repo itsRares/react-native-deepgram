@@ -3,13 +3,16 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "android": "react-native run-android",
-    "ios": "react-native run-ios",
-    "start": "react-native start",
-    "build:android": "react-native build-android --extra-params \"--no-daemon --console=plain -PreactNativeArchitectures=arm64-v8a\"",
-    "build:ios": "react-native build-ios --mode Debug"
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "prebuild": "expo prebuild",
+    "build:android": "expo prebuild && expo run:android",
+    "build:ios": "expo prebuild && expo run:ios"
   },
   "dependencies": {
+    "expo": "^50.0.0",
+    "expo-av": "^15.1.7",
     "react": "19.0.0",
     "react-native": "0.79.2",
     "react-native-deepgram": "file:../"
@@ -18,15 +21,8 @@
     "@babel/core": "^7.25.2",
     "@babel/preset-env": "^7.25.3",
     "@babel/runtime": "^7.25.0",
-    "@react-native-community/cli": "18.0.0",
-    "@react-native-community/cli-platform-android": "18.0.0",
-    "@react-native-community/cli-platform-ios": "18.0.0",
-    "@react-native/babel-preset": "0.79.2",
-    "@react-native/metro-config": "0.79.2",
-    "@react-native/typescript-config": "0.79.2",
     "@types/react": "^19.0.0",
-    "react-native-builder-bob": "^0.40.12",
-    "react-native-monorepo-config": "^0.1.9"
+    "babel-preset-expo": "^9.7.2"
   },
   "engines": {
     "node": ">=18"

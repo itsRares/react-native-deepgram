@@ -5,14 +5,25 @@ import {
   Platform,
   PermissionsAndroid,
 } from 'react-native';
-import { Audio } from 'expo-av';
-import { AgentEvents } from '@deepgram/sdk';
+import { request, PERMISSIONS, RESULTS } from 'react-native-permissions';
 import type { VoiceAgentController } from './types';
 import type {
   UseConversationHook,
   Message,
 } from './types/use-conversation-hook';
 import { Deepgram } from './NativeDeepgram';
+
+const askMicPermission = async (): Promise<boolean> => {
+  if (Platform.OS === 'ios') {
+    const status = await request(PERMISSIONS.IOS.MICROPHONE);
+    return status === RESULTS.GRANTED;
+  }
+  return (
+    (await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.RECORD_AUDIO
+    )) === PermissionsAndroid.RESULTS.GRANTED
+  );
+};
 
 /* ---------------------------------------------------------------- */
 /* ➜ 1. Constants / helpers                                         */
@@ -78,13 +89,8 @@ export const useDeepgramConversation: UseConversationHook = ({
     try {
       onBeforeStarting();
 
-      /* 1️⃣ Microphone permission */
-      const granted =
-        Platform.OS === 'ios'
-          ? (await Audio.requestPermissionsAsync()).granted
-          : (await PermissionsAndroid.request(
-              PermissionsAndroid.PERMISSIONS.RECORD_AUDIO
-            )) === PermissionsAndroid.RESULTS.GRANTED;
+      /* 🆕 microphone permission */
+      const granted = await askMicPermission();
       if (!granted) throw new Error('Microphone permission denied');
 
       /* 2️⃣ Start native capture / playback */
@@ -166,7 +172,7 @@ export const useDeepgramConversation: UseConversationHook = ({
           ws.current.onmessage = (ev) => {
             if (typeof ev.data === 'string') {
               const msg = JSON.parse(ev.data);
-              if (msg.type === AgentEvents.ConversationText) {
+              if (msg.type === 'ConversationText') {
                 onMessage({
                   role: msg.role,
                   content: msg.content,

@@ -1,97 +1,147 @@
 #import "Deepgram.h"
 #import <AVFoundation/AVFoundation.h>
 
-@interface Deepgram()
-@property(nonatomic,strong) AVAudioEngine *engine;
-@property(nonatomic,strong) AVAudioPlayerNode *player;
+@interface Deepgram ()
+@property (nonatomic, strong) AVAudioEngine *engine;
+@property (nonatomic, strong) AVAudioPlayerNode *player;
 @end
 
 @implementation Deepgram
-
 RCT_EXPORT_MODULE();
 
-+ (BOOL)requiresMainQueueSetup
-{
-  return NO;
-}
+/* ------------------------------------------------------------------ */
+/*  React-Native boilerplate                                          */
+/* ------------------------------------------------------------------ */
+
++ (BOOL)requiresMainQueueSetup { return NO; }
 
 - (NSArray<NSString *> *)supportedEvents
 {
-  return @[@"DeepgramAudioPCM"];
+  // Single outbound event: base-64-encoded PCM captured from the mic
+  return @[ @"DeepgramAudioPCM" ];
 }
 
-#pragma mark - Recording
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                           */
+/* ------------------------------------------------------------------ */
 
-RCT_EXPORT_METHOD(startRecording:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
+- (void)ensureAudioSession
 {
-  @try {
-    if (!self.engine) {
-      self.engine = [[AVAudioEngine alloc] init];
-    }
-    AVAudioInputNode *input = self.engine.inputNode;
-    AVAudioFormat *format = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatInt16 sampleRate:16000 channels:1 interleaved:YES];
-    [input removeTapOnBus:0];
-    __weak __typeof(self) weakSelf = self;
-    [input installTapOnBus:0 bufferSize:1024 format:format block:^(AVAudioPCMBuffer *buffer, AVAudioTime *when) {
-      if (!weakSelf) return;
-      NSUInteger frames = buffer.frameLength;
-      int16_t *samples = buffer.int16ChannelData[0];
-      NSMutableArray *array = [NSMutableArray arrayWithCapacity:frames * 2];
-      for (NSUInteger i = 0; i < frames; i++) {
-        [array addObject:@(samples[i] & 0xFF)];
-        [array addObject:@((samples[i] >> 8) & 0xFF)];
-      }
-      [weakSelf sendEventWithName:@"DeepgramAudioPCM" body:@{ @"data": array }];
-    }];
-    [self.engine prepare];
-    [self.engine startAndReturnError:nil];
-    resolve(nil);
-  } @catch (NSException *e) {
-    reject(@"record_start_error", e.reason, nil);
-  }
-}
+  AVAudioSession *session = [AVAudioSession sharedInstance];
 
-RCT_EXPORT_METHOD(stopRecording:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
-{
-  @try {
-    [self.engine.inputNode removeTapOnBus:0];
-    [self.engine stop];
-    self.engine = nil;
-    resolve(nil);
-  } @catch (NSException *e) {
-    reject(@"record_stop_error", e.reason, nil);
-  }
-}
+  // Play & record, default to the speaker
+  [session setCategory:AVAudioSessionCategoryPlayAndRecord
+           withOptions:AVAudioSessionCategoryOptionDefaultToSpeaker
+                 error:nil];
 
-#pragma mark - Playback
+  // Hardware sample-rate is 48 kHz on all modern iPhones; no override
+  // (removing the previous 16 kHz preference eliminates the mismatch warning)
+
+  [session setActive:YES error:nil];
+}
 
 - (void)ensurePlayer
 {
   if (!self.engine) {
     self.engine = [[AVAudioEngine alloc] init];
   }
-  if (!self.player) {
-    self.player = [[AVAudioPlayerNode alloc] init];
-    [self.engine attachNode:self.player];
-    AVAudioFormat *format = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatInt16 sampleRate:16000 channels:1 interleaved:YES];
-    [self.engine connect:self.player to:self.engine.mainMixerNode format:format];
+  if (self.player) return;
+
+  self.player = [[AVAudioPlayerNode alloc] init];
+  [self.engine attachNode:self.player];
+
+  /* 🔹 Let AVAudioEngine pick the right format & insert a converter.
+     Passing `nil` avoids the 16 kHz → 48 kHz format-mismatch crash. */
+  [self.engine connect:self.player
+                    to:self.engine.mainMixerNode
+                format:nil];
+
+  [self ensureAudioSession];
+  [self.engine prepare];
+  [self.engine startAndReturnError:nil];
+}
+
+/* ------------------------------------------------------------------ */
+/*  Recording – 48 000 Hz / Float-32                                   */
+/* ------------------------------------------------------------------ */
+
+RCT_EXPORT_METHOD(startRecording
+                  :(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+{
+  @try {
+    if (!self.engine) self.engine = [[AVAudioEngine alloc] init];
+    [self ensureAudioSession];
+
+    AVAudioInputNode *input = self.engine.inputNode;
+    // Tap in the **hardware format** (≈ 48 kHz, Float-32)
+    AVAudioFormat *hwFormat = [input outputFormatForBus:0];
+
+    [input removeTapOnBus:0];   // clean previous taps
+
+    __weak __typeof(self) weakSelf = self;
+    [input installTapOnBus:0
+                bufferSize:1024
+                    format:hwFormat
+                     block:^(AVAudioPCMBuffer *buf, AVAudioTime *when) {
+                       if (!weakSelf) return;
+
+                       // buf.floatChannelData[0] → NSData (Float32 little-endian)
+                       NSData *pcm =
+                         [NSData dataWithBytes:buf.floatChannelData[0]
+                                         length:buf.frameLength * sizeof(float)];
+                       NSString *b64 =
+                         [pcm base64EncodedStringWithOptions:0];
+
+                       [weakSelf sendEventWithName:@"DeepgramAudioPCM"
+                                              body:@{ @"b64": b64 }];
+                     }];
+
     [self.engine prepare];
     [self.engine startAndReturnError:nil];
+    resolve(nil);
+  }
+  @catch (NSException *e) {
+    reject(@"record_start_error", e.reason, nil);
   }
 }
 
-RCT_EXPORT_METHOD(startAudio:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
+RCT_EXPORT_METHOD(stopRecording
+                  :(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+{
+  @try {
+    [self.engine.inputNode removeTapOnBus:0];
+    [self.engine stop];
+    self.engine = nil;
+    resolve(nil);
+  }
+  @catch (NSException *e) {
+    reject(@"record_stop_error", e.reason, nil);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Playback                                                          */
+/* ------------------------------------------------------------------ */
+
+RCT_EXPORT_METHOD(startAudio
+                  :(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
 {
   @try {
     [self ensurePlayer];
     [self.player play];
     resolve(nil);
-  } @catch (NSException *e) {
+  }
+  @catch (NSException *e) {
     reject(@"audio_start_error", e.reason, nil);
   }
 }
 
-RCT_EXPORT_METHOD(stopAudio:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
+RCT_EXPORT_METHOD(stopAudio
+                  :(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
 {
   @try {
     [self.player stop];
@@ -99,24 +149,46 @@ RCT_EXPORT_METHOD(stopAudio:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromise
     self.player = nil;
     self.engine = nil;
     resolve(nil);
-  } @catch (NSException *e) {
+  }
+  @catch (NSException *e) {
     reject(@"audio_stop_error", e.reason, nil);
   }
 }
 
-RCT_EXPORT_METHOD(playAudioChunk:(NSString *)chunk resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
+RCT_EXPORT_METHOD(playAudioChunk
+                  :(NSString *)chunk
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
 {
   @try {
     [self ensurePlayer];
-    NSData *data = [[NSData alloc] initWithBase64EncodedString:chunk options:0];
-    if (!data) { reject(@"decode_error", @"invalid base64", nil); return; }
-    AVAudioFormat *format = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatInt16 sampleRate:16000 channels:1 interleaved:YES];
-    AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:format frameCapacity:(uint32_t)(data.length / 2)];
-    buffer.frameLength = buffer.frameCapacity;
+
+    // base-64 string → NSData
+    NSData *data =
+      [[NSData alloc] initWithBase64EncodedString:chunk options:0];
+    if (!data) {
+      reject(@"decode_error", @"invalid base64", nil);
+      return;
+    }
+
+    AVAudioFormat *pcm16 =
+      [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatInt16
+                                       sampleRate:16000
+                                         channels:1
+                                      interleaved:YES];
+
+    uint32_t frames = (uint32_t)(data.length / 2);
+    AVAudioPCMBuffer *buffer =
+      [[AVAudioPCMBuffer alloc] initWithPCMFormat:pcm16
+                                    frameCapacity:frames];
+    buffer.frameLength = frames;
+
     memcpy(buffer.int16ChannelData[0], data.bytes, data.length);
     [self.player scheduleBuffer:buffer completionHandler:nil];
+
     resolve(nil);
-  } @catch (NSException *e) {
+  }
+  @catch (NSException *e) {
     reject(@"play_error", e.reason, nil);
   }
 }

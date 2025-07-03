@@ -1,13 +1,25 @@
-import React, { useState } from 'react';
-import { SafeAreaView, View, Text, Button, FlatList, StyleSheet } from 'react-native';
+import { useState } from 'react';
+import {
+  SafeAreaView,
+  View,
+  Text,
+  Button,
+  FlatList,
+  StyleSheet,
+} from 'react-native';
 import { configure, useDeepgramConversation } from 'react-native-deepgram';
 
 configure({ apiKey: 'YOUR_API_KEY' });
 
+type Message = {
+  role: string;
+  content: string;
+};
+
 export default function App() {
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const { startSession, stopSession } = useDeepgramConversation({
-    onMessage: (m) => setMessages((cur) => [...cur, m]),
+    onMessage: (m: Message) => setMessages((cur) => [...cur, m]),
     onError: console.warn,
   });
 

@@ -1,24 +1,18 @@
 {
   "name": "react-native-deepgram",
-  "version": "0.1.0",
+  "version": "0.1.15",
   "description": "Package to support deepgram",
-  "main": "./lib/module/index.js",
-  "types": "./lib/typescript/src/index.d.ts",
-  "exports": {
-    ".": {
-      "source": "./src/index.tsx",
-      "types": "./lib/typescript/src/index.d.ts",
-      "default": "./lib/module/index.js"
-    },
-    "./package.json": "./package.json"
-  },
+  "main": "lib/commonjs/index.js",
+  "module": "lib/module/index.js",
+  "react-native": "src/index.ts",
+  "types": "lib/typescript/src/index.d.ts",
   "files": [
     "src",
     "lib",
     "android",
     "ios",
     "cpp",
-    "plugins",
+    "/plugin/",
     "*.podspec",
     "react-native.config.js",
     "!ios/build",
@@ -30,10 +24,11 @@
     "!**/__tests__",
     "!**/__fixtures__",
     "!**/__mocks__",
-    "!**/.*"
+    "!**/.*",
+    "/app.plugin.js"
   ],
   "scripts": {
-    "example": "yarn workspace react-native-deepgram-example",
+    "example": "yarn workspace react-native-deepgram-example ios",
     "test": "jest",
     "typecheck": "tsc",
     "lint": "eslint \"**/*.{js,ts,tsx}\"",
@@ -80,6 +75,8 @@
     "eslint": "^9.22.0",
     "eslint-config-prettier": "^10.1.1",
     "eslint-plugin-prettier": "^5.2.3",
+    "eslint-plugin-react-native": "^5.0.0",
+    "expo-module-scripts": "^4.1.8",
     "jest": "^29.7.0",
     "prettier": "^3.0.3",
     "react": "19.0.0",
@@ -96,11 +93,6 @@
   "workspaces": [
     "example"
   ],
-  "expo": {
-    "plugins": [
-      "./plugins/withDeepgram"
-    ]
-  },
   "packageManager": "yarn@3.6.1",
   "jest": {
     "preset": "react-native",
@@ -144,18 +136,9 @@
     "source": "src",
     "output": "lib",
     "targets": [
-      [
-        "module",
-        {
-          "esm": true
-        }
-      ],
-      [
-        "typescript",
-        {
-          "project": "tsconfig.build.json"
-        }
-      ]
+      "commonjs",
+      "module",
+      "typescript"
     ]
   },
   "codegenConfig": {

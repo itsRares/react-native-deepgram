@@ -20,22 +20,16 @@ import { Deepgram } from './NativeDeepgram';
 
 const AUDIO_EVT_NATIVE = Platform.select({
   ios: 'DeepgramAudioPCM',
-  android: 'AudioChunk', // emitted by AudioRecorder.kt
-})!;
+  android: 'AudioChunk',
+}) as string;
 
-const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
-  const bytes = new Uint8Array(buffer);
-  const binary = String.fromCharCode(...bytes);
-  return global.btoa(binary);
-};
+const arrayBufferToBase64 = (buffer: ArrayBuffer): string =>
+  global.btoa(String.fromCharCode(...new Uint8Array(buffer)));
 
 /* ---------------------------------------------------------------- */
 /* ➜ 2. Hook                                                        */
 /* ---------------------------------------------------------------- */
 
-/**
- * Props you pass into the hook – mirrors the blog.
- */
 export type UseDeepgramConversationProps = {
   onBeforeStarting?: () => void;
   onStarted?: (vac: VoiceAgentController) => void;
@@ -45,17 +39,11 @@ export type UseDeepgramConversationProps = {
   onMessage?: (event: Message) => void;
 };
 
-/**
- * Hook return type – start/stop only.
- */
 export type UseDeepgramConversationReturn = {
   startSession: () => void;
   stopSession: () => void;
 };
 
-/**
- * Main hook.
- */
 export const useDeepgramConversation: UseConversationHook = ({
   onBeforeStarting = () => {},
   onStarted = () => {},
@@ -65,9 +53,8 @@ export const useDeepgramConversation: UseConversationHook = ({
   onMessage = () => {},
 }: UseDeepgramConversationProps): UseDeepgramConversationReturn => {
   /* Refs --------------------------------------------------------- */
-
   const ws = useRef<WebSocket | null>(null);
-  const keepAliveTimer = useRef<NodeJS.Timeout | null>(null);
+  const keepAlive = useRef<ReturnType<typeof setInterval> | null>(null);
   const audioSub = useRef<ReturnType<NativeEventEmitter['addListener']> | null>(
     null
   );
@@ -75,12 +62,11 @@ export const useDeepgramConversation: UseConversationHook = ({
   const instructionsRef = useRef<string | null>(null);
 
   /* Helpers ------------------------------------------------------ */
-
   const apiKey: string | undefined = (global as any).__DEEPGRAM_API_KEY__;
 
   const closeEverything = () => {
     audioSub.current?.remove();
-    keepAliveTimer.current && clearInterval(keepAliveTimer.current);
+    if (keepAlive.current) clearInterval(keepAlive.current);
     Deepgram.stopRecording().catch(() => {});
     Deepgram.stopAudio().catch(() => {});
     ws.current?.close(1000, 'clean-up');
@@ -88,30 +74,24 @@ export const useDeepgramConversation: UseConversationHook = ({
   };
 
   /* startSession ------------------------------------------------- */
-
   const startSession = useCallback(async () => {
     try {
       onBeforeStarting();
-      /* 1. Mic permissions */
+
+      /* 1️⃣ Microphone permission */
       const granted =
         Platform.OS === 'ios'
           ? (await Audio.requestPermissionsAsync()).granted
           : (await PermissionsAndroid.request(
-              PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
-              {
-                title: 'Microphone',
-                message: 'Microphone permission',
-                buttonPositive: 'OK',
-              }
+              PermissionsAndroid.PERMISSIONS.RECORD_AUDIO
             )) === PermissionsAndroid.RESULTS.GRANTED;
-
       if (!granted) throw new Error('Microphone permission denied');
 
-      /* 2. Kick off native pipes */
+      /* 2️⃣ Start native capture / playback */
       await Deepgram.startRecording();
       await Deepgram.startAudio();
 
-      /* 3. Build voice-agent controller */
+      /* 3️⃣ Build the controller object */
       const vac: VoiceAgentController = {
         sendInitialIntructions: async (s) => {
           instructionsRef.current = s;
@@ -122,19 +102,20 @@ export const useDeepgramConversation: UseConversationHook = ({
             content: text,
           }));
         },
-        makeAgentSay: async () => undefined, // not wired yet
+        makeAgentSay: async () => undefined,
         startConversation: async () => {
           if (!apiKey)
             throw new Error(
               'Deepgram API key missing – call configure() first'
             );
 
-          const settings: any = {
+          /* Deepgram settings – 48 kHz Float32 in, 16 kHz Int16 out */
+          const settings = {
             audio: {
-              input: { encoding: 'linear16', sample_rate: 16000 },
+              input: { encoding: 'float32', sample_rate: 48_000 },
               output: {
                 encoding: 'linear16',
-                sample_rate: 16000,
+                sample_rate: 16_000,
                 container: 'none',
               },
             },
@@ -154,42 +135,43 @@ export const useDeepgramConversation: UseConversationHook = ({
             },
           };
 
-          ws.current = new WebSocket(
+          /* Open WebSocket with auth header */
+          ws.current = new (WebSocket as any)(
             'wss://agent.deepgram.com/agent',
             undefined,
             { headers: { Authorization: `Token ${apiKey}` } }
           );
 
-          ws.current.onopen = () => {
+          /* Send configuration on open */
+          ws.current.onopen = () =>
             ws.current?.send(
               JSON.stringify({ type: 'SettingsConfiguration', ...settings })
             );
-          };
 
-          /* Forward PCM chunks ➜ WebSocket */
+          /* Forward PCM chunks (base-64 Float32) ➜ WS */
           const emitter = new NativeEventEmitter(NativeModules.Deepgram);
           audioSub.current = emitter.addListener(
             AUDIO_EVT_NATIVE,
-            ({ data }: { data: number[] }) => {
-              ws.current?.readyState === WebSocket.OPEN &&
-                ws.current.send(new Uint8Array(data).buffer);
+            ({ b64 }: { b64: string }) => {
+              if (ws.current?.readyState === WebSocket.OPEN) {
+                const binary = Uint8Array.from(atob(b64), (c) =>
+                  c.charCodeAt(0)
+                );
+                ws.current.send(binary.buffer);
+              }
             }
           );
 
-          /* WS events */
+          /* Handle WS events */
           ws.current.onmessage = (ev) => {
             if (typeof ev.data === 'string') {
               const msg = JSON.parse(ev.data);
-              switch (msg.type as AgentEvents) {
-                case AgentEvents.SettingsApplied:
-                  /* nothing */ break;
-                case AgentEvents.ConversationText:
-                  onMessage({
-                    role: msg.role,
-                    content: msg.content,
-                    timestamp: Date.now(),
-                  });
-                  break;
+              if (msg.type === AgentEvents.ConversationText) {
+                onMessage({
+                  role: msg.role,
+                  content: msg.content,
+                  timestamp: Date.now(),
+                });
               }
             } else if (ev.data instanceof ArrayBuffer) {
               Deepgram.playAudioChunk(arrayBufferToBase64(ev.data)).catch(
@@ -197,15 +179,14 @@ export const useDeepgramConversation: UseConversationHook = ({
               );
             }
           };
-
           ws.current.onerror = onError;
           ws.current.onclose = onEnd;
 
-          /* Keep-alive */
-          keepAliveTimer.current = setInterval(() => {
+          /* Keep-alive ping */
+          keepAlive.current = setInterval(() => {
             ws.current?.readyState === WebSocket.OPEN &&
               ws.current.send(JSON.stringify({ type: 'KeepAlive' }));
-          }, 5_000);
+          }, 5000);
         },
       };
 
@@ -227,7 +208,6 @@ export const useDeepgramConversation: UseConversationHook = ({
   ]);
 
   /* stopSession -------------------------------------------------- */
-
   const stopSession = useCallback(async () => {
     try {
       closeEverything();
@@ -237,7 +217,7 @@ export const useDeepgramConversation: UseConversationHook = ({
     }
   }, [onEnd, onError]);
 
-  /* automatic cleanup on unmount */
+  /* cleanup on unmount ------------------------------------------ */
   useEffect(() => {
     return () => {
       stopSession().catch(() => {});

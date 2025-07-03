@@ -1,8 +1,20 @@
 module.exports = {
-  name: 'DeepgramExample',
-  plugins: [
-    ['react-native-deepgram', {
-      microphonePermission: 'Allow $(PRODUCT_NAME) to access the microphone.'
-    }],
-  ],
+  expo: {
+    name: 'DeepgramExample',
+    android: {
+      package: 'com.itsrares.deepgramexample',
+    },
+    ios: {
+      bundleIdentifier: 'com.itsrares.deepgramexample',
+    },
+    plugins: [
+      [
+        'react-native-deepgram',
+        {
+          microphonePermission:
+            'This app needs microphone access for speech recognition',
+        },
+      ],
+    ],
+  },
 };

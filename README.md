@@ -1,24 +1,52 @@
 # react-native-deepgram
 
-Bindings that allow a React Native app to talk to
-[Deepgram's Voice Agent](https://developers.deepgram.com)
-service. The library handles recording raw PCM audio, connecting to the
-Deepgram WebSocket and playing back the agent's audio responses.
+> **Work in progress** – currently only the **Listen (Speech-to-Text)** API is supported.
+
+Bindings that allow a React Native application to communicate with [Deepgram’s Speech-to-Text API](https://developers.deepgram.com/docs/listen) via WebSocket **and** HTTP POST for pre-recorded audio. This library handles:
+
+- 🔊 **Live streaming**: captures raw PCM audio from the microphone, down-samples, and streams over WebSocket to Deepgram.
+- 📄 **File transcription**: uploads audio files (blobs or device URIs) via HTTP POST to Deepgram’s REST endpoint.
+
+> ⚠️ Future support for Deepgram’s Voice Agent (text-to-speech responses) and additional REST endpoints is planned.
+
+---
+
+## Features
+
+- **Live Speech-to-Text (WebSocket)**
+  - `startListening()` / `stopListening()` hooks for real-time transcription.
+  - Partial and final results via callback.
+- **Pre-Recorded File Transcription (HTTP POST)**
+  - `transcribeFile(file)` method accepts a `Blob` or `{ uri, name, type }`.
+  - Returns final transcript in a single callback.
+- **React Native + Expo ready**
+  - Includes Expo Config Plugin for automatic native setup.
+  - Compatible with both managed and bare workflows.
+
+---
 
 ## Installation
 
-```sh
+```bash
 npm install react-native-deepgram
 # or
 yarn add react-native-deepgram
 ```
 
+### iOS (CocoaPods)
+
+After installing, from the `ios/` directory run:
+
+```bash
+pod install
+```
+
 ### Expo
 
-When using Expo you can let the config plugin set up the native code for you.
-Create an `app.config.js` and include the plugin:
+If you’re using Expo, add the plugin to your `app.config.js` or `app.json`:
 
 ```js
+// app.config.js
 module.exports = {
   expo: {
     plugins: [
@@ -34,57 +62,115 @@ module.exports = {
 };
 ```
 
-After installing, remember to run `pod install` inside the `ios` directory when
-developing for iOS.
+Then generate native projects (managed workflow) and run:
 
-If you're using Expo, generate the native projects first and then run them:
-
-```sh
+```bash
 npx expo prebuild
-npx expo run:ios       # or expo run:android
+npx expo run:ios   # or expo run:android
 ```
 
-### Expo
+---
 
-Configure the API key once, then use the `useDeepgramConversation` hook to start
-and stop a voice session.
+## Quick Start
 
-```tsx
-import React, { useState } from 'react';
-import { Button, Text, View } from 'react-native';
-import { configure, useDeepgramConversation } from 'react-native-deepgram';
+### 1. Configure your API Key
+
+In your application entry point (e.g. `App.tsx`):
+
+```ts
+import { configure } from 'react-native-deepgram';
 
 configure({ apiKey: 'YOUR_DEEPGRAM_API_KEY' });
+```
 
-export default function Example() {
-  const [messages, setMessages] = useState([]);
-  const { startSession, stopSession } = useDeepgramConversation({
-    onMessage: (m) => setMessages((cur) => [...cur, m]),
-    onError: console.warn,
-  });
+### 2. Live Streaming (WebSocket)
 
-  return (
-    <View>
-      <Button title="Start" onPress={startSession} />
-      <Button title="Stop" onPress={stopSession} />
-      {messages.map((m, i) => (
-        <Text key={i}>{`${m.role}: ${m.content}`}</Text>
-      ))}
-    </View>
-  );
+```ts
+import { UseDeepgramSpeechToText } from 'react-native-deepgram';
+
+const { startListening, stopListening } = UseDeepgramSpeechToText({
+  onBeforeStart: () => console.log('Preparing...'),
+  onStart: () => console.log('WebSocket open'),
+  onTranscript: (text) => console.log('Transcript:', text),
+  onError: (err) => console.error('Live error', err),
+  onEnd: () => console.log('Session ended'),
+});
+
+// ...
+<Button title="Start Live" onPress={startListening} />
+<Button title="Stop Live" onPress={stopListening} />
+```
+
+### 3. File Transcription (HTTP POST)
+
+```ts
+import * as DocumentPicker from 'expo-document-picker';
+
+async function pickAndTranscribe() {
+  const res = await DocumentPicker.getDocumentAsync({ type: 'audio/*' });
+  if (res.type === 'success') {
+    await transcribeFile({
+      uri: res.uri,
+      name: res.name,
+      type: res.mimeType || 'audio/wav',
+    });
+  }
 }
 ```
 
-See the [`example`](example) folder for a fully working application.
+```ts
+const { transcribeFile } = useDeepgramListen({
+  onBeforeTranscribe: () => console.log('Uploading file...'),
+  onTranscribeSuccess: (text) => console.log('File transcript:', text),
+  onTranscribeError: (err) => console.error('File error', err),
+});
+```
 
-## Contributing
+---
 
-See the [contributing guide](CONTRIBUTING.md) to learn how to contribute to the repository and the development workflow.
+## Configuration Options
+
+When calling `useDeepgramListen`, you can pass any of the following callbacks:
+
+```ts
+export type UseDeepgramSpeechToTextProps = {
+  /** Called before any setup (e.g. before permission prompt) */
+  onBeforeStart?: () => void;
+  /** Called once the WebSocket is open */
+  onStart?: () => void;
+  /** Called on every transcript update */
+  onTranscript?: (transcript: string) => void;
+  /** Called on any error */
+  onError?: (error: unknown) => void;
+  /** Called when the session ends or WebSocket closes */
+  onEnd?: () => void;
+  /** Called before starting file transcription (e.g. show spinner) */
+  onBeforeTranscribe?: () => void;
+  /** Called when file transcription completes with the final transcript */
+  onTranscribeSuccess?: (transcript: string) => void;
+  /** Called if file transcription fails */
+  onTranscribeError?: (error: unknown) => void;
+};
+```
+
+---
+
+## Example App
+
+See the [`example/`](example) folder for a complete demo showcasing both live and file transcription.
+
+---
+
+## Roadmap & Work In Progress
+
+- ✅ **Implemented**: Speech-to-Text (Listen API) over WebSocket and REST.
+- 🚧 **Next**: Voice Agent (Text-to-Speech) WebSocket support.
+- 🚧 **Upcoming**: Custom intents, topics, summarization, and deeper REST endpoint wrappers.
+
+Contributions, issues, and feature requests are welcome! Please follow the [contributing guide](CONTRIBUTING.md).
+
+---
 
 ## License
 
 MIT
-
----
-
-Made with [create-react-native-library](https://github.com/callstack/react-native-builder-bob)

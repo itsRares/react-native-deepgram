@@ -1,29 +1,12 @@
 import { useEffect, useRef, useCallback } from 'react';
-import {
-  NativeEventEmitter,
-  NativeModules,
-  Platform,
-  PermissionsAndroid,
-} from 'react-native';
-import { request, PERMISSIONS, RESULTS } from 'react-native-permissions';
+import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 import type { VoiceAgentController } from './types';
 import type {
   UseConversationHook,
   Message,
 } from './types/use-conversation-hook';
 import { Deepgram } from './NativeDeepgram';
-
-const askMicPermission = async (): Promise<boolean> => {
-  if (Platform.OS === 'ios') {
-    const status = await request(PERMISSIONS.IOS.MICROPHONE);
-    return status === RESULTS.GRANTED;
-  }
-  return (
-    (await PermissionsAndroid.request(
-      PermissionsAndroid.PERMISSIONS.RECORD_AUDIO
-    )) === PermissionsAndroid.RESULTS.GRANTED
-  );
-};
+import { askMicPermission } from './helpers/askMicPermission';
 
 /* ---------------------------------------------------------------- */
 /* ➜ 1. Constants / helpers                                         */

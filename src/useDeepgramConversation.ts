@@ -14,7 +14,7 @@ import { askMicPermission } from './helpers/askMicPermission';
 
 const AUDIO_EVT_NATIVE = Platform.select({
   ios: 'DeepgramAudioPCM',
-  android: 'AudioChunk',
+  android: 'DeepgramAudioPCM',
 }) as string;
 
 const arrayBufferToBase64 = (buffer: ArrayBuffer): string =>

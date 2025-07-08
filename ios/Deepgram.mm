@@ -42,24 +42,25 @@ RCT_EXPORT_MODULE();
 
 - (void)ensurePlayer
 {
-  if (!self.engine) {
-    self.engine = [[AVAudioEngine alloc] init];
+  if (!self.engine) self.engine = [[AVAudioEngine alloc] init];
+
+  if (!self.player) {
+    BOOL wasRunning = self.engine.isRunning;
+    if (wasRunning) [self.engine stop]; 
+
+    self.player = [[AVAudioPlayerNode alloc] init];
+    [self.engine attachNode:self.player];
+    [self.engine connect:self.player
+                      to:self.engine.mainMixerNode
+                  format:nil];
+
+    if (wasRunning) {
+      [self.engine prepare];
+      [self.engine startAndReturnError:nil]; 
+    }
   }
-  if (self.player) return;
-
-  self.player = [[AVAudioPlayerNode alloc] init];
-  [self.engine attachNode:self.player];
-
-  /* 🔹 Let AVAudioEngine pick the right format & insert a converter.
-     Passing `nil` avoids the 16 kHz → 48 kHz format-mismatch crash. */
-  [self.engine connect:self.player
-                    to:self.engine.mainMixerNode
-                format:nil];
-
-  [self ensureAudioSession];
-  [self.engine prepare];
-  [self.engine startAndReturnError:nil];
 }
+
 
 /* ------------------------------------------------------------------ */
 /*  Recording – 48 000 Hz / Float-32                                   */

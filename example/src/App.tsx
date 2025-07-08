@@ -1,42 +1,27 @@
-import { useState } from 'react';
-import {
-  SafeAreaView,
-  View,
-  Text,
-  Button,
-  FlatList,
-  StyleSheet,
-} from 'react-native';
-import { configure, useDeepgramConversation } from 'react-native-deepgram';
+import { SafeAreaView, View, Button, StyleSheet } from 'react-native';
+import { configure, UseDeepgramSpeechToText } from 'react-native-deepgram';
 
-configure({ apiKey: 'YOUR_API_KEY' });
-
-type Message = {
-  role: string;
-  content: string;
-};
+configure({ apiKey: 'ca1bccd0f5dcde6b3a4696859a7d2d4a42bea083' });
 
 export default function App() {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const { startSession, stopSession } = useDeepgramConversation({
-    onMessage: (m: Message) => setMessages((cur) => [...cur, m]),
-    onError: console.warn,
+  const { startListening, stopListening } = UseDeepgramSpeechToText({
+    onStart: () => {
+      console.log('Listening started');
+    },
+    onTranscript: (e) => {
+      console.log('m', e);
+    },
+    onError: (error) => {
+      console.error('Error:', error);
+    },
   });
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.buttons}>
-        <Button title="Start" onPress={startSession} />
-        <Button title="Stop" onPress={stopSession} />
+        <Button title="Start" onPress={startListening} />
+        <Button title="Stop" onPress={stopListening} />
       </View>
-      <FlatList
-        style={styles.list}
-        data={messages}
-        keyExtractor={(_, i) => String(i)}
-        renderItem={({ item }) => (
-          <Text>{`${item.role}: ${item.content}`}</Text>
-        )}
-      />
     </SafeAreaView>
   );
 }

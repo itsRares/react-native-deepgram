@@ -1,4 +1,5 @@
 export { useDeepgramConversation } from './useDeepgramConversation';
+export { UseDeepgramSpeechToText } from './UseDeepgramSpeechToText';
 export { Deepgram } from './NativeDeepgram';
 
 export const configure = (opts: { apiKey: string }) => {

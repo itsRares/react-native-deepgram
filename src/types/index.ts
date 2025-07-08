@@ -9,3 +9,5 @@ export interface VoiceAgentController {
   makeAgentSay(text: string): Promise<void>;
   startConversation(): Promise<void>;
 }
+
+export * from './deepgram';

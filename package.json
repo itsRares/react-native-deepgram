@@ -1,6 +1,6 @@
 {
   "name": "react-native-deepgram",
-  "version": "0.1.15",
+  "version": "0.1.17",
   "description": "Package to support deepgram",
   "main": "lib/commonjs/index.js",
   "module": "lib/module/index.js",
@@ -55,8 +55,7 @@
     "registry": "https://registry.npmjs.org/"
   },
   "dependencies": {
-    "@deepgram/sdk": "^4.7.0",
-    "expo-av": "^15.1.7"
+    "@deepgram/sdk": "^4.7.0"
   },
   "devDependencies": {
     "@commitlint/config-conventional": "^19.6.0",
@@ -70,10 +69,13 @@
     "@release-it/conventional-changelog": "^9.0.2",
     "@types/jest": "^29.5.5",
     "@types/react": "^19.0.0",
+    "@typescript-eslint/eslint-plugin": "latest",
+    "@typescript-eslint/parser": "latest",
     "commitlint": "^19.6.1",
     "del-cli": "^5.1.0",
     "eslint": "^9.22.0",
     "eslint-config-prettier": "^10.1.1",
+    "eslint-plugin-jest": "^29.0.1",
     "eslint-plugin-prettier": "^5.2.3",
     "eslint-plugin-react-native": "^5.0.0",
     "expo-module-scripts": "^4.1.8",
@@ -91,6 +93,7 @@
     "react-native": "*"
   },
   "workspaces": [
+    ".",
     "example"
   ],
   "packageManager": "yarn@3.6.1",

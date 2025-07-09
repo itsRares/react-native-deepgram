@@ -51,6 +51,7 @@ export function UseDeepgramSpeechToText({
       ws.current = new (WebSocket as any)(url, undefined, {
         headers: { Authorization: `Token ${apiKey}` },
       });
+      ws.current.binaryType = 'arraybuffer';
 
       ws.current.onopen = () => onStart();
 
@@ -60,20 +61,38 @@ export function UseDeepgramSpeechToText({
           ios: 'DeepgramAudioPCM',
           android: 'AudioChunk',
         }) as string,
-        ({ b64 }: { b64: string }) => {
-          const floatBytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-          const float32 = new Float32Array(floatBytes.buffer);
-
-          const downsampled = float32.filter((_, i) => i % 3 === 0);
-
-          const int16 = new Int16Array(downsampled.length);
-          for (let i = 0; i < downsampled.length; i++) {
-            const s = Math.max(-1, Math.min(1, downsampled[i]));
-            int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+        (ev: any) => {
+          let chunk: ArrayBuffer | undefined;
+          if (typeof ev?.b64 === 'string') {
+            const floatBytes = Uint8Array.from(atob(ev.b64), (c) =>
+              c.charCodeAt(0)
+            );
+            const float32 = new Float32Array(floatBytes.buffer);
+            const downsampled = float32.filter((_, i) => i % 3 === 0);
+            const int16 = new Int16Array(downsampled.length);
+            for (let i = 0; i < downsampled.length; i++) {
+              const s = Math.max(-1, Math.min(1, downsampled[i]));
+              int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+            }
+            chunk = int16.buffer;
+            console.log(int16.buffer);
+          } else if (Array.isArray(ev?.data)) {
+            const bytes = new Uint8Array(ev.data.length);
+            for (let i = 0; i < ev.data.length; i++) {
+              const v = ev.data[i];
+              bytes[i] = v < 0 ? v + 256 : v;
+            }
+            const view = new DataView(bytes.buffer);
+            const int16 = new Int16Array(bytes.length / 2);
+            for (let i = 0; i < int16.length; i++) {
+              int16[i] = view.getInt16(i * 2, true);
+            }
+            chunk = int16.buffer;
           }
 
-          if (ws.current?.readyState === WebSocket.OPEN) {
-            ws.current.send(int16.buffer);
+          if (chunk && ws.current?.readyState === WebSocket.OPEN) {
+            console.log('byteLength', chunk.byteLength);
+            ws.current.send(chunk);
           }
         }
       );

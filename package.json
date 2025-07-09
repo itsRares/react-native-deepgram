@@ -1,6 +1,6 @@
 {
   "name": "react-native-deepgram",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "description": "Package to support deepgram",
   "main": "lib/commonjs/index.js",
   "module": "lib/module/index.js",
@@ -34,7 +34,8 @@
     "lint": "eslint \"**/*.{js,ts,tsx}\"",
     "clean": "del-cli android/build example/android/build example/android/app/build example/ios/build lib",
     "prepare": "bob build",
-    "release": "release-it --only-version"
+    "release": "release-it --only-version",
+    "build:plugin": "npx tsc --build plugin"
   },
   "keywords": [
     "react-native",

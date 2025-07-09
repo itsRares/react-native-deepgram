@@ -1,6 +1,5 @@
 import {
   withPlugins,
-  withMainApplication,
   withAndroidManifest,
   withInfoPlist,
 } from '@expo/config-plugins';
@@ -10,39 +9,10 @@ type DeepgramPluginOptions = {
   microphonePermission?: string;
 };
 
-const addAndroidPackage = (src: string) => {
-  const pkgImport = 'import com.deepgram.DeepgramPackage;';
-  const pkgInstance = 'packages.add(new DeepgramPackage());';
-
-  if (!src.includes(pkgImport)) {
-    src = src.replace(/^(package[\s\S]*?;)/, `$1\n${pkgImport}`);
-  }
-
-  if (!src.includes(pkgInstance)) {
-    src = src.replace(
-      /(new PackageList\(this\).getPackages\(\);)/,
-      `$1\n        ${pkgInstance}`
-    );
-  }
-
-  return src;
-};
-
 const withAndroidDeepgram: ConfigPlugin<DeepgramPluginOptions | void> = (
-  config,
-  _options = {}
+  config
 ) => {
-  config = withMainApplication(config, (cfg) => {
-    if (
-      cfg.modResults.language === 'java' ||
-      cfg.modResults.language === 'kt'
-    ) {
-      cfg.modResults.contents = addAndroidPackage(cfg.modResults.contents);
-    }
-    return cfg;
-  });
-
-  config = withAndroidManifest(config, (cfg) => {
+  return withAndroidManifest(config, (cfg) => {
     const recordPermission = 'android.permission.RECORD_AUDIO';
     const { manifest } = cfg.modResults;
     const permissions = manifest['uses-permission'] ?? [];
@@ -54,13 +24,11 @@ const withAndroidDeepgram: ConfigPlugin<DeepgramPluginOptions | void> = (
 
     return cfg;
   });
-
-  return config;
 };
 
 const withIosDeepgram: ConfigPlugin<DeepgramPluginOptions> = (
   config,
-  options: DeepgramPluginOptions = {}
+  options = {}
 ) => {
   const message =
     options.microphonePermission ??
@@ -75,7 +43,7 @@ const withIosDeepgram: ConfigPlugin<DeepgramPluginOptions> = (
 
 const withDeepgram: ConfigPlugin<DeepgramPluginOptions | void> = (
   config,
-  options = {}
+  options
 ) =>
   withPlugins(config, [
     [withAndroidDeepgram, options],

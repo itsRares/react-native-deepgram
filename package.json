@@ -1,6 +1,6 @@
 {
   "name": "react-native-deepgram",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "description": "Package to support deepgram",
   "main": "lib/commonjs/index.js",
   "module": "lib/module/index.js",

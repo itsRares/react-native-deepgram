@@ -1,49 +1,32 @@
 # react-native-deepgram
 
-> **Work in progress** – currently only the **Listen (Speech-to-Text)** API is supported.
+> **Work‑in‑progress** – Listen (Speech‑to‑Text) **and** Text Intelligence APIs are live. Voice Agent (TTS) support is next on the list.
 
-Bindings that allow a React Native application to communicate with [Deepgram’s Speech-to-Text API](https://developers.deepgram.com/docs/listen) via WebSocket **and** HTTP POST for pre-recorded audio. This library handles:
+**react-native-deepgram** brings Deepgram’s AI to React Native & Expo:
 
-- 🔊 **Live streaming**: captures raw PCM audio from the microphone, down-samples, and streams over WebSocket to Deepgram.
-- 📄 **File transcription**: uploads audio files (blobs or device URIs) via HTTP POST to Deepgram’s REST endpoint.
-
-> ⚠️ Future support for Deepgram’s Voice Agent (text-to-speech responses) and additional REST endpoints is planned.
-
----
-
-## Features
-
-- **Live Speech-to-Text (WebSocket)**
-  - `startListening()` / `stopListening()` hooks for real-time transcription.
-  - Partial and final results via callback.
-- **Pre-Recorded File Transcription (HTTP POST)**
-  - `transcribeFile(file)` method accepts a `Blob` or `{ uri, name, type }`.
-  - Returns final transcript in a single callback.
-- **React Native + Expo ready**
-  - Includes Expo Config Plugin for automatic native setup.
-  - Compatible with both managed and bare workflows.
+- 🔊 **Live Speech-to-Text** – capture PCM audio and stream over WebSocket.
+- 📄 **File Transcription** – POST audio blobs/URIs and receive a transcript.
+- 🧠 **Text Intelligence** – summarise, detect topics, intents & sentiment.
+- 🛠️ **Management API** – list models, keys, usage, projects & more.
+- ⚙️ **Expo config plugin** – automatic native setup (managed or bare workflow).
 
 ---
 
 ## Installation
 
 ```bash
-npm install react-native-deepgram
-# or
 yarn add react-native-deepgram
+# or
+npm install react-native-deepgram
 ```
 
 ### iOS (CocoaPods)
 
-After installing, from the `ios/` directory run:
-
 ```bash
-pod install
+cd ios && pod install
 ```
 
 ### Expo
-
-If you’re using Expo, add the plugin to your `app.config.js` or `app.json`:
 
 ```js
 // app.config.js
@@ -62,8 +45,6 @@ module.exports = {
 };
 ```
 
-Then generate native projects (managed workflow) and run:
-
 ```bash
 npx expo prebuild
 npx expo run:ios   # or expo run:android
@@ -71,11 +52,7 @@ npx expo run:ios   # or expo run:android
 
 ---
 
-## Quick Start
-
-### 1. Configure your API Key
-
-In your application entry point (e.g. `App.tsx`):
+## Configuration
 
 ```ts
 import { configure } from 'react-native-deepgram';
@@ -83,91 +60,226 @@ import { configure } from 'react-native-deepgram';
 configure({ apiKey: 'YOUR_DEEPGRAM_API_KEY' });
 ```
 
-### 2. Live Streaming (WebSocket)
-
-```ts
-import { UseDeepgramSpeechToText } from 'react-native-deepgram';
-
-const { startListening, stopListening } = UseDeepgramSpeechToText({
-  onBeforeStart: () => console.log('Preparing...'),
-  onStart: () => console.log('WebSocket open'),
-  onTranscript: (text) => console.log('Transcript:', text),
-  onError: (err) => console.error('Live error', err),
-  onEnd: () => console.log('Session ended'),
-});
-
-// ...
-<Button title="Start Live" onPress={startListening} />
-<Button title="Stop Live" onPress={stopListening} />
-```
-
-### 3. File Transcription (HTTP POST)
-
-```ts
-import * as DocumentPicker from 'expo-document-picker';
-
-async function pickAndTranscribe() {
-  const res = await DocumentPicker.getDocumentAsync({ type: 'audio/*' });
-  if (res.type === 'success') {
-    await transcribeFile({
-      uri: res.uri,
-      name: res.name,
-      type: res.mimeType || 'audio/wav',
-    });
-  }
-}
-```
-
-```ts
-const { transcribeFile } = useDeepgramListen({
-  onBeforeTranscribe: () => console.log('Uploading file...'),
-  onTranscribeSuccess: (text) => console.log('File transcript:', text),
-  onTranscribeError: (err) => console.error('File error', err),
-});
-```
+> **Heads‑up 🔐** The Management API needs a key with management scopes.  
+> Don’t ship production keys in a public repo—use environment variables, Expo secrets, or your own backend.
 
 ---
 
-## Configuration Options
+## Hooks at a glance
 
-When calling `useDeepgramListen`, you can pass any of the following callbacks:
+| Hook                          | Purpose                                              |
+| ----------------------------- | ---------------------------------------------------- |
+| `useDeepgramSpeechToText`     | Live mic streaming + file transcription              |
+| `useDeepgramTextIntelligence` | NLP analysis (summaries, topics, sentiment, intents) |
+| `useDeepgramManagement`       | Full Management REST wrapper                         |
 
-```ts
-export type UseDeepgramSpeechToTextProps = {
-  /** Called before any setup (e.g. before permission prompt) */
-  onBeforeStart?: () => void;
-  /** Called once the WebSocket is open */
-  onStart?: () => void;
-  /** Called on every transcript update */
-  onTranscript?: (transcript: string) => void;
-  /** Called on any error */
-  onError?: (error: unknown) => void;
-  /** Called when the session ends or WebSocket closes */
-  onEnd?: () => void;
-  /** Called before starting file transcription (e.g. show spinner) */
-  onBeforeTranscribe?: () => void;
-  /** Called when file transcription completes with the final transcript */
-  onTranscribeSuccess?: (transcript: string) => void;
-  /** Called if file transcription fails */
-  onTranscribeError?: (error: unknown) => void;
+---
+
+### `useDeepgramSpeechToText`
+
+<details>
+<summary>Example – live streaming</summary>
+
+```tsx
+const { startListening, stopListening } = useDeepgramSpeechToText({
+  onTranscript: console.log,
+});
+
+<Button title="Start" onPress={startListening} />
+<Button title="Stop"  onPress={stopListening} />
+```
+
+</details>
+
+<details>
+<summary>Example – file transcription</summary>
+
+```tsx
+const { transcribeFile } = useDeepgramSpeechToText({
+  onTranscribeSuccess: console.log,
+});
+
+const pickFile = async () => {
+  const f = await DocumentPicker.getDocumentAsync({ type: 'audio/*' });
+  if (f.type === 'success') await transcribeFile(f);
 };
 ```
 
+</details>
+
+#### Properties
+
+| Name                  | Type                           | Description                                         | Default |
+| --------------------- | ------------------------------ | --------------------------------------------------- | ------- |
+| `onBeforeStart`       | `() => void`                   | Called before any setup (e.g. permission prompt)    | –       |
+| `onStart`             | `() => void`                   | Fires once the WebSocket connection opens           | –       |
+| `onTranscript`        | `(transcript: string) => void` | Called on every transcript update (partial & final) | –       |
+| `onError`             | `(error: unknown) => void`     | Called on any streaming error                       | –       |
+| `onEnd`               | `() => void`                   | Fires when the session ends / WebSocket closes      | –       |
+| `onBeforeTranscribe`  | `() => void`                   | Called before file transcription begins             | –       |
+| `onTranscribeSuccess` | `(transcript: string) => void` | Called with the final transcript of the file        | –       |
+| `onTranscribeError`   | `(error: unknown) => void`     | Called if file transcription fails                  | –       |
+
+#### Methods
+
+| Name             | Signature                                                                        | Description                                                   |
+| ---------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `startListening` | `() => Promise<void>`                                                            | Begin mic capture and stream audio to Deepgram                |
+| `stopListening`  | `() => Promise<void>`                                                            | Stop capture and close WebSocket                              |
+| `transcribeFile` | `(file: Blob \| { uri: string; name?: string; type?: string }) => Promise<void>` | Upload an audio file and receive its transcript via callbacks |
+
+<details>
+<summary>Types</summary>
+
+```ts
+export type UseDeepgramSpeechToTextProps = /* …see above table… */
+export type UseDeepgramSpeechToTextReturn = {
+  startListening: () => void;
+  stopListening: () => void;
+  transcribeFile: (
+    file: Blob | { uri: string; name?: string; type?: string }
+  ) => Promise<void>;
+};
+```
+
+</details>
+
 ---
 
-## Example App
+### `useDeepgramTextIntelligence`
 
-See the [`example/`](example) folder for a complete demo showcasing both live and file transcription.
+<details>
+<summary>Example</summary>
+
+```tsx
+const { analyze } = useDeepgramTextIntelligence({
+  options: { summarize: true, topics: true, sentiment: true },
+  onAnalyzeSuccess: console.log,
+});
+
+await analyze({ text: 'React Native makes mobile easy.' });
+```
+
+</details>
+
+#### Properties
+
+| Name               | Type                                 | Description                                       | Default |
+| ------------------ | ------------------------------------ | ------------------------------------------------- | ------- |
+| `onBeforeAnalyze`  | `() => void`                         | Called before analysis begins (e.g. show spinner) | –       |
+| `onAnalyzeSuccess` | `(results: any) => void`             | Called with the analysis results on success       | –       |
+| `onAnalyzeError`   | `(error: Error) => void`             | Called if the analysis request fails              | –       |
+| `options`          | `UseDeepgramTextIntelligenceOptions` | Which NLP tasks to run                            | `{}`    |
+
+#### Methods
+
+| Name      | Signature                                                   | Description                                         |
+| --------- | ----------------------------------------------------------- | --------------------------------------------------- |
+| `analyze` | `(input: { text?: string; url?: string }) => Promise<void>` | Send raw text (or a URL) to Deepgram for processing |
+
+<details id="usedeepgramtextintelligence-types">
+<summary>Types</summary>
+
+```ts
+export interface UseDeepgramTextIntelligenceOptions {
+  summarize?: boolean;
+  topics?: boolean;
+  intents?: boolean;
+  sentiment?: boolean;
+  language?: string;
+  customTopic?: string | string[];
+  customTopicMode?: 'extended' | 'strict';
+  callback?: string;
+  callbackMethod?: 'POST' | 'PUT' | string;
+}
+
+export interface UseDeepgramTextIntelligenceReturn {
+  analyze: (input: { text?: string; url?: string }) => Promise<void>;
+}
+```
+
+</details>
 
 ---
 
-## Roadmap & Work In Progress
+### `useDeepgramManagement`
 
-- ✅ **Implemented**: Speech-to-Text (Listen API) over WebSocket and REST.
-- 🚧 **Next**: Voice Agent (Text-to-Speech) WebSocket support.
-- 🚧 **Upcoming**: Custom intents, topics, summarization, and deeper REST endpoint wrappers.
+<details>
+<summary>Example</summary>
 
-Contributions, issues, and feature requests are welcome! Please follow the [contributing guide](CONTRIBUTING.md).
+```tsx
+const dg = useDeepgramManagement();
+
+// List all projects linked to the key
+const projects = await dg.projects.list();
+console.log(
+  'Projects:',
+  projects.map((p) => p.name)
+);
+```
+
+</details>
+
+#### Properties
+
+This hook accepts **no props** – simply call it to receive a typed client.
+
+#### Methods (snapshot)
+
+| Group      | Representative methods                                                                                            |
+| ---------- | ----------------------------------------------------------------------------------------------------------------- |
+| `models`   | `list(includeOutdated?)`, `get(modelId)`                                                                          |
+| `projects` | `list()`, `get(id)`, `delete(id)`, `patch(id, body)`, `listModels(id)`, `getModel(projectId, modelId)`            |
+| `keys`     | `list(projectId)`, `create(projectId, body)`, `get(projectId, keyId)`, `delete(projectId, keyId)`                 |
+| `usage`    | `listRequests(projectId)`, `getRequest(projectId, requestId)`, `listFields(projectId)`, `getBreakdown(projectId)` |
+| `balances` | `list(projectId)`, `get(projectId, balanceId)`                                                                    |
+
+_(Plus helpers for `members`, `scopes`, `invitations`, and `purchases`.)_
+
+<details>
+<summary>Types</summary>
+
+```ts
+export interface UseDeepgramManagementReturn {
+  models: {
+    list(includeOutdated?: boolean): Promise<DeepgramListModelsResponse>;
+    get(modelId: string): Promise<DeepgramSttModel | DeepgramTtsModel>;
+  };
+  projects: {
+    list(): Promise<DeepgramProject[]>;
+    // …see source for full surface
+  };
+  // …keys, members, scopes, invitations, usage, balances, purchases
+}
+```
+
+</details>
+
+---
+
+## Example app
+
+```bash
+git clone https://github.com/your-repo/react-native-deepgram
+cd react-native-deepgram/example
+yarn && yarn start   # or expo start
+```
+
+---
+
+## Roadmap
+
+- ✅ Speech-to-Text (WebSocket + REST)
+- ✅ Text Intelligence (summaries, topics, sentiment, intents)
+- ✅ Management API wrapper
+- 🚧 Voice Agent (TTS) WebSocket endpoint
+- 🚧 Detox E2E tests for the example app
+
+---
+
+## Contributing
+
+Issues / PRs welcome—see **CONTRIBUTING.md**.
 
 ---
 

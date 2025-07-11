@@ -17,3 +17,6 @@ export function buildParams(
 
   return p.toString();
 }
+
+export const dgPath = (...segments: Array<string | number>) =>
+  '/' + segments.map((s) => encodeURIComponent(String(s))).join('/');

@@ -1,8 +1,16 @@
 import { useState } from 'react';
-import { SafeAreaView, View, Button, StyleSheet } from 'react-native';
+import {
+  SafeAreaView,
+  View,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  Text,
+} from 'react-native';
 import { configure } from 'react-native-deepgram';
 import SpeechToText from './SpeechToText';
 import TextIntelligence from './TextIntelligence';
+import Management from './Management';
 
 /**
  * Entry point for the Deepgram demo app.
@@ -13,40 +21,81 @@ import TextIntelligence from './TextIntelligence';
 // Use an environment variable or placeholder for the API key
 configure({ apiKey: process.env.DEEPGRAM_API_KEY || 'YOUR_DEEPGRAM_API_KEY' });
 
+type ScreenKey = 'speech' | 'text' | 'management';
+const TABS: { key: ScreenKey; label: string }[] = [
+  { key: 'speech', label: 'Speech to Text' },
+  { key: 'text', label: 'Text Intelligence' },
+  { key: 'management', label: 'Management' },
+];
+
 export default function App() {
-  const [activeScreen, setActiveScreen] = useState<'speech' | 'text'>('speech');
+  const [activeScreen, setActiveScreen] = useState<ScreenKey>('speech');
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.menu}>
-        <Button
-          title="Speech to Text"
-          onPress={() => setActiveScreen('speech')}
-        />
-        <Button
-          title="Text Intelligence"
-          onPress={() => setActiveScreen('text')}
-        />
+      <View style={styles.tabWrapper}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.tabContent}
+        >
+          {TABS.map(({ key, label }) => {
+            const isActive = key === activeScreen;
+            return (
+              <TouchableOpacity
+                key={key}
+                onPress={() => setActiveScreen(key)}
+                style={[styles.tabItem, isActive && styles.tabItemActive]}
+                activeOpacity={0.7}
+              >
+                <Text
+                  style={[styles.tabText, isActive && styles.tabTextActive]}
+                >
+                  {label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
       </View>
 
       <View style={styles.content}>
         {activeScreen === 'speech' && <SpeechToText />}
         {activeScreen === 'text' && <TextIntelligence />}
+        {activeScreen === 'management' && <Management />}
       </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
+  container: { flex: 1, backgroundColor: '#fff' },
+  tabWrapper: {
+    height: 56,
+    backgroundColor: '#f2f2f2',
+    justifyContent: 'center',
   },
-  menu: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingVertical: 16,
-    backgroundColor: '#eee',
+  tabContent: {
+    alignItems: 'center',
+    paddingHorizontal: 12,
+  },
+  tabItem: {
+    marginHorizontal: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    backgroundColor: '#ddd',
+    borderRadius: 20,
+  },
+  tabItemActive: {
+    backgroundColor: '#007AFF',
+  },
+  tabText: {
+    fontSize: 14,
+    color: '#333',
+  },
+  tabTextActive: {
+    color: '#fff',
+    fontWeight: '600',
   },
   content: {
     flex: 1,

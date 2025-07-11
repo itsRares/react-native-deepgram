@@ -10,7 +10,8 @@ import TextIntelligence from './TextIntelligence';
  */
 
 // Initialize Deepgram with your API key once (can also be moved to a config file)
-configure({ apiKey: 'ca1bccd0f5dcde6b3a4696859a7d2d4a42bea083' });
+// Use an environment variable or placeholder for the API key
+configure({ apiKey: process.env.DEEPGRAM_API_KEY || 'YOUR_DEEPGRAM_API_KEY' });
 
 export default function App() {
   const [activeScreen, setActiveScreen] = useState<'speech' | 'text'>('speech');

@@ -40,7 +40,7 @@ export function useDeepgramSpeechToText({
 
       await Deepgram.startRecording();
 
-      const apiKey = (global as any).__DEEPGRAM_API_KEY__;
+      const apiKey = (globalThis as any).__DEEPGRAM_API_KEY__;
       if (!apiKey) throw new Error('Deepgram API key missing');
 
       const params = buildParams({
@@ -132,7 +132,7 @@ export function useDeepgramSpeechToText({
     async (file: Blob | { uri: string; name?: string; type?: string }) => {
       onBeforeTranscribe();
       try {
-        const apiKey = (global as any).__DEEPGRAM_API_KEY__;
+        const apiKey = (globalThis as any).__DEEPGRAM_API_KEY__;
         if (!apiKey) throw new Error('Deepgram API key missing');
 
         const formData = new FormData();

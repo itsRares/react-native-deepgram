@@ -19,7 +19,7 @@ export function useDeepgramTextIntelligence({
       onBeforeAnalyze();
 
       try {
-        const apiKey = (global as any).__DEEPGRAM_API_KEY__;
+        const apiKey = (globalThis as any).__DEEPGRAM_API_KEY__;
         if (!apiKey) throw new Error('Deepgram API key missing');
 
         const paramMap = {

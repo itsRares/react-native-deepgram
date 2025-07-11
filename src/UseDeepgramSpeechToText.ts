@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useRef, useCallback } from 'react';
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 import { Deepgram } from './NativeDeepgram';
 import { askMicPermission } from './helpers/askMicPermission';
@@ -6,8 +6,10 @@ import type {
   UseDeepgramSpeechToTextProps,
   UseDeepgramSpeechToTextReturn,
 } from './types';
+import { DEEPGRAM_BASEURL, DEEPGRAM_BASEWSS } from './constants';
+import { buildParams } from './helpers';
 
-export function UseDeepgramSpeechToText({
+export function useDeepgramSpeechToText({
   onBeforeStart = () => {},
   onStart = () => {},
   onTranscript = () => {},
@@ -38,20 +40,19 @@ export function UseDeepgramSpeechToText({
 
       await Deepgram.startRecording();
 
-      const apiKey = (global as any).__DEEPGRAM_API_KEY__;
+      const apiKey = (globalThis as any).__DEEPGRAM_API_KEY__;
       if (!apiKey) throw new Error('Deepgram API key missing');
 
-      const params = new URLSearchParams({
+      const params = buildParams({
         encoding: 'linear16',
         sample_rate: '16000',
-      }).toString();
+      });
 
-      const url = `wss://api.deepgram.com/v1/listen?${params}`;
+      const url = `${DEEPGRAM_BASEWSS}/listen?${params}`;
 
       ws.current = new (WebSocket as any)(url, undefined, {
         headers: { Authorization: `Token ${apiKey}` },
       });
-      ws.current.binaryType = 'arraybuffer';
 
       ws.current.onopen = () => onStart();
 
@@ -75,7 +76,6 @@ export function UseDeepgramSpeechToText({
               int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
             }
             chunk = int16.buffer;
-            console.log(int16.buffer);
           } else if (Array.isArray(ev?.data)) {
             const bytes = new Uint8Array(ev.data.length);
             for (let i = 0; i < ev.data.length; i++) {
@@ -91,7 +91,6 @@ export function UseDeepgramSpeechToText({
           }
 
           if (chunk && ws.current?.readyState === WebSocket.OPEN) {
-            console.log('byteLength', chunk.byteLength);
             ws.current.send(chunk);
           }
         }
@@ -129,17 +128,11 @@ export function UseDeepgramSpeechToText({
     }
   }, [onEnd, onError]);
 
-  useEffect(() => {
-    return () => {
-      stopListening();
-    };
-  }, [stopListening]);
-
   const transcribeFile = useCallback(
     async (file: Blob | { uri: string; name?: string; type?: string }) => {
       onBeforeTranscribe();
       try {
-        const apiKey = (global as any).__DEEPGRAM_API_KEY__;
+        const apiKey = (globalThis as any).__DEEPGRAM_API_KEY__;
         if (!apiKey) throw new Error('Deepgram API key missing');
 
         const formData = new FormData();
@@ -153,7 +146,7 @@ export function UseDeepgramSpeechToText({
           } as any);
         }
 
-        const res = await fetch('https://api.deepgram.com/v1/listen', {
+        const res = await fetch(`${DEEPGRAM_BASEURL}/listen`, {
           method: 'POST',
           headers: {
             Authorization: `Token ${apiKey}`,

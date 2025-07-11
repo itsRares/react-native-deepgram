@@ -6,6 +6,7 @@ import type {
   UseDeepgramSpeechToTextProps,
   UseDeepgramSpeechToTextReturn,
 } from './types';
+import { DEEPGRAM_BASEURL, DEEPGRAM_BASEWSS } from './constants';
 
 export function UseDeepgramSpeechToText({
   onBeforeStart = () => {},
@@ -46,7 +47,7 @@ export function UseDeepgramSpeechToText({
         sample_rate: '16000',
       }).toString();
 
-      const url = `wss://api.deepgram.com/v1/listen?${params}`;
+      const url = `${DEEPGRAM_BASEWSS}/listen?${params}`;
 
       ws.current = new (WebSocket as any)(url, undefined, {
         headers: { Authorization: `Token ${apiKey}` },
@@ -153,7 +154,7 @@ export function UseDeepgramSpeechToText({
           } as any);
         }
 
-        const res = await fetch('https://api.deepgram.com/v1/listen', {
+        const res = await fetch(`${DEEPGRAM_BASEURL}/listen`, {
           method: 'POST',
           headers: {
             Authorization: `Token ${apiKey}`,

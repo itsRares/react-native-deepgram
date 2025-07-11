@@ -1,26 +1,36 @@
+import { useState } from 'react';
 import { SafeAreaView, View, Button, StyleSheet } from 'react-native';
-import { configure, UseDeepgramSpeechToText } from 'react-native-deepgram';
+import { configure } from 'react-native-deepgram';
+import SpeechToText from './SpeechToText';
+import TextIntelligence from './TextIntelligence';
 
+/**
+ * Entry point for the Deepgram demo app.
+ * Toggles between SpeechToText and TextIntelligence screens.
+ */
+
+// Initialize Deepgram with your API key once (can also be moved to a config file)
 configure({ apiKey: 'ca1bccd0f5dcde6b3a4696859a7d2d4a42bea083' });
 
 export default function App() {
-  const { startListening, stopListening } = UseDeepgramSpeechToText({
-    onStart: () => {
-      console.log('Listening started');
-    },
-    onTranscript: (e) => {
-      console.log('m', e);
-    },
-    onError: (error) => {
-      console.error('Error:', error);
-    },
-  });
+  const [activeScreen, setActiveScreen] = useState<'speech' | 'text'>('speech');
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.buttons}>
-        <Button title="Start" onPress={startListening} />
-        <Button title="Stop" onPress={stopListening} />
+      <View style={styles.menu}>
+        <Button
+          title="Speech to Text"
+          onPress={() => setActiveScreen('speech')}
+        />
+        <Button
+          title="Text Intelligence"
+          onPress={() => setActiveScreen('text')}
+        />
+      </View>
+
+      <View style={styles.content}>
+        {activeScreen === 'speech' && <SpeechToText />}
+        {activeScreen === 'text' && <TextIntelligence />}
       </View>
     </SafeAreaView>
   );
@@ -29,14 +39,15 @@ export default function App() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    padding: 24,
+    backgroundColor: '#fff',
   },
-  buttons: {
+  menu: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 12,
+    justifyContent: 'space-around',
+    paddingVertical: 16,
+    backgroundColor: '#eee',
   },
-  list: {
+  content: {
     flex: 1,
   },
 });

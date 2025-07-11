@@ -1,56 +1,125 @@
 import { useState } from 'react';
-import { View, Button, Text, ScrollView, StyleSheet } from 'react-native';
+import {
+  View,
+  Button,
+  Text,
+  ScrollView,
+  StyleSheet,
+  Alert,
+} from 'react-native';
+import * as DocumentPicker from 'expo-document-picker';
 import { useDeepgramSpeechToText } from 'react-native-deepgram';
 
 export default function SpeechToText() {
-  const [transcript, setTranscript] = useState<string>('');
-  const [status, setStatus] = useState<'idle' | 'listening' | 'error'>('idle');
-  const [error, setError] = useState<string | null>(null);
+  // live stream state
+  const [liveTranscript, setLiveTranscript] = useState('');
+  const [liveStatus, setLiveStatus] = useState<'idle' | 'listening' | 'error'>(
+    'idle'
+  );
+  const [liveError, setLiveError] = useState<string | null>(null);
 
-  const { startListening, stopListening } = useDeepgramSpeechToText({
-    onBeforeStart: () => {
-      setStatus('listening');
-      setTranscript('');
-      setError(null);
-    },
-    onStart: () => {
-      // WebSocket opened
-    },
-    onTranscript: (text) => {
-      setTranscript((prev) => prev + ' ' + text);
-    },
-    onError: (err) => {
-      setStatus('error');
-      setError(err instanceof Error ? err.message : String(err));
-    },
-    onEnd: () => {
-      setStatus('idle');
-    },
-  });
+  // file transcription state
+  const [fileTranscript, setFileTranscript] = useState('');
+  const [fileStatus, setFileStatus] = useState<
+    'idle' | 'transcribing' | 'error'
+  >('idle');
+  const [fileError, setFileError] = useState<string | null>(null);
+
+  const { startListening, stopListening, transcribeFile } =
+    useDeepgramSpeechToText({
+      onBeforeStart: () => {
+        setLiveStatus('listening');
+        setLiveTranscript('');
+        setLiveError(null);
+      },
+      onStart: () => {
+        // WebSocket opened
+      },
+      onTranscript: (text) => {
+        setLiveTranscript((prev) => prev + ' ' + text);
+      },
+      onError: (err) => {
+        setLiveStatus('error');
+        setLiveError(err instanceof Error ? err.message : String(err));
+      },
+      onEnd: () => {
+        setLiveStatus('idle');
+      },
+      // file callbacks
+      onBeforeTranscribe: () => {
+        setFileStatus('transcribing');
+        setFileTranscript('');
+        setFileError(null);
+      },
+      onTranscribeSuccess: (text) => {
+        setFileStatus('idle');
+        setFileTranscript(text);
+      },
+      onTranscribeError: (err) => {
+        setFileStatus('error');
+        setFileError(err instanceof Error ? err.message : String(err));
+      },
+    });
+
+  const pickAndTranscribe = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: 'audio/*',
+        copyToCacheDirectory: true,
+      });
+
+      if (result.assets && result.assets.length > 0) {
+        await transcribeFile({
+          uri: result.assets[0].uri,
+          name: result.assets[0].name || 'audio-file',
+          type: result.assets[0].mimeType || 'audio/mpeg',
+        });
+      }
+    } catch (err) {
+      Alert.alert('File picker error', String(err));
+    }
+  };
 
   return (
     <View style={styles.container}>
+      {/* Live mic controls */}
       <View style={styles.buttonRow}>
         <Button
           title="Start Listening"
           onPress={startListening}
-          disabled={status === 'listening'}
+          disabled={liveStatus === 'listening'}
         />
         <Button
           title="Stop Listening"
           onPress={stopListening}
-          disabled={status !== 'listening'}
+          disabled={liveStatus !== 'listening'}
         />
       </View>
-
-      {status === 'listening' && (
-        <Text style={styles.status}>Listening...</Text>
+      {liveStatus === 'listening' && (
+        <Text style={styles.status}>Listening…</Text>
       )}
-      {error && <Text style={styles.error}>Error: {error}</Text>}
-
+      {liveError && <Text style={styles.error}>Error: {liveError}</Text>}
       <ScrollView style={styles.outputContainer}>
         <Text style={styles.transcript}>
-          {transcript || 'No transcript yet.'}
+          🎤 Live: {liveTranscript || 'No live transcript yet.'}
+        </Text>
+      </ScrollView>
+
+      {/* File transcription controls */}
+      <View style={[styles.buttonRow, { marginTop: 24 }]}>
+        <Button
+          title="Pick & Transcribe File"
+          onPress={pickAndTranscribe}
+          disabled={fileStatus === 'transcribing'}
+        />
+      </View>
+      {fileStatus === 'transcribing' && (
+        <Text style={styles.status}>Transcribing file…</Text>
+      )}
+      {fileError && <Text style={styles.error}>File error: {fileError}</Text>}
+      <ScrollView style={styles.outputContainer}>
+        <Text style={styles.transcript}>
+          📄 File: {fileTranscript || 'No file transcript yet.'}
         </Text>
       </ScrollView>
     </View>

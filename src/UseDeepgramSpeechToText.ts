@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useRef, useCallback } from 'react';
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 import { Deepgram } from './NativeDeepgram';
 import { askMicPermission } from './helpers/askMicPermission';
@@ -53,7 +53,6 @@ export function useDeepgramSpeechToText({
       ws.current = new (WebSocket as any)(url, undefined, {
         headers: { Authorization: `Token ${apiKey}` },
       });
-      ws.current.binaryType = 'arraybuffer';
 
       ws.current.onopen = () => onStart();
 
@@ -77,7 +76,6 @@ export function useDeepgramSpeechToText({
               int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
             }
             chunk = int16.buffer;
-            console.log(int16.buffer);
           } else if (Array.isArray(ev?.data)) {
             const bytes = new Uint8Array(ev.data.length);
             for (let i = 0; i < ev.data.length; i++) {
@@ -93,7 +91,6 @@ export function useDeepgramSpeechToText({
           }
 
           if (chunk && ws.current?.readyState === WebSocket.OPEN) {
-            console.log('byteLength', chunk.byteLength);
             ws.current.send(chunk);
           }
         }
@@ -130,12 +127,6 @@ export function useDeepgramSpeechToText({
       onError(err);
     }
   }, [onEnd, onError]);
-
-  useEffect(() => {
-    return () => {
-      stopListening();
-    };
-  }, [stopListening]);
 
   const transcribeFile = useCallback(
     async (file: Blob | { uri: string; name?: string; type?: string }) => {

@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import { View, Button, Text, ScrollView, StyleSheet } from 'react-native';
-import { UseDeepgramSpeechToText } from 'react-native-deepgram';
+import { useDeepgramSpeechToText } from 'react-native-deepgram';
 
 export default function SpeechToText() {
   const [transcript, setTranscript] = useState<string>('');
   const [status, setStatus] = useState<'idle' | 'listening' | 'error'>('idle');
   const [error, setError] = useState<string | null>(null);
 
-  const { startListening, stopListening } = UseDeepgramSpeechToText({
+  const { startListening, stopListening } = useDeepgramSpeechToText({
     onBeforeStart: () => {
       setStatus('listening');
       setTranscript('');

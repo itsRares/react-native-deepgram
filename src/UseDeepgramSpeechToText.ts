@@ -8,7 +8,7 @@ import type {
 } from './types';
 import { DEEPGRAM_BASEURL, DEEPGRAM_BASEWSS } from './constants';
 
-export function UseDeepgramSpeechToText({
+export function useDeepgramSpeechToText({
   onBeforeStart = () => {},
   onStart = () => {},
   onTranscript = () => {},

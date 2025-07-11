@@ -4,6 +4,7 @@ import type {
   UseDeepgramTextIntelligenceReturn,
 } from './types';
 import { DEEPGRAM_BASEURL } from './constants';
+import { buildParams } from './helpers';
 
 export function useDeepgramTextIntelligence({
   onBeforeAnalyze = () => {},
@@ -21,28 +22,19 @@ export function useDeepgramTextIntelligence({
         const apiKey = (global as any).__DEEPGRAM_API_KEY__;
         if (!apiKey) throw new Error('Deepgram API key missing');
 
-        const params = new URLSearchParams();
-        if (options.summarize) params.append('summarize', 'true');
-        if (options.topics) params.append('topics', 'true');
-        if (options.intents) params.append('intents', 'true');
-        if (options.sentiment) params.append('sentiment', 'true');
-        if (options.language) params.append('language', options.language);
-        if (options.customTopic) {
-          if (Array.isArray(options.customTopic)) {
-            options.customTopic.forEach((t) =>
-              params.append('custom_topic', t)
-            );
-          } else {
-            params.append('custom_topic', options.customTopic);
-          }
-        }
-        if (options.customTopicMode) {
-          params.append('custom_topic_mode', options.customTopicMode);
-        }
-        if (options.callback) params.append('callback', options.callback);
-        if (options.callbackMethod) {
-          params.append('callback_method', options.callbackMethod);
-        }
+        const paramMap = {
+          summarize: options.summarize,
+          topics: options.topics,
+          intents: options.intents,
+          sentiment: options.sentiment,
+          language: options.language,
+          custom_topic: options.customTopic, // string or string[]
+          custom_topic_mode: options.customTopicMode,
+          callback: options.callback,
+          callback_method: options.callbackMethod,
+        };
+
+        const params = buildParams(paramMap);
 
         const url = `${DEEPGRAM_BASEURL}/read?${params.toString()}`;
         abortCtrl.current?.abort();

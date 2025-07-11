@@ -7,6 +7,7 @@ import type {
   UseDeepgramSpeechToTextReturn,
 } from './types';
 import { DEEPGRAM_BASEURL, DEEPGRAM_BASEWSS } from './constants';
+import { buildParams } from './helpers';
 
 export function useDeepgramSpeechToText({
   onBeforeStart = () => {},
@@ -42,10 +43,10 @@ export function useDeepgramSpeechToText({
       const apiKey = (global as any).__DEEPGRAM_API_KEY__;
       if (!apiKey) throw new Error('Deepgram API key missing');
 
-      const params = new URLSearchParams({
+      const params = buildParams({
         encoding: 'linear16',
         sample_rate: '16000',
-      }).toString();
+      });
 
       const url = `${DEEPGRAM_BASEWSS}/listen?${params}`;
 

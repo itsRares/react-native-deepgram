@@ -79,7 +79,7 @@ export default function TextToSpeech() {
       {httpError && <Text style={styles.error}>Error: {httpError}</Text>}
 
       {/* streaming */}
-      <View style={[styles.buttonRow, { marginTop: 24 }]}>
+      <View style={[styles.buttonRow, styles.streamingSection]}>
         <Button
           title="Start Stream"
           onPress={handleStream}
@@ -100,7 +100,7 @@ export default function TextToSpeech() {
 
       {/* Continuous streaming - send additional text to active stream */}
       {streamStatus === 'streaming' && (
-        <View style={[styles.continuousSection, { marginTop: 24 }]}>
+        <View style={[styles.continuousSection, styles.continuousMargin]}>
           <Text style={styles.sectionTitle}>Continuous Streaming</Text>
           <TextInput
             value={streamText}
@@ -167,6 +167,12 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     textAlignVertical: 'top',
     backgroundColor: '#f9f9f9',
+  },
+  streamingSection: {
+    marginTop: 24,
+  },
+  continuousMargin: {
+    marginTop: 24,
   },
   outputContainer: { flex: 1, marginTop: 8 },
   note: { fontSize: 14, lineHeight: 20 },

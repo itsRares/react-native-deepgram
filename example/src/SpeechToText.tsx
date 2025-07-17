@@ -106,7 +106,7 @@ export default function SpeechToText() {
       </ScrollView>
 
       {/* File transcription controls */}
-      <View style={[styles.buttonRow, { marginTop: 24 }]}>
+      <View style={[styles.buttonRow, styles.streamingSection]}>
         <Button
           title="Pick & Transcribe File"
           onPress={pickAndTranscribe}
@@ -152,5 +152,8 @@ const styles = StyleSheet.create({
   transcript: {
     fontSize: 14,
     lineHeight: 20,
+  },
+  streamingSection: {
+    marginTop: 24,
   },
 });

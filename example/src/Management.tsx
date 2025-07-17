@@ -97,7 +97,7 @@ export default function Management() {
       </ScrollView>
 
       {/* Single model by UUID */}
-      <View style={[styles.buttonRow, { marginTop: 16 }]}>
+      <View style={[styles.buttonRow, styles.modelSection]}>
         <TextInput
           style={styles.input}
           placeholder="Enter model UUID"
@@ -174,6 +174,9 @@ const styles = StyleSheet.create({
   error: {
     marginVertical: 4,
     color: 'red',
+  },
+  modelSection: {
+    marginTop: 16,
   },
   output: {
     maxHeight: 160,

@@ -1,105 +1,73 @@
-#import "Deepgram.h"
+#import <React/RCTEventEmitter.h>
 #import <AVFoundation/AVFoundation.h>
 
-@interface Deepgram ()
-@property (nonatomic, strong) AVAudioEngine *engine;
-@property (nonatomic, strong) AVAudioPlayerNode *player;
+@interface Deepgram : RCTEventEmitter <AVAudioPlayerDelegate>
+// Recording
+@property (nonatomic, strong) AVAudioEngine      *recEngine;
+
+// Playback / TTS
+@property (nonatomic, strong) AVAudioPlayer      *audioPlayer;
+@property (nonatomic, strong) NSMutableData      *audioBuffer;
+@property (nonatomic, assign) BOOL                isPlaying;
 @end
 
 @implementation Deepgram
 RCT_EXPORT_MODULE();
 
-/* ------------------------------------------------------------------ */
-/*  React-Native boilerplate                                          */
-/* ------------------------------------------------------------------ */
-
 + (BOOL)requiresMainQueueSetup { return NO; }
 
 - (NSArray<NSString *> *)supportedEvents
 {
-  // Single outbound event: base-64-encoded PCM captured from the mic
   return @[ @"DeepgramAudioPCM" ];
 }
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                           */
 /* ------------------------------------------------------------------ */
-
-- (void)ensureAudioSession
+- (void)activateAudioSession
 {
-  AVAudioSession *session = [AVAudioSession sharedInstance];
-
-  // Play & record, default to the speaker
-  [session setCategory:AVAudioSessionCategoryPlayAndRecord
-           withOptions:AVAudioSessionCategoryOptionDefaultToSpeaker
-                 error:nil];
-
-  // Hardware sample-rate is 48 kHz on all modern iPhones; no override
-  // (removing the previous 16 kHz preference eliminates the mismatch warning)
-
-  [session setActive:YES error:nil];
+  AVAudioSession *s = [AVAudioSession sharedInstance];
+  NSError *error = nil;
+  
+  [s setCategory:AVAudioSessionCategoryPlayAndRecord
+     withOptions:AVAudioSessionCategoryOptionDefaultToSpeaker | 
+                AVAudioSessionCategoryOptionAllowBluetooth
+           error:&error];
+  
+  [s setActive:YES error:&error];
 }
 
-- (void)ensurePlayer
-{
-  if (!self.engine) self.engine = [[AVAudioEngine alloc] init];
-
-  if (!self.player) {
-    BOOL wasRunning = self.engine.isRunning;
-    if (wasRunning) [self.engine stop]; 
-
-    self.player = [[AVAudioPlayerNode alloc] init];
-    [self.engine attachNode:self.player];
-    [self.engine connect:self.player
-                      to:self.engine.mainMixerNode
-                  format:nil];
-
-    if (wasRunning) {
-      [self.engine prepare];
-      [self.engine startAndReturnError:nil]; 
-    }
-  }
-}
-
-
-/* ------------------------------------------------------------------ */
-/*  Recording – 48 000 Hz / Float-32                                   */
-/* ------------------------------------------------------------------ */
-
+/* ================================================================== */
+/*  1.  MICROPHONE CAPTURE (≈ 48 kHz Float-32)                         */
+/* ================================================================== */
 RCT_EXPORT_METHOD(startRecording
                   :(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
   @try {
-    if (!self.engine) self.engine = [[AVAudioEngine alloc] init];
-    [self ensureAudioSession];
+    if (!self.recEngine) self.recEngine = [[AVAudioEngine alloc] init];
+    [self activateAudioSession];
 
-    AVAudioInputNode *input = self.engine.inputNode;
-    // Tap in the **hardware format** (≈ 48 kHz, Float-32)
-    AVAudioFormat *hwFormat = [input outputFormatForBus:0];
+    AVAudioInputNode *input = self.recEngine.inputNode;
+    AVAudioFormat *hwFmt    = [input outputFormatForBus:0];
 
-    [input removeTapOnBus:0];   // clean previous taps
+    [input removeTapOnBus:0];
 
     __weak __typeof(self) weakSelf = self;
     [input installTapOnBus:0
                 bufferSize:1024
-                    format:hwFormat
-                     block:^(AVAudioPCMBuffer *buf, AVAudioTime *when) {
+                    format:hwFmt
+                     block:^(AVAudioPCMBuffer *buf, __unused AVAudioTime *when) {
                        if (!weakSelf) return;
-
-                       // buf.floatChannelData[0] → NSData (Float32 little-endian)
-                       NSData *pcm =
-                         [NSData dataWithBytes:buf.floatChannelData[0]
-                                         length:buf.frameLength * sizeof(float)];
-                       NSString *b64 =
-                         [pcm base64EncodedStringWithOptions:0];
-
+                       NSData *pcm = [NSData dataWithBytes:buf.floatChannelData[0]
+                                                    length:buf.frameLength * sizeof(float)];
+                       NSString *b64 = [pcm base64EncodedStringWithOptions:0];
                        [weakSelf sendEventWithName:@"DeepgramAudioPCM"
                                               body:@{ @"b64": b64 }];
                      }];
 
-    [self.engine prepare];
-    [self.engine startAndReturnError:nil];
+    [self.recEngine prepare];
+    [self.recEngine startAndReturnError:nil];
     resolve(nil);
   }
   @catch (NSException *e) {
@@ -112,9 +80,9 @@ RCT_EXPORT_METHOD(stopRecording
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
   @try {
-    [self.engine.inputNode removeTapOnBus:0];
-    [self.engine stop];
-    self.engine = nil;
+    [self.recEngine.inputNode removeTapOnBus:0];
+    [self.recEngine stop];
+    self.recEngine = nil;
     resolve(nil);
   }
   @catch (NSException *e) {
@@ -122,76 +90,205 @@ RCT_EXPORT_METHOD(stopRecording
   }
 }
 
-/* ------------------------------------------------------------------ */
-/*  Playback                                                          */
-/* ------------------------------------------------------------------ */
+/* ================================================================== */
+/*  2.  SIMPLE AUDIO PLAYBACK (USING AVAUDIOPLAYER)                   */
+/* ================================================================== */
 
-RCT_EXPORT_METHOD(startAudio
+/**
+ * Create a WAV header for PCM data.
+ * This allows us to use AVAudioPlayer with raw PCM data.
+ */
+- (NSData *)createWAVHeaderForPCMData:(NSData *)pcmData sampleRate:(int)sampleRate {
+  uint32_t dataSize = (uint32_t)pcmData.length;
+  uint32_t fileSize = 36 + dataSize;
+  uint16_t channels = 1;
+  uint16_t bitsPerSample = 16;
+  uint32_t byteRate = sampleRate * channels * (bitsPerSample / 8);
+  uint16_t blockAlign = channels * (bitsPerSample / 8);
+  
+  NSMutableData *wavData = [NSMutableData data];
+  
+  // RIFF header
+  [wavData appendBytes:"RIFF" length:4];
+  [wavData appendBytes:&fileSize length:4];
+  [wavData appendBytes:"WAVE" length:4];
+  
+  // fmt chunk
+  [wavData appendBytes:"fmt " length:4];
+  uint32_t fmtSize = 16;
+  [wavData appendBytes:&fmtSize length:4];
+  uint16_t audioFormat = 1; // PCM
+  [wavData appendBytes:&audioFormat length:2];
+  [wavData appendBytes:&channels length:2];
+  uint32_t sampleRateValue = sampleRate;
+  [wavData appendBytes:&sampleRateValue length:4];
+  [wavData appendBytes:&byteRate length:4];
+  [wavData appendBytes:&blockAlign length:2];
+  [wavData appendBytes:&bitsPerSample length:2];
+  
+  // data chunk
+  [wavData appendBytes:"data" length:4];
+  [wavData appendBytes:&dataSize length:4];
+  [wavData appendData:pcmData];
+  
+  return wavData;
+}
+
+RCT_EXPORT_METHOD(startPlayer
+                  :(nonnull NSNumber *)sampleRate
+                  channels:(nonnull NSNumber *)channels)
+{
+  [self stopPlayer:nil rejecter:nil];
+  [self activateAudioSession];
+  
+  self.audioBuffer = [[NSMutableData alloc] init];
+  self.isPlaying = NO;
+}
+
+/**
+ * Add audio data to the buffer for streaming playback.
+ */
+RCT_EXPORT_METHOD(feedAudio:(NSString *)b64)
+{
+  if (!self.audioBuffer) {
+    [self startPlayer:@16000 channels:@1];
+  }
+  
+  NSData *pcmData = [[NSData alloc] initWithBase64EncodedString:b64 options:0];
+  if (!pcmData || pcmData.length == 0) {
+    return;
+  }
+  
+  [self.audioBuffer appendData:pcmData];
+  
+  if (!self.isPlaying && self.audioBuffer.length > 1000) {
+    [self playAccumulatedAudio];
+  }
+}
+
+/**
+ * Play accumulated audio buffer for streaming.
+ */
+- (void)playAccumulatedAudio {
+  if (!self.audioBuffer || self.audioBuffer.length == 0) {
+    return;
+  }
+  
+  NSData *wavData = [self createWAVHeaderForPCMData:self.audioBuffer sampleRate:16000];
+  
+  NSError *error = nil;
+  AVAudioPlayer *player = [[AVAudioPlayer alloc] initWithData:wavData error:&error];
+  
+  if (error) {
+    return;
+  }
+  
+  self.audioPlayer = player;
+  self.audioPlayer.delegate = self;
+  
+  self.isPlaying = YES;
+  [player prepareToPlay];
+  BOOL success = [player play];
+  
+  if (success) {
+    [self.audioBuffer setLength:0];
+  } else {
+    self.isPlaying = NO;
+  }
+}
+
+/**
+ * Play PCM data immediately using AVAudioPlayer.
+ */
+- (void)playPCMData:(NSData *)pcmData {
+  NSData *wavData = [self createWAVHeaderForPCMData:pcmData sampleRate:16000];
+  
+  NSError *error = nil;
+  AVAudioPlayer *player = [[AVAudioPlayer alloc] initWithData:wavData error:&error];
+  
+  if (error) {
+    return;
+  }
+  
+  self.audioPlayer = player;
+  [player prepareToPlay];
+  [player play];
+}
+
+/**
+ * Stop and cleanup the audio player.
+ */
+RCT_EXPORT_METHOD(stopPlayer
                   :(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
   @try {
-    [self ensurePlayer];
-    [self.player play];
-    resolve(nil);
+    if (self.audioPlayer) {
+      [self.audioPlayer stop];
+      self.audioPlayer = nil;
+    }
+    
+    self.audioBuffer = nil;
+    self.isPlaying = NO;
+    
+
+    
+    if (resolve) resolve(nil);
   }
   @catch (NSException *e) {
-    reject(@"audio_start_error", e.reason, nil);
+    NSLog(@"[Deepgram] Error stopping player: %@", e.reason);
+    if (reject) reject(@"player_stop_error", e.reason, nil);
   }
 }
 
-RCT_EXPORT_METHOD(stopAudio
-                  :(RCTPromiseResolveBlock)resolve
-                  rejecter:(RCTPromiseRejectBlock)reject)
+/**
+ * Set audio configuration (compatibility method).
+ */
+RCT_EXPORT_METHOD(setAudioConfig
+                  :(nonnull NSNumber *)sampleRate
+                  channels:(nonnull NSNumber *)channels)
 {
-  @try {
-    [self.player stop];
-    [self.engine stop];
-    self.player = nil;
-    self.engine = nil;
-    resolve(nil);
-  }
-  @catch (NSException *e) {
-    reject(@"audio_stop_error", e.reason, nil);
-  }
+  [self startPlayer:sampleRate channels:channels];
 }
 
+/**
+ * Play a single audio chunk (one-shot playback).
+ */
 RCT_EXPORT_METHOD(playAudioChunk
                   :(NSString *)chunk
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
   @try {
-    [self ensurePlayer];
-
-    // base-64 string → NSData
-    NSData *data =
-      [[NSData alloc] initWithBase64EncodedString:chunk options:0];
-    if (!data) {
-      reject(@"decode_error", @"invalid base64", nil);
+    NSData *pcmData = [[NSData alloc] initWithBase64EncodedString:chunk options:0];
+    if (!pcmData) {
+      if (reject) reject(@"invalid_data", @"Failed to decode audio data", nil);
       return;
     }
-
-    AVAudioFormat *pcm16 =
-      [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatInt16
-                                       sampleRate:16000
-                                         channels:1
-                                      interleaved:YES];
-
-    uint32_t frames = (uint32_t)(data.length / 2);
-    AVAudioPCMBuffer *buffer =
-      [[AVAudioPCMBuffer alloc] initWithPCMFormat:pcm16
-                                    frameCapacity:frames];
-    buffer.frameLength = frames;
-
-    memcpy(buffer.int16ChannelData[0], data.bytes, data.length);
-    [self.player scheduleBuffer:buffer completionHandler:nil];
-
-    resolve(nil);
+    
+    [self playPCMData:pcmData];
+    
+    if (resolve) resolve(nil);
   }
   @catch (NSException *e) {
-    reject(@"play_error", e.reason, nil);
+    if (reject) reject(@"playback_error", e.reason, nil);
   }
+}
+
+/* ================================================================== */
+/*  3.  AVAUDIOPLAYER DELEGATE METHODS                                */
+/* ================================================================== */
+
+- (void)audioPlayerDidFinishPlaying:(AVAudioPlayer *)player successfully:(BOOL)flag {
+  self.isPlaying = NO;
+  
+  if (self.audioBuffer && self.audioBuffer.length > 0) {
+    [self playAccumulatedAudio];
+  }
+}
+
+- (void)audioPlayerDecodeErrorDidOccur:(AVAudioPlayer *)player error:(NSError *)error {
+  self.isPlaying = NO;
 }
 
 @end

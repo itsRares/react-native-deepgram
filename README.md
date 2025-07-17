@@ -1,11 +1,13 @@
 # react-native-deepgram
 
-> **Work‑in‑progress** – Listen (Speech‑to‑Text) **and** Text Intelligence APIs are live. Voice Agent (TTS) support is next on the list.
+[![npm version](https://badge.fury.io/js/react-native-deepgram.svg)](https://badge.fury.io/js/react-native-deepgram)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **react-native-deepgram** brings Deepgram’s AI to React Native & Expo:
 
 - 🔊 **Live Speech-to-Text** – capture PCM audio and stream over WebSocket.
 - 📄 **File Transcription** – POST audio blobs/URIs and receive a transcript.
+- 🎤 **Text-to-Speech** – generate natural speech with HTTP synthesis + WebSocket streaming.
 - 🧠 **Text Intelligence** – summarise, detect topics, intents & sentiment.
 - 🛠️ **Management API** – list models, keys, usage, projects & more.
 - ⚙️ **Expo config plugin** – automatic native setup (managed or bare workflow).
@@ -70,6 +72,7 @@ configure({ apiKey: 'YOUR_DEEPGRAM_API_KEY' });
 | Hook                          | Purpose                                              |
 | ----------------------------- | ---------------------------------------------------- |
 | `useDeepgramSpeechToText`     | Live mic streaming + file transcription              |
+| `useDeepgramTextToSpeech`     | Text-to-Speech synthesis + streaming                 |
 | `useDeepgramTextIntelligence` | NLP analysis (summaries, topics, sentiment, intents) |
 | `useDeepgramManagement`       | Full Management REST wrapper                         |
 
@@ -140,6 +143,124 @@ export type UseDeepgramSpeechToTextReturn = {
     file: Blob | { uri: string; name?: string; type?: string }
   ) => Promise<void>;
 };
+```
+
+</details>
+
+---
+
+### `useDeepgramTextToSpeech`
+
+<details>
+<summary>Example – one-shot synthesis</summary>
+
+```tsx
+const { synthesize } = useDeepgramTextToSpeech({
+  onSynthesizeSuccess: () => console.log('Audio played successfully'),
+  onSynthesizeError: (error) => console.error('TTS error:', error),
+});
+
+<Button
+  title="Speak Text"
+  onPress={() => synthesize('Hello from Deepgram!')}
+/>;
+```
+
+</details>
+
+<details>
+<summary>Example – streaming with continuous text</summary>
+
+```tsx
+const { startStreaming, sendText, stopStreaming } = useDeepgramTextToSpeech({
+  onStreamStart: () => console.log('Stream started'),
+  onStreamEnd: () => console.log('Stream ended'),
+  onStreamError: (error) => console.error('Stream error:', error),
+});
+
+// Start streaming with initial text
+<Button
+  title="Start Stream"
+  onPress={() => startStreaming('This is the first message.')}
+/>
+
+// Send additional text to the same stream
+<Button
+  title="Send More Text"
+  onPress={() => sendText('And this is a follow-up message.')}
+/>
+
+// Stop the stream
+<Button title="Stop Stream" onPress={stopStreaming} />
+```
+
+</details>
+
+#### Properties
+
+| Name                  | Type                             | Description                                        | Default |
+| --------------------- | -------------------------------- | -------------------------------------------------- | ------- |
+| `onBeforeSynthesize`  | `() => void`                     | Called before HTTP synthesis begins                | –       |
+| `onSynthesizeSuccess` | `(audio: ArrayBuffer) => void`   | Called when HTTP synthesis completes successfully  | –       |
+| `onSynthesizeError`   | `(error: unknown) => void`       | Called if HTTP synthesis fails                     | –       |
+| `onBeforeStream`      | `() => void`                     | Called before WebSocket stream starts              | –       |
+| `onStreamStart`       | `() => void`                     | Called when WebSocket connection opens             | –       |
+| `onAudioChunk`        | `(chunk: ArrayBuffer) => void`   | Called for each audio chunk received via WebSocket | –       |
+| `onStreamError`       | `(error: unknown) => void`       | Called on WebSocket streaming errors               | –       |
+| `onStreamEnd`         | `() => void`                     | Called when WebSocket stream ends                  | –       |
+| `options`             | `UseDeepgramTextToSpeechOptions` | TTS configuration options                          | `{}`    |
+
+#### Methods
+
+| Name             | Signature                         | Description                                                |
+| ---------------- | --------------------------------- | ---------------------------------------------------------- |
+| `synthesize`     | `(text: string) => Promise<void>` | Generate and play audio for text using HTTP API (one-shot) |
+| `startStreaming` | `(text: string) => Promise<void>` | Start WebSocket stream and send initial text               |
+| `sendText`       | `(text: string) => boolean`       | Send additional text to active WebSocket stream            |
+| `stopStreaming`  | `() => void`                      | Close WebSocket stream and stop audio playback             |
+
+#### Options
+
+| Name             | Type              | Description                                  | Default              |
+| ---------------- | ----------------- | -------------------------------------------- | -------------------- |
+| `model`          | `string`          | TTS model to use                             | `'aura-2-thalia-en'` |
+| `sampleRate`     | `number`          | Audio sample rate (8000, 16000, 24000, etc.) | `16000`              |
+| `bitRate`        | `number`          | Audio bit rate                               | –                    |
+| `callback`       | `string`          | Webhook URL for completion notifications     | –                    |
+| `callbackMethod` | `'POST' \| 'PUT'` | HTTP method for webhook                      | –                    |
+| `mipOptOut`      | `boolean`         | Opt out of Model Improvement Program         | –                    |
+
+<details>
+<summary>Types</summary>
+
+```ts
+export interface UseDeepgramTextToSpeechOptions {
+  model?: string;
+  sampleRate?: number;
+  bitRate?: number;
+  callback?: string;
+  callbackMethod?: 'POST' | 'PUT' | string;
+  mipOptOut?: boolean;
+}
+
+export interface UseDeepgramTextToSpeechProps {
+  onBeforeSynthesize?: () => void;
+  onSynthesizeSuccess?: (audio: ArrayBuffer) => void;
+  onSynthesizeError?: (error: unknown) => void;
+  onBeforeStream?: () => void;
+  onStreamStart?: () => void;
+  onAudioChunk?: (chunk: ArrayBuffer) => void;
+  onStreamError?: (error: unknown) => void;
+  onStreamEnd?: () => void;
+  options?: UseDeepgramTextToSpeechOptions;
+}
+
+export interface UseDeepgramTextToSpeechReturn {
+  synthesize: (text: string) => Promise<void>;
+  startStreaming: (text: string) => Promise<void>;
+  sendText: (text: string) => boolean;
+  stopStreaming: () => void;
+}
 ```
 
 </details>
@@ -260,7 +381,7 @@ export interface UseDeepgramManagementReturn {
 ## Example app
 
 ```bash
-git clone https://github.com/your-repo/react-native-deepgram
+git clone https://github.com/itsRares/react-native-deepgram
 cd react-native-deepgram/example
 yarn && yarn start   # or expo start
 ```
@@ -270,9 +391,9 @@ yarn && yarn start   # or expo start
 ## Roadmap
 
 - ✅ Speech-to-Text (WebSocket + REST)
+- ✅ Text-to-Speech (HTTP synthesis + WebSocket streaming)
 - ✅ Text Intelligence (summaries, topics, sentiment, intents)
 - ✅ Management API wrapper
-- 🚧 Voice Agent (TTS) WebSocket endpoint
 - 🚧 Detox E2E tests for the example app
 
 ---

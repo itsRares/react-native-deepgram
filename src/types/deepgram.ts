@@ -110,7 +110,6 @@ export interface DeepgramListModelsResponse {
   tts: DeepgramTtsModel[] | null;
 }
 
-/* ---------- projects ---------- */
 export interface DeepgramProject {
   project_id: string;
   name: string;
@@ -118,7 +117,6 @@ export interface DeepgramProject {
   balance?: number;
 }
 
-/* ---------- keys ---------- */
 export interface DeepgramKey {
   key_id: string;
   project_id: string;
@@ -127,7 +125,6 @@ export interface DeepgramKey {
   created?: string;
 }
 
-/* ---------- members ---------- */
 export interface DeepgramMember {
   member_id: string;
   email: string;
@@ -135,10 +132,8 @@ export interface DeepgramMember {
   invited?: boolean;
 }
 
-/* ---------- scopes ---------- */
 export type DeepgramScope = string;
 
-/* ---------- invitations ---------- */
 export interface DeepgramInvitation {
   invitation_id: string;
   project_id: string;
@@ -147,7 +142,6 @@ export interface DeepgramInvitation {
   created?: string;
 }
 
-/* ---------- usage / requests ---------- */
 export interface DeepgramRequest {
   request_id: string;
   project_id: string;
@@ -155,19 +149,16 @@ export interface DeepgramRequest {
   created?: string;
 }
 
-/* ---------- usage / fields ---------- */
 export interface DeepgramUsageField {
   field: string;
   description?: string;
 }
 
-/* ---------- usage / breakdown ---------- */
 export interface DeepgramUsageBreakdown {
   total: number;
   breakdown: Record<string, number>;
 }
 
-/* ---------- purchases ---------- */
 export interface DeepgramPurchase {
   purchase_id: string;
   project_id: string;
@@ -175,15 +166,12 @@ export interface DeepgramPurchase {
   created?: string;
 }
 
-/* ---------- balances ---------- */
 export interface DeepgramBalance {
   balance_id: string;
   project_id: string;
   balance: number;
   currency?: string;
 }
-
-/** ------------------- Deepgram Management Hook Return --------------- */
 
 export interface UseDeepgramManagementReturn {
   models: {
@@ -245,3 +233,52 @@ export interface UseDeepgramManagementReturn {
     get(projectId: string, balanceId: string): Promise<DeepgramBalance>;
   };
 }
+
+/** ------------------- UseDeepgramTextToSpeech --------------- */
+export interface UseDeepgramTextToSpeechOptions {
+  model?: string; // 'aura-2-thalia-en', etc.
+  format?: 'wav' | 'mp3' | 'pcm' | 'opus';
+  sampleRate?: number; // e.g. 44100
+  bitRate?: number; // e.g. 64000
+  callback?: string;
+  callbackMethod?: 'POST' | 'PUT';
+  mipOptOut?: boolean;
+}
+
+export type UseDeepgramTextToSpeechProps = {
+  /* ---------- Synchronous HTTP (`synthesize`) ---------- */
+
+  /** Called right before the HTTP request is dispatched (e.g. show a spinner). */
+  onBeforeSynthesize?: () => void;
+  /** Fires when the complete audio file is received. */
+  onSynthesizeSuccess?: (audio: ArrayBuffer) => void;
+  /** Fires if the HTTP request fails. */
+  onSynthesizeError?: (error: unknown) => void;
+
+  /* ---------- Streaming WebSocket (`startStreaming` / `stopStreaming`) ---------- */
+
+  /** Called before opening the WebSocket connection. */
+  onBeforeStream?: () => void;
+  /** Called once the socket is open and the server is ready. */
+  onStreamStart?: () => void;
+  /** Called for every binary audio chunk that arrives. */
+  onAudioChunk?: (chunk: ArrayBuffer) => void;
+  /** Called on any WebSocket or streaming error. */
+  onStreamError?: (error: unknown) => void;
+  /** Called when the stream ends or the socket closes. */
+  onStreamEnd?: () => void;
+
+  /** Shared options that apply to both HTTP and WebSocket flows. */
+  options?: UseDeepgramTextToSpeechOptions;
+};
+
+export type UseDeepgramTextToSpeechReturn = {
+  /** One-shot HTTP request that resolves when the full audio is ready. */
+  synthesize: (text: string) => Promise<void>;
+  /** Opens a WebSocket and begins streaming audio chunks in real-time. */
+  startStreaming: (text: string) => Promise<void>;
+  /** Send additional text to an existing WebSocket stream. */
+  sendText: (text: string) => boolean;
+  /** Gracefully closes the WebSocket stream. */
+  stopStreaming: () => void;
+};

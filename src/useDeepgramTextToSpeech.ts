@@ -25,8 +25,12 @@ const Deepgram = (() => {
     return mod as {
       /** Initialise playback engine */
       startPlayer(sampleRate: number, channels: 1 | 2): void;
+      /** Set audio configuration */
+      setAudioConfig(sampleRate: number, channels: 1 | 2): void;
       /** Feed a base-64 PCM chunk */
       feedAudio(base64Pcm: string): void;
+      /** Play a single audio chunk */
+      playAudioChunk(base64Pcm: string): Promise<void>;
       /** Stop / reset the player */
       stopPlayer(): void;
     };
@@ -36,9 +40,17 @@ const Deepgram = (() => {
     startPlayer: (sr = 16_000, ch: 1 | 2 = 1) =>
       getModule().startPlayer(sr, ch),
 
+    setAudioConfig: (sr = 16_000, ch: 1 | 2 = 1) =>
+      getModule().setAudioConfig(sr, ch),
+
     feedAudio: (chunk: ArrayBuffer | Uint8Array) => {
       const u8 = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
       getModule().feedAudio(Buffer.from(u8).toString('base64'));
+    },
+
+    playAudioChunk: (chunk: ArrayBuffer | Uint8Array) => {
+      const u8 = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+      return getModule().playAudioChunk(Buffer.from(u8).toString('base64'));
     },
 
     stopPlayer: () => getModule().stopPlayer(),
@@ -100,13 +112,8 @@ export function useDeepgramTextToSpeech({
           throw new Error(`HTTP ${res.status}: ${errText}`);
         }
 
-        console.log(`Synthesized audio: ${res.status}`);
-
         const audio = await res.arrayBuffer();
-        console.log(`Audio buffer size: ${audio.byteLength} bytes`);
-
-        Deepgram.startPlayer(options.sampleRate ?? 16000, 1);
-        Deepgram.feedAudio(audio);
+        await Deepgram.playAudioChunk(audio);
 
         onSynthesizeSuccess(audio);
       } catch (err: any) {
@@ -159,9 +166,14 @@ export function useDeepgramTextToSpeech({
           headers: { Authorization: `Token ${apiKey}` },
         });
 
+        // Ensure WebSocket receives binary data as ArrayBuffer
+        ws.current.binaryType = 'arraybuffer';
+
         ws.current.onopen = () => {
           Deepgram.startPlayer(options.sampleRate ?? 16000, 1);
-          ws.current?.send(JSON.stringify({ text }));
+          ws.current?.send(JSON.stringify({ type: 'Speak', text }));
+          // Send flush to trigger audio generation
+          ws.current?.send(JSON.stringify({ type: 'Flush' }));
           onStreamStart();
         };
 
@@ -169,6 +181,20 @@ export function useDeepgramTextToSpeech({
           if (ev.data instanceof ArrayBuffer) {
             Deepgram.feedAudio(ev.data);
             onAudioChunk(ev.data);
+          } else if (ev.data instanceof Blob) {
+            ev.data.arrayBuffer().then((buffer) => {
+              Deepgram.feedAudio(buffer);
+              onAudioChunk(buffer);
+            });
+          } else if (typeof ev.data === 'string') {
+            try {
+              const message = JSON.parse(ev.data);
+              if (message.type === 'Error') {
+                onStreamError(new Error(message.description || 'TTS error'));
+              }
+            } catch {
+              // Ignore non-JSON string messages
+            }
           }
         };
 
@@ -203,6 +229,29 @@ export function useDeepgramTextToSpeech({
     }
   }, [onStreamEnd, onStreamError]);
 
+  const sendText = useCallback(
+    (text: string) => {
+      if (!ws.current || ws.current.readyState !== WebSocket.OPEN) {
+        return false;
+      }
+
+      if (!text?.trim()) {
+        return false;
+      }
+
+      try {
+        const message = JSON.stringify({ type: 'Speak', text });
+        ws.current.send(message);
+        ws.current.send(JSON.stringify({ type: 'Flush' }));
+        return true;
+      } catch (err) {
+        onStreamError(err);
+        return false;
+      }
+    },
+    [onStreamError]
+  );
+
   /* ---------- cleanup on unmount ---------- */
   useEffect(
     () => () => {
@@ -212,5 +261,5 @@ export function useDeepgramTextToSpeech({
     []
   );
 
-  return { synthesize, startStreaming, stopStreaming };
+  return { synthesize, startStreaming, sendText, stopStreaming };
 }

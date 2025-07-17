@@ -11,6 +11,7 @@ import { useDeepgramTextToSpeech } from 'react-native-deepgram';
 
 export default function TextToSpeech() {
   const [text, setText] = useState('');
+  const [streamText, setStreamText] = useState('');
   const [httpStatus, setHttpStatus] = useState<'idle' | 'working' | 'error'>(
     'idle'
   );
@@ -20,8 +21,8 @@ export default function TextToSpeech() {
   >('idle');
   const [streamError, setStreamError] = useState<string | null>(null);
 
-  const { synthesize, startStreaming, stopStreaming } = useDeepgramTextToSpeech(
-    {
+  const { synthesize, startStreaming, sendText, stopStreaming } =
+    useDeepgramTextToSpeech({
       onBeforeSynthesize: () => {
         setHttpStatus('working');
         setHttpError(null);
@@ -44,11 +45,15 @@ export default function TextToSpeech() {
       onStreamEnd: () => {
         setStreamStatus('idle');
       },
-    }
-  );
+    });
 
   const handleSynthesize = () => synthesize(text);
   const handleStream = () => startStreaming(text);
+  const handleSendText = () => {
+    if (sendText(streamText)) {
+      setStreamText(''); // Clear the input after sending
+    }
+  };
 
   return (
     <View style={styles.container}>
@@ -93,6 +98,27 @@ export default function TextToSpeech() {
         <Text style={styles.error}>Stream error: {streamError}</Text>
       )}
 
+      {/* Continuous streaming - send additional text to active stream */}
+      {streamStatus === 'streaming' && (
+        <View style={[styles.continuousSection, { marginTop: 24 }]}>
+          <Text style={styles.sectionTitle}>Continuous Streaming</Text>
+          <TextInput
+            value={streamText}
+            onChangeText={setStreamText}
+            placeholder="Send more text to the active stream..."
+            style={styles.streamInput}
+            multiline
+          />
+          <View style={styles.buttonRow}>
+            <Button
+              title="Send Text"
+              onPress={handleSendText}
+              disabled={!streamText.trim()}
+            />
+          </View>
+        </View>
+      )}
+
       <ScrollView style={styles.outputContainer}>
         <Text style={styles.note}>
           Audio is played automatically by the built-in native player; there’s
@@ -121,6 +147,27 @@ const styles = StyleSheet.create({
   },
   status: { marginVertical: 8, fontStyle: 'italic' },
   error: { marginVertical: 8, color: 'red' },
+  continuousSection: {
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
+    paddingTop: 16,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 12,
+    color: '#333',
+  },
+  streamInput: {
+    minHeight: 60,
+    borderWidth: 1,
+    borderColor: '#ccc',
+    borderRadius: 4,
+    padding: 8,
+    marginBottom: 12,
+    textAlignVertical: 'top',
+    backgroundColor: '#f9f9f9',
+  },
   outputContainer: { flex: 1, marginTop: 8 },
   note: { fontSize: 14, lineHeight: 20 },
 });

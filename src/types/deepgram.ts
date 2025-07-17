@@ -277,6 +277,8 @@ export type UseDeepgramTextToSpeechReturn = {
   synthesize: (text: string) => Promise<void>;
   /** Opens a WebSocket and begins streaming audio chunks in real-time. */
   startStreaming: (text: string) => Promise<void>;
+  /** Send additional text to an existing WebSocket stream. */
+  sendText: (text: string) => boolean;
   /** Gracefully closes the WebSocket stream. */
   stopStreaming: () => void;
 };

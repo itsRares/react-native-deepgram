@@ -7115,6 +7115,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"expo-document-picker@npm:^12.0.2":
+  version: 12.0.2
+  resolution: "expo-document-picker@npm:12.0.2"
+  peerDependencies:
+    expo: "*"
+  checksum: fe358e535e7b3a5466817b55178981fc8d6632c91bef07c9292538e83a6724879cd2a03f059f4d376445545e98296aaea7daffe6129ccd84a4f7dd98a8d18c6e
+  languageName: node
+  linkType: hard
+
 "expo-module-scripts@npm:^4.1.8":
   version: 4.1.9
   resolution: "expo-module-scripts@npm:4.1.9"
@@ -11734,15 +11743,16 @@ __metadata:
     "@react-native/metro-config": 0.79.2
     "@react-native/typescript-config": 0.79.2
     "@types/react": ^19.0.0
+    expo-document-picker: ^12.0.2
     react: 19.0.0
     react-native: 0.79.2
     react-native-builder-bob: ^0.40.12
-    react-native-deepgram: "*"
+    react-native-deepgram: "workspace:*"
     react-native-monorepo-config: ^0.1.9
   languageName: unknown
   linkType: soft
 
-"react-native-deepgram@*, react-native-deepgram@workspace:.":
+"react-native-deepgram@workspace:*, react-native-deepgram@workspace:.":
   version: 0.0.0-use.local
   resolution: "react-native-deepgram@workspace:."
   dependencies:

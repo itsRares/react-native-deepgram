@@ -11,6 +11,7 @@ import { configure } from 'react-native-deepgram';
 import SpeechToText from './SpeechToText';
 import TextIntelligence from './TextIntelligence';
 import Management from './Management';
+import TextToSpeech from './TextToSpeech';
 
 /**
  * Entry point for the Deepgram demo app.
@@ -21,11 +22,12 @@ import Management from './Management';
 // Use an environment variable or placeholder for the API key
 configure({ apiKey: process.env.DEEPGRAM_API_KEY || 'YOUR_DEEPGRAM_API_KEY' });
 
-type ScreenKey = 'speech' | 'text' | 'management';
+type ScreenKey = 'speech' | 'text' | 'management' | 'tts';
 const TABS: { key: ScreenKey; label: string }[] = [
   { key: 'speech', label: 'Speech to Text' },
   { key: 'text', label: 'Text Intelligence' },
   { key: 'management', label: 'Management' },
+  { key: 'tts', label: 'Text to Speech' },
 ];
 
 export default function App() {
@@ -63,6 +65,7 @@ export default function App() {
         {activeScreen === 'speech' && <SpeechToText />}
         {activeScreen === 'text' && <TextIntelligence />}
         {activeScreen === 'management' && <Management />}
+        {activeScreen === 'tts' && <TextToSpeech />}
       </View>
     </SafeAreaView>
   );

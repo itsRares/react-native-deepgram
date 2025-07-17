@@ -1,5 +1,5 @@
 export function buildParams(
-  map: Record<string, string | boolean | string[] | undefined>
+  map: Record<string, string | boolean | string[] | undefined | number>
 ): string {
   const p = new URLSearchParams();
 
@@ -11,7 +11,11 @@ export function buildParams(
     } else if (typeof value === 'boolean') {
       if (value) p.append(key, 'true'); // only include true flags
     } else {
-      p.append(key, value); // plain string
+      if (typeof value === 'number') {
+        p.append(key, String(value)); // convert number to string
+      } else {
+        p.append(key, value); // plain string
+      }
     }
   });
 

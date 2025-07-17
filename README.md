@@ -1,5 +1,8 @@
 # react-native-deepgram
 
+[![npm version](https://badge.fury.io/js/react-native-deepgram.svg)](https://badge.fury.io/js/react-native-deepgram)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 > **Work‑in‑progress** – Listen (Speech‑to‑Text) **and** Text Intelligence APIs are live. Voice Agent (TTS) support is next on the list.
 
 **react-native-deepgram** brings Deepgram’s AI to React Native & Expo:
@@ -260,7 +263,7 @@ export interface UseDeepgramManagementReturn {
 ## Example app
 
 ```bash
-git clone https://github.com/your-repo/react-native-deepgram
+git clone https://github.com/itsRares/react-native-deepgram
 cd react-native-deepgram/example
 yarn && yarn start   # or expo start
 ```

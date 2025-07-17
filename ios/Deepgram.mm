@@ -184,7 +184,7 @@ RCT_EXPORT_METHOD(feedAudio:(NSString *)b64)
   }
   
   self.audioPlayer = player;
-  self.audioPlayer.delegate = (id<AVAudioPlayerDelegate>)self;
+  self.audioPlayer.delegate = self;
   
   self.isPlaying = YES;
   [player prepareToPlay];

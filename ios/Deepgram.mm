@@ -9,6 +9,7 @@
 @property (nonatomic, strong) AVAudioPlayer      *audioPlayer;
 @property (nonatomic, strong) NSMutableData      *audioBuffer;
 @property (nonatomic, assign) BOOL                isPlaying;
+@property (nonatomic, assign) int                 currentSampleRate;
 @end
 
 @implementation Deepgram
@@ -143,6 +144,7 @@ RCT_EXPORT_METHOD(startPlayer
   
   self.audioBuffer = [[NSMutableData alloc] init];
   self.isPlaying = NO;
+  self.currentSampleRate = sampleRate.intValue;
 }
 
 /**
@@ -151,7 +153,9 @@ RCT_EXPORT_METHOD(startPlayer
 RCT_EXPORT_METHOD(feedAudio:(NSString *)b64)
 {
   if (!self.audioBuffer) {
-    [self startPlayer:@16000 channels:@1];
+    // Use default sample rate if not set
+    int defaultSampleRate = self.currentSampleRate > 0 ? self.currentSampleRate : 16000;
+    [self startPlayer:@(defaultSampleRate) channels:@1];
   }
   
   NSData *pcmData = [[NSData alloc] initWithBase64EncodedString:b64 options:0];
@@ -174,7 +178,7 @@ RCT_EXPORT_METHOD(feedAudio:(NSString *)b64)
     return;
   }
   
-  NSData *wavData = [self createWAVHeaderForPCMData:self.audioBuffer sampleRate:16000];
+  NSData *wavData = [self createWAVHeaderForPCMData:self.audioBuffer sampleRate:self.currentSampleRate];
   
   NSError *error = nil;
   AVAudioPlayer *player = [[AVAudioPlayer alloc] initWithData:wavData error:&error];
@@ -201,7 +205,7 @@ RCT_EXPORT_METHOD(feedAudio:(NSString *)b64)
  * Play PCM data immediately using AVAudioPlayer.
  */
 - (void)playPCMData:(NSData *)pcmData {
-  NSData *wavData = [self createWAVHeaderForPCMData:pcmData sampleRate:16000];
+  NSData *wavData = [self createWAVHeaderForPCMData:pcmData sampleRate:self.currentSampleRate];
   
   NSError *error = nil;
   AVAudioPlayer *player = [[AVAudioPlayer alloc] initWithData:wavData error:&error];

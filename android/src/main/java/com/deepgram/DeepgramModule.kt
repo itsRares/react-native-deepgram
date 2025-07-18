@@ -26,20 +26,28 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
   companion object {
     const val NAME = "Deepgram"
     private const val TAG = "DeepgramModule"
-    private const val SAMPLE_RATE = 16000
+    private const val DEFAULT_SAMPLE_RATE = 16000
     private const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
     private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
   }
 
-  private val minBufferSize: Int =
-    AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
-  private var bufferSize: Int = minBufferSize * 4
+  private var currentSampleRate: Int = DEFAULT_SAMPLE_RATE
+  private val minBufferSize: Int
+    get() = AudioRecord.getMinBufferSize(currentSampleRate, CHANNEL_CONFIG, AUDIO_FORMAT)
+  private val bufferSize: Int
+    get() = minBufferSize * 4
 
   private var audioRecord: AudioRecord? = null
   private var recordingThread: Thread? = null
   private var isRecording = false
 
+  // Enhanced TTS Playback Properties
   private var audioTrack: AudioTrack? = null
+  private var audioBuffer: ByteArray = ByteArray(0)
+  private var isPlaying = false
+  private var playbackThread: Thread? = null
+  private val bufferLock = Any()
+  private val playbackThreshold = 1000 // Wait for at least 1KB before starting playback
 
   override fun getName() = NAME
 
@@ -57,7 +65,7 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     try {
       audioRecord = AudioRecord(
         MediaRecorder.AudioSource.VOICE_RECOGNITION,
-        SAMPLE_RATE,
+        currentSampleRate,
         CHANNEL_CONFIG,
         AUDIO_FORMAT,
         bufferSize
@@ -132,7 +140,7 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     if (audioTrack != null) return
 
     val channelMask = AudioFormat.CHANNEL_OUT_MONO
-    val minBuf = AudioTrack.getMinBufferSize(SAMPLE_RATE, channelMask, AUDIO_FORMAT)
+    val minBuf = AudioTrack.getMinBufferSize(currentSampleRate, channelMask, AUDIO_FORMAT)
 
     audioTrack = AudioTrack.Builder()
       .setAudioAttributes(
@@ -144,7 +152,7 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
       .setAudioFormat(
         AudioFormat.Builder()
           .setEncoding(AUDIO_FORMAT)
-          .setSampleRate(SAMPLE_RATE)
+          .setSampleRate(currentSampleRate)
           .setChannelMask(channelMask)
           .build()
       )
@@ -178,16 +186,190 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     }
   }
 
+
+
+  // -------------------------------------------------------------------
+  // Enhanced TTS Streaming Audio Player (matches iOS functionality)
+  // -------------------------------------------------------------------
+
+  @ReactMethod
+  fun startPlayer(sampleRate: Int, channels: Int) {
+    stopStreamingPlayback()
+    
+    currentSampleRate = sampleRate
+    synchronized(bufferLock) {
+      audioBuffer = ByteArray(0)
+    }
+    isPlaying = false
+    
+    Log.d(TAG, "Audio player initialized: ${sampleRate}Hz, ${channels} channels")
+  }
+
+  @ReactMethod
+  fun setAudioConfig(sampleRate: Int, channels: Int) {
+    startPlayer(sampleRate, channels)
+  }
+
+  @ReactMethod
+  fun feedAudio(base64Audio: String) {
+    try {
+      val audioData = Base64.decode(base64Audio, Base64.DEFAULT)
+      if (audioData.isEmpty()) return
+      
+      Log.d(TAG, "Feeding ${audioData.size} bytes of audio for streaming")
+      
+      // Add audio data to buffer
+      synchronized(bufferLock) {
+        audioBuffer = audioBuffer + audioData
+      }
+      
+      // Start playback if we have enough data and aren't already playing
+      if (!isPlaying && audioBuffer.size >= playbackThreshold) {
+        startStreamingPlayback()
+      }
+      
+    } catch (e: Exception) {
+      Log.e(TAG, "feedAudio error", e)
+    }
+  }
+
+  private fun startStreamingPlayback() {
+    if (isPlaying) return
+    
+    isPlaying = true
+    playbackThread = Thread {
+      try {
+        ensureAudioTrack()
+        audioTrack?.play()
+        
+        while (isPlaying) {
+          var dataToPlay = ByteArray(0)
+          var shouldContinue = true
+          
+          synchronized(bufferLock) {
+            if (audioBuffer.isEmpty()) {
+              // No more data, stop playing
+              shouldContinue = false
+            } else {
+              // Take all available data
+              dataToPlay = audioBuffer
+              audioBuffer = ByteArray(0)
+            }
+          }
+          
+          if (!shouldContinue) {
+            break
+          }
+          
+          if (dataToPlay.isNotEmpty()) {
+            Log.d(TAG, "Playing accumulated audio: ${dataToPlay.size} bytes")
+            val written = audioTrack?.write(dataToPlay, 0, dataToPlay.size) ?: 0
+            
+            if (written < 0) {
+              Log.e(TAG, "AudioTrack write error: $written")
+              break
+            }
+          } else {
+            // Small delay to prevent busy waiting
+            Thread.sleep(10)
+          }
+        }
+        
+      } catch (e: Exception) {
+        Log.e(TAG, "Streaming playback error", e)
+      } finally {
+        isPlaying = false
+        Log.d(TAG, "Streaming playback finished")
+      }
+    }
+    
+    playbackThread?.start()
+  }
+
+  private fun stopStreamingPlayback() {
+    isPlaying = false
+    playbackThread?.interrupt()
+    playbackThread = null
+    
+    audioTrack?.stop()
+    audioTrack?.release()
+    audioTrack = null
+    
+    synchronized(bufferLock) {
+      audioBuffer = ByteArray(0)
+    }
+  }
+
+  @ReactMethod
+  fun stopPlayer(promise: Promise?) {
+    try {
+      stopStreamingPlayback()
+      Log.d(TAG, "Audio player stopped and cleaned up")
+      promise?.resolve(null)
+    } catch (e: Exception) {
+      Log.e(TAG, "stopPlayer error", e)
+      promise?.reject("stop_player_error", e)
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // One-shot playback (for HTTP synthesis)
+  // -------------------------------------------------------------------
+
   @ReactMethod
   fun playAudioChunk(chunk: String, promise: Promise) {
     try {
-      ensureAudioTrack()
+      Log.d(TAG, "Playing single audio chunk")
+      
       val audioData = Base64.decode(chunk, Base64.DEFAULT)
-      audioTrack?.write(audioData, 0, audioData.size)
+      if (audioData.isEmpty()) {
+        promise.reject("invalid_data", "Failed to decode audio data")
+        return
+      }
+      
+      // For one-shot playback, create a temporary AudioTrack
+      val channelMask = AudioFormat.CHANNEL_OUT_MONO
+      val minBuf = AudioTrack.getMinBufferSize(currentSampleRate, channelMask, AUDIO_FORMAT)
+      
+      val tempAudioTrack = AudioTrack.Builder()
+        .setAudioAttributes(
+          AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build()
+        )
+        .setAudioFormat(
+          AudioFormat.Builder()
+            .setEncoding(AUDIO_FORMAT)
+            .setSampleRate(currentSampleRate)
+            .setChannelMask(channelMask)
+            .build()
+        )
+        .setBufferSizeInBytes(maxOf(minBuf, audioData.size))
+        .setTransferMode(AudioTrack.MODE_STATIC)
+        .build()
+      
+      tempAudioTrack.write(audioData, 0, audioData.size)
+      tempAudioTrack.play()
+      
+      // Clean up after playback completes
+      Thread {
+        try {
+          // Wait for playback to complete
+          while (tempAudioTrack.playState == AudioTrack.PLAYSTATE_PLAYING) {
+            Thread.sleep(50)
+          }
+        } finally {
+          tempAudioTrack.stop()
+          tempAudioTrack.release()
+        }
+      }.start()
+      
       promise.resolve(null)
+      
     } catch (e: Exception) {
       Log.e(TAG, "playAudioChunk error", e)
-      promise.reject("play_error", e)
+      promise.reject("playback_error", e.message)
     }
   }
 }

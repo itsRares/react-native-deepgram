@@ -1,6 +1,8 @@
 /** ------------------- UseDeepgramSpeechToText --------------- */
 
 export type UseDeepgramSpeechToTextProps = {
+  /** BCP-47 language tag hint (defaults to 'en') */
+  language?: string;
   /** Called before any setup (e.g. before permission prompt) */
   onBeforeStart?: () => void;
   /** Called once the WebSocket is open */

@@ -18,6 +18,7 @@ export function useDeepgramSpeechToText({
   onBeforeTranscribe = () => {},
   onTranscribeSuccess = () => {},
   onTranscribeError = () => {},
+  language = 'en-Us',
 }: UseDeepgramSpeechToTextProps): UseDeepgramSpeechToTextReturn {
   const ws = useRef<WebSocket | null>(null);
   const audioSub = useRef<ReturnType<NativeEventEmitter['addListener']> | null>(
@@ -48,7 +49,7 @@ export function useDeepgramSpeechToText({
         sample_rate: '16000',
       });
 
-      const url = `${DEEPGRAM_BASEWSS}/listen?${params}`;
+      const url = `${DEEPGRAM_BASEWSS}/listen?${params}&language=${language}`;
 
       ws.current = new (WebSocket as any)(url, undefined, {
         headers: { Authorization: `Token ${apiKey}` },
@@ -117,7 +118,7 @@ export function useDeepgramSpeechToText({
       onError(err);
       closeEverything();
     }
-  }, [onBeforeStart, onStart, onTranscript, onError, onEnd]);
+  }, [onBeforeStart, onStart, onTranscript, onError, onEnd, language]);
 
   const stopListening = useCallback(() => {
     try {

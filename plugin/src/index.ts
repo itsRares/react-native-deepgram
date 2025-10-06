@@ -4,7 +4,6 @@ import {
   withInfoPlist,
 } from '@expo/config-plugins';
 import type { ConfigPlugin } from '@expo/config-plugins';
-
 type DeepgramPluginOptions = {
   microphonePermission?: string;
 };
@@ -33,10 +32,19 @@ const withIosDeepgram: ConfigPlugin<DeepgramPluginOptions> = (
   const message =
     options.microphonePermission ??
     'Allow $(PRODUCT_NAME) to access the microphone';
+  const fallbackPermissionMessage =
+    'Allow $(PRODUCT_NAME) to access your microphone.';
 
   return withInfoPlist(config, (cfg) => {
     cfg.modResults.NSMicrophoneUsageDescription =
       cfg.modResults.NSMicrophoneUsageDescription || message;
+    if (options.microphonePermission) {
+      cfg.modResults.NSMicrophoneUsageDescription =
+        options.microphonePermission;
+    } else if (!cfg.modResults.NSMicrophoneUsageDescription) {
+      cfg.modResults.NSMicrophoneUsageDescription = fallbackPermissionMessage;
+    }
+
     return cfg;
   });
 };

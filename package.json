@@ -1,6 +1,6 @@
 {
   "name": "react-native-deepgram",
-  "version": "0.1.22-beta.0",
+  "version": "1.0.3",
   "description": "React Native SDK for Deepgram's AI-powered speech-to-text, real-time transcription, and text intelligence APIs. Supports live audio streaming, file transcription, sentiment analysis, and topic detection for iOS and Android.",
   "main": "lib/commonjs/index.js",
   "module": "lib/module/index.js",

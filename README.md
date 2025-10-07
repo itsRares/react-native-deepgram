@@ -3,14 +3,35 @@
 [![npm version](https://badge.fury.io/js/react-native-deepgram.svg)](https://badge.fury.io/js/react-native-deepgram)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**react-native-deepgram** brings Deepgram’s AI to React Native & Expo:
+**react-native-deepgram** brings Deepgram's AI platform to React Native & Expo.
 
-- 🔊 **Live Speech-to-Text** – capture PCM audio and stream over WebSocket.
-- 📄 **File Transcription** – POST audio blobs/URIs and receive a transcript.
-- 🎤 **Text-to-Speech** – generate natural speech with HTTP synthesis + WebSocket streaming.
-- 🧠 **Text Intelligence** – summarise, detect topics, intents & sentiment.
-- 🛠️ **Management API** – list models, keys, usage, projects & more.
-- ⚙️ **Expo config plugin** – automatic native setup (managed or bare workflow).
+> ✅ Supports **Speech-to-Text v1** and the new **Speech-to-Text v2 (Flux)** streaming API alongside Text-to-Speech, Text Intelligence, and the Management API.
+
+## Table of contents
+
+1. [Features](#features)
+2. [Installation](#installation)
+3. [Configuration](#configuration)
+4. [Usage overview](#usage-overview)
+5. [Speech-to-Text](#speech-to-text-usedeepragramspeechtotext)
+6. [Text-to-Speech](#text-to-speech-usedeepragramtexttospeech)
+7. [Text Intelligence](#text-intelligence-usedeepragramtextintelligence)
+8. [Management API](#management-api-usedeepragrammanagement)
+9. [Example app](#example-app)
+10. [Roadmap](#roadmap)
+11. [Contributing](#contributing)
+12. [License](#license)
+
+---
+
+## Features
+
+- 🔊 **Live Speech-to-Text** – capture PCM audio and stream it over WebSocket (STT v1 or v2/Flux).
+- 📄 **File Transcription** – send audio files/URIs to Deepgram and receive transcripts.
+- 🎤 **Text-to-Speech** – synthesize speech with HTTP requests or WebSocket streaming controls.
+- 🧠 **Text Intelligence** – summarisation, topic detection, intents, sentiment and more.
+- 🛠️ **Management API** – list models, keys, usage, projects, balances, etc.
+- ⚙️ **Expo config plugin** – automatic native configuration for managed and bare workflows.
 
 ---
 
@@ -62,34 +83,36 @@ import { configure } from 'react-native-deepgram';
 configure({ apiKey: 'YOUR_DEEPGRAM_API_KEY' });
 ```
 
-> **Heads‑up 🔐** The Management API needs a key with management scopes.  
-> Don’t ship production keys in a public repo—use environment variables, Expo secrets, or your own backend.
+> **Heads‑up 🔐** The Management API needs a key with management scopes.
+> Do not ship production keys in source control—prefer environment variables, Expo secrets, or a backend proxy.
 
 ---
 
-## Hooks at a glance
+## Usage overview
 
 | Hook                          | Purpose                                              |
 | ----------------------------- | ---------------------------------------------------- |
-| `useDeepgramSpeechToText`     | Live mic streaming + file transcription              |
-| `useDeepgramTextToSpeech`     | Text-to-Speech synthesis + streaming                 |
-| `useDeepgramTextIntelligence` | NLP analysis (summaries, topics, sentiment, intents) |
-| `useDeepgramManagement`       | Full Management REST wrapper                         |
+| `useDeepgramSpeechToText`     | Live microphone streaming and file transcription     |
+| `useDeepgramTextToSpeech`     | Text-to-Speech synthesis (HTTP + WebSocket streaming) |
+| `useDeepgramTextIntelligence` | Text analysis (summaries, topics, intents, sentiment) |
+| `useDeepgramManagement`       | Typed wrapper around the Management REST API         |
 
 ---
 
-### `useDeepgramSpeechToText`
+## Speech-to-Text (`useDeepgramSpeechToText`)
 
-<details>
-<summary>Example – live streaming</summary>
+The speech hook streams microphone audio using WebSockets and can also transcribe prerecorded audio sources. It defaults to STT v1 but automatically boots into Flux when `apiVersion: 'v2'` is supplied (defaulting the model to `flux-general-en`).
+
+### Live streaming quick start
 
 ```tsx
 const { startListening, stopListening } = useDeepgramSpeechToText({
   onTranscript: console.log,
   live: {
-    model: 'nova-2',
-    interimResults: true,
+    apiVersion: 'v2',
+    model: 'flux-general-en',
     punctuate: true,
+    eotThreshold: 0.55,
   },
 });
 
@@ -97,13 +120,12 @@ const { startListening, stopListening } = useDeepgramSpeechToText({
   title="Start"
   onPress={() => startListening({ keywords: ['Deepgram'] })}
 />
-<Button title="Stop"  onPress={stopListening} />
+<Button title="Stop" onPress={stopListening} />
 ```
 
-</details>
+> 💡 When you opt into `apiVersion: 'v2'` the hook automatically selects `flux-general-en` if you do not provide a model.
 
-<details>
-<summary>Example – file transcription</summary>
+### File transcription quick start
 
 ```tsx
 const { transcribeFile } = useDeepgramSpeechToText({
@@ -122,200 +144,125 @@ const pickFile = async () => {
 };
 ```
 
-</details>
+### API reference
 
-#### Properties
+#### Hook props
 
-| Name                  | Type                           | Description                                         | Default |
-| --------------------- | ------------------------------ | --------------------------------------------------- | ------- |
-| `onBeforeStart`       | `() => void`                   | Called before any setup (e.g. permission prompt)    | –       |
-| `onStart`             | `() => void`                   | Fires once the WebSocket connection opens           | –       |
-| `onTranscript`        | `(transcript: string) => void` | Called on every transcript update (partial & final) | –       |
-| `onError`             | `(error: unknown) => void`     | Called on any streaming error                       | –       |
-| `onEnd`               | `() => void`                   | Fires when the session ends / WebSocket closes      | –       |
-| `onBeforeTranscribe`  | `() => void`                   | Called before file transcription begins             | –       |
-| `onTranscribeSuccess` | `(transcript: string) => void` | Called with the final transcript of the file        | –       |
-| `onTranscribeError`   | `(error: unknown) => void`     | Called if file transcription fails                  | –       |
-| `live`                | `DeepgramLiveListenOptions`    | Default Live transcription params (query string)    | –       |
-| `prerecorded`         | `DeepgramPrerecordedOptions`   | Default options for pre-recorded transcription      | –       |
+| Prop                   | Type                           | Description                                                     |
+| ---------------------- | ------------------------------ | --------------------------------------------------------------- |
+| `onBeforeStart`        | `() => void`                   | Invoked before requesting mic permissions or starting a stream. |
+| `onStart`              | `() => void`                   | Fired once the WebSocket opens.                                 |
+| `onTranscript`         | `(transcript: string) => void` | Called for every transcript update (partial and final).         |
+| `onError`              | `(error: unknown) => void`     | Receives streaming errors.                                      |
+| `onEnd`                | `() => void`                   | Fired when the socket closes.                                   |
+| `onBeforeTranscribe`   | `() => void`                   | Called before posting a prerecorded transcription request.      |
+| `onTranscribeSuccess`  | `(transcript: string) => void` | Receives the final transcript for prerecorded audio.            |
+| `onTranscribeError`    | `(error: unknown) => void`     | Fired if prerecorded transcription fails.                       |
+| `live`                 | `DeepgramLiveListenOptions`    | Default options merged into every live stream.                  |
+| `prerecorded`          | `DeepgramPrerecordedOptions`   | Default options merged into every file transcription.           |
 
-#### Methods
+#### Returned methods
 
-| Name             | Signature                                                                        | Description                                                                       |
-| ---------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `startListening` | `(options?: DeepgramLiveListenOptions) => Promise<void>`                         | Begin mic capture and stream audio to Deepgram (override defaults with `options`) |
-| `stopListening`  | `() => void`                                                                     | Stop capture and close WebSocket                                                  |
-| `transcribeFile` | `(file: DeepgramPrerecordedSource, options?: DeepgramPrerecordedOptions) => Promise<void>` | Upload a local blob/URI or remote URL and receive its transcript via callbacks |
+| Method             | Signature                                                                        | Description                                                                 |
+| ------------------ | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `startListening`   | `(options?: DeepgramLiveListenOptions) => Promise<void>`                         | Requests mic access, starts recording, and streams audio to Deepgram.       |
+| `stopListening`    | `() => void`                                                                     | Stops recording and closes the active WebSocket.                            |
+| `transcribeFile`   | `(file: DeepgramPrerecordedSource, options?: DeepgramPrerecordedOptions) => Promise<void>` | Uploads a file/URI/URL and resolves via the success/error callbacks. |
+
+#### Live transcription options (`DeepgramLiveListenOptions`)
 
 <details>
-<summary>Types</summary>
+<summary>Expand all live streaming parameters</summary>
 
-```ts
-export type DeepgramLiveListenRedaction =
-  | 'pci'
-  | 'numbers'
-  | 'dates'
-  | 'names'
-  | 'addresses'
-  | 'all'
-  | (string & {});
+| Option               | Type                                                     | Purpose                                                                                     | Default                            |
+| -------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `apiVersion`         | `'v1' \| 'v2'`                                           | Selects the realtime API generation (`'v2'` unlocks Flux streaming).                        | `'v1'`                             |
+| `callback`           | `string`                                                 | Webhook URL invoked when the stream finishes.                                               | –                                  |
+| `callbackMethod`     | `'POST' \| 'GET' \| 'PUT' \| 'DELETE'`                   | HTTP verb Deepgram should use for `callback`.                                               | `'POST'`                           |
+| `channels`           | `number`                                                 | Number of audio channels in the input.                                                      | –                                  |
+| `diarize`            | `boolean`                                                | Separate speakers into individual tracks.                                                   | Disabled                           |
+| `dictation`          | `boolean`                                                | Enable dictation features (punctuation, formatting).                                        | Disabled                           |
+| `encoding`           | `DeepgramLiveListenEncoding`                             | Audio codec supplied to Deepgram.                                                           | `'linear16'`                       |
+| `endpointing`        | `number \| boolean`                                     | Control endpoint detection (`false` disables).                                              | –                                  |
+| `extra`              | `Record<string, string \| number \| boolean>`           | Attach custom metadata returned with the response.                                          | –                                  |
+| `fillerWords`        | `boolean`                                                | Include filler words such as "um"/"uh".                                                    | Disabled                           |
+| `interimResults`     | `boolean`                                                | Emit interim (non-final) transcripts.                                                       | Disabled                           |
+| `keyterm`            | `string \| string[]`                                    | Provide key terms to bias Nova-3 transcription.                                             | –                                  |
+| `keywords`           | `string \| string[]`                                    | Boost or suppress keywords.                                                                 | –                                  |
+| `language`           | `string`                                                 | BCP-47 language hint (e.g. `en-US`).                                                        | Auto                               |
+| `mipOptOut`          | `boolean`                                                | Opt out of the Model Improvement Program.                                                   | Disabled                           |
+| `model`              | `DeepgramLiveListenModel`                               | Streaming model to request.                                                                 | `'nova-2'` (v1) / `'flux-general-en'` (v2) |
+| `multichannel`       | `boolean`                                                | Transcribe each channel independently.                                                      | Disabled                           |
+| `numerals`           | `boolean`                                                | Convert spoken numbers into digits.                                                         | Disabled                           |
+| `profanityFilter`    | `boolean`                                                | Remove profanity from transcripts.                                                          | Disabled                           |
+| `punctuate`          | `boolean`                                                | Auto-insert punctuation and capitalization.                                                 | Disabled                           |
+| `redact`             | `DeepgramLiveListenRedaction \| DeepgramLiveListenRedaction[]` | Remove sensitive content such as PCI data.                                           | –                                  |
+| `replace`            | `string \| string[]`                                    | Replace specific terms in the output.                                                       | –                                  |
+| `sampleRate`         | `number`                                                 | Sample rate of the PCM audio being sent.                                                    | `16000`                            |
+| `search`             | `string \| string[]`                                    | Return timestamps for search terms.                                                         | –                                  |
+| `smartFormat`        | `boolean`                                                | Apply Deepgram smart formatting.                                                            | Disabled                           |
+| `tag`                | `string`                                                 | Label the request for reporting.                                                            | –                                  |
+| `eagerEotThreshold`  | `number`                                                 | Confidence required to emit an eager turn (Flux only).                                      | –                                  |
+| `eotThreshold`       | `number`                                                 | Confidence required to finalise a turn (Flux only).                                         | –                                  |
+| `eotTimeoutMs`       | `number`                                                 | Silence timeout before closing a turn (Flux only).                                          | –                                  |
+| `utteranceEndMs`     | `number`                                                 | Delay before emitting an utterance end event.                                               | –                                  |
+| `vadEvents`          | `boolean`                                                | Emit voice activity detection events.                                                       | Disabled                           |
+| `version`            | `string`                                                 | Request a specific model version.                                                           | –                                  |
 
-export type DeepgramLiveListenOptions = {
-  callback?: string;
-  callbackMethod?: 'POST' | 'GET' | 'PUT' | 'DELETE';
-  channels?: number;
-  diarize?: boolean;
-  dictation?: boolean;
-  encoding?:
-    | 'linear16'
-    | 'linear32'
-    | 'flac'
-    | 'alaw'
-    | 'mulaw'
-    | 'amr-nb'
-    | 'amr-wb'
-    | 'opus'
-    | 'ogg-opus'
-    | 'speex'
-    | 'g729'
-    | (string & {});
-  endpointing?: number | boolean;
-  extra?: Record<string, string | number | boolean>;
-  fillerWords?: boolean;
-  interimResults?: boolean;
-  keyterm?: string | string[];
-  keywords?: string | string[];
-  language?: string;
-  mipOptOut?: boolean;
-  model?:
-    | 'nova-3'
-    | 'nova-3-general'
-    | 'nova-3-medical'
-    | 'nova-2'
-    | 'nova-2-general'
-    | 'nova-2-meeting'
-    | 'nova-2-finance'
-    | 'nova-2-conversationalai'
-    | 'nova-2-voicemail'
-    | 'nova-2-video'
-    | 'nova-2-medical'
-    | 'nova-2-drivethru'
-    | 'nova-2-automotive'
-    | 'nova'
-    | 'nova-general'
-    | 'nova-phonecall'
-    | 'nova-medical'
-    | 'enhanced'
-    | 'enhanced-general'
-    | 'enhanced-meeting'
-    | 'enhanced-phonecall'
-    | 'enhanced-finance'
-    | 'base'
-    | 'meeting'
-    | 'phonecall'
-    | 'finance'
-    | 'conversationalai'
-    | 'voicemail'
-    | 'video'
-    | 'custom'
-    | (string & {});
-  multichannel?: boolean;
-  numerals?: boolean;
-  profanityFilter?: boolean;
-  punctuate?: boolean;
-  redact?: DeepgramLiveListenRedaction | DeepgramLiveListenRedaction[];
-  replace?: string | string[];
-  sampleRate?: number;
-  search?: string | string[];
-  smartFormat?: boolean;
-  tag?: string;
-  utteranceEndMs?: number;
-  vadEvents?: boolean;
-  version?: string;
-};
+</details>
 
-export type DeepgramPrerecordedCallbackMethod = 'POST' | 'PUT' | (string & {});
+#### Prerecorded transcription options (`DeepgramPrerecordedOptions`)
 
-export type DeepgramPrerecordedEncoding =
-  | 'linear16'
-  | 'flac'
-  | 'mulaw'
-  | 'amr-nb'
-  | 'amr-wb'
-  | 'opus'
-  | 'speex'
-  | 'g729'
-  | (string & {});
+<details>
+<summary>Expand all prerecorded transcription parameters</summary>
 
-export type DeepgramPrerecordedRedaction =
-  | 'pci'
-  | 'pii'
-  | 'numbers'
-  | (string & {});
-
-export type DeepgramPrerecordedOptions = {
-  callback?: string;
-  callbackMethod?: DeepgramPrerecordedCallbackMethod;
-  extra?: string | string[] | Record<string, string | number | boolean>;
-  sentiment?: boolean;
-  summarize?: boolean | 'v1' | 'v2' | (string & {});
-  tag?: string | string[];
-  topics?: boolean;
-  customTopic?: string | string[];
-  customTopicMode?: 'extended' | 'strict';
-  intents?: boolean;
-  customIntent?: string | string[];
-  customIntentMode?: 'extended' | 'strict';
-  detectEntities?: boolean;
-  detectLanguage?: boolean | string | string[];
-  diarize?: boolean;
-  dictation?: boolean;
-  encoding?: DeepgramPrerecordedEncoding;
-  fillerWords?: boolean;
-  keyterm?: string | string[];
-  keywords?: string | string[];
-  language?: string;
-  measurements?: boolean;
-  model?: DeepgramLiveListenOptions['model'] | (string & {});
-  multichannel?: boolean;
-  numerals?: boolean;
-  paragraphs?: boolean;
-  profanityFilter?: boolean;
-  punctuate?: boolean;
-  redact?: DeepgramPrerecordedRedaction | DeepgramPrerecordedRedaction[];
-  replace?: string | string[];
-  search?: string | string[];
-  smartFormat?: boolean;
-  utterances?: boolean;
-  uttSplit?: number;
-  version?: 'latest' | (string & {});
-};
-
-export type DeepgramPrerecordedSource =
-  | Blob
-  | { uri: string; name?: string; type?: string }
-  | { url: string }
-  | string;
-
-export type UseDeepgramSpeechToTextProps = /* …see above table… */
-export type UseDeepgramSpeechToTextReturn = {
-  startListening: (options?: DeepgramLiveListenOptions) => Promise<void>;
-  stopListening: () => void;
-  transcribeFile: (
-    file: DeepgramPrerecordedSource,
-    options?: DeepgramPrerecordedOptions
-  ) => Promise<void>;
-};
-```
+| Option             | Type                                              | Purpose                                                                 | Default                 |
+| ------------------ | ------------------------------------------------- | ----------------------------------------------------------------------- | ----------------------- |
+| `callback`         | `string`                                          | Webhook URL invoked once transcription finishes.                       | –                       |
+| `callbackMethod`   | `DeepgramPrerecordedCallbackMethod`               | HTTP verb used for `callback`.                                         | `'POST'`                |
+| `extra`            | `DeepgramPrerecordedExtra`                        | Metadata returned with the response.                                   | –                       |
+| `sentiment`        | `boolean`                                         | Run sentiment analysis.                                                | Disabled                |
+| `summarize`        | `DeepgramPrerecordedSummarize`                    | Request AI summaries (`true`, `'v1'`, or `'v2'`).                       | Disabled                |
+| `tag`              | `string \| string[]`                             | Label the request.                                                     | –                       |
+| `topics`           | `boolean`                                         | Detect topics.                                                         | Disabled                |
+| `customTopic`      | `string \| string[]`                             | Provide additional topics to monitor.                                  | –                       |
+| `customTopicMode`  | `DeepgramPrerecordedCustomMode`                  | Interpret `customTopic` as `'extended'` or `'strict'`.                 | `'extended'`            |
+| `intents`          | `boolean`                                         | Detect intents.                                                        | Disabled                |
+| `customIntent`     | `string \| string[]`                             | Provide custom intents to bias detection.                              | –                       |
+| `customIntentMode` | `DeepgramPrerecordedCustomMode`                  | Interpret `customIntent` as `'extended'` or `'strict'`.                | `'extended'`            |
+| `detectEntities`   | `boolean`                                         | Extract entities (names, places, etc.).                                | Disabled                |
+| `detectLanguage`   | `boolean \| string \| string[]`                 | Auto-detect language or limit detection.                               | Disabled                |
+| `diarize`          | `boolean`                                         | Enable speaker diarisation.                                            | Disabled                |
+| `dictation`        | `boolean`                                         | Enable dictation formatting.                                           | Disabled                |
+| `encoding`         | `DeepgramPrerecordedEncoding`                     | Encoding/codec of the uploaded audio.                                  | –                       |
+| `fillerWords`      | `boolean`                                         | Include filler words.                                                  | Disabled                |
+| `keyterm`          | `string \| string[]`                             | Provide key terms to bias Nova-3.                                      | –                       |
+| `keywords`         | `string \| string[]`                             | Boost or suppress keywords.                                            | –                       |
+| `language`         | `string`                                          | Primary spoken language hint (BCP-47).                                 | Auto                    |
+| `measurements`     | `boolean`                                         | Convert measurements into abbreviations.                               | Disabled                |
+| `model`            | `DeepgramPrerecordedModel`                        | Model to use for transcription.                                        | API default             |
+| `multichannel`     | `boolean`                                         | Transcribe each channel independently.                                 | Disabled                |
+| `numerals`         | `boolean`                                         | Convert spoken numbers into digits.                                    | Disabled                |
+| `paragraphs`       | `boolean`                                         | Split transcript into paragraphs.                                      | Disabled                |
+| `profanityFilter`  | `boolean`                                         | Remove profanity from the transcript.                                  | Disabled                |
+| `punctuate`        | `boolean`                                         | Auto-insert punctuation and capitalisation.                            | Disabled                |
+| `redact`           | `DeepgramPrerecordedRedaction \| DeepgramPrerecordedRedaction[]` | Remove sensitive content (PCI/PII).                                    | –                       |
+| `replace`          | `string \| string[]`                             | Replace specific terms in the output.                                  | –                       |
+| `search`           | `string \| string[]`                             | Return timestamps for search terms.                                    | –                       |
+| `smartFormat`      | `boolean`                                         | Apply Deepgram smart formatting.                                       | Disabled                |
+| `utterances`       | `boolean`                                         | Return utterance-level timestamps.                                     | Disabled                |
+| `uttSplit`         | `number`                                          | Pause duration (seconds) used to split utterances.                     | –                       |
+| `version`          | `DeepgramPrerecordedVersion`                      | Request a specific model version (e.g. `'latest'`).                    | API default (`'latest'`) |
 
 </details>
 
 ---
 
-### `useDeepgramTextToSpeech`
+## Text-to-Speech (`useDeepgramTextToSpeech`)
 
-<details>
-<summary>Example – single request (HTTP)</summary>
+Generate audio via a single HTTP call or stream interactive responses over WebSocket. The hook exposes granular configuration for both request paths.
+
+### HTTP synthesis quick start
 
 ```tsx
 const { synthesize } = useDeepgramTextToSpeech({
@@ -328,7 +275,6 @@ const { synthesize } = useDeepgramTextToSpeech({
     },
   },
   onSynthesizeSuccess: (buffer) => {
-    // Persist the returned ArrayBuffer or feed it into a custom player
     console.log('Received bytes', buffer.byteLength);
   },
 });
@@ -336,10 +282,7 @@ const { synthesize } = useDeepgramTextToSpeech({
 await synthesize('Hello from Deepgram!');
 ```
 
-</details>
-
-<details>
-<summary>Example – streaming (WebSocket)</summary>
+### Streaming quick start
 
 ```tsx
 const {
@@ -352,6 +295,7 @@ const {
 } = useDeepgramTextToSpeech({
   options: {
     stream: {
+      model: 'aura-2-asteria-en',
       encoding: 'linear16',
       sampleRate: 24000,
       autoFlush: false,
@@ -367,263 +311,157 @@ flushStream();
 closeStreamGracefully();
 ```
 
-</details>
+### API reference
 
-#### Properties
+#### Hook props
 
-| Name | Type | Description |
-| --- | --- | --- |
-| `onBeforeSynthesize` | `() => void` | Called before dispatching an HTTP synthesis request. |
-| `onSynthesizeSuccess` | `(audio: ArrayBuffer) => void` | Called with the raw audio bytes when the HTTP request succeeds. |
-| `onSynthesizeError` | `(error: unknown) => void` | Fired if the HTTP request fails. |
-| `onBeforeStream` | `() => void` | Called prior to opening the WebSocket stream. |
-| `onStreamStart` | `() => void` | Fired once the socket is open and the initial text has been queued. |
-| `onAudioChunk` | `(chunk: ArrayBuffer) => void` | Called for each PCM chunk received from the stream. |
-| `onStreamMetadata` | `(metadata: DeepgramTextToSpeechStreamMetadataMessage) => void` | Emits metadata describing the current stream. |
-| `onStreamFlushed` | `(event: DeepgramTextToSpeechStreamFlushedMessage) => void` | Raised when Deepgram confirms a flush. |
-| `onStreamCleared` | `(event: DeepgramTextToSpeechStreamClearedMessage) => void` | Raised when Deepgram confirms a clear operation. |
-| `onStreamWarning` | `(warning: DeepgramTextToSpeechStreamWarningMessage) => void` | Raised when Deepgram emits a warning about the stream. |
-| `onStreamError` | `(error: unknown) => void` | Fired when the WebSocket errors. |
-| `onStreamEnd` | `() => void` | Fired when the stream closes (gracefully or otherwise). |
-| `options` | `UseDeepgramTextToSpeechOptions` | Global/default configuration for HTTP and streaming parameters. |
+| Prop                 | Type                                                                  | Description                                                                 |
+| -------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `onBeforeSynthesize` | `() => void`                                                          | Called before dispatching an HTTP synthesis request.                        |
+| `onSynthesizeSuccess`| `(audio: ArrayBuffer) => void`                                        | Receives the raw audio bytes when the HTTP request succeeds.                |
+| `onSynthesizeError`  | `(error: unknown) => void`                                            | Fired if the HTTP request fails.                                            |
+| `onBeforeStream`     | `() => void`                                                          | Called prior to opening the WebSocket stream.                               |
+| `onStreamStart`      | `() => void`                                                          | Fired once the socket is open and ready.                                    |
+| `onAudioChunk`       | `(chunk: ArrayBuffer) => void`                                        | Called for each PCM chunk received from the stream.                         |
+| `onStreamMetadata`   | `(metadata: DeepgramTextToSpeechStreamMetadataMessage) => void`       | Emits metadata describing the current stream.                               |
+| `onStreamFlushed`    | `(event: DeepgramTextToSpeechStreamFlushedMessage) => void`           | Raised when Deepgram confirms a flush.                                      |
+| `onStreamCleared`    | `(event: DeepgramTextToSpeechStreamClearedMessage) => void`           | Raised when Deepgram confirms a clear.                                      |
+| `onStreamWarning`    | `(warning: DeepgramTextToSpeechStreamWarningMessage) => void`         | Raised when Deepgram warns about the stream.                                |
+| `onStreamError`      | `(error: unknown) => void`                                            | Fired when the WebSocket errors.                                            |
+| `onStreamEnd`        | `() => void`                                                          | Fired when the stream closes (gracefully or otherwise).                     |
+| `options`            | `UseDeepgramTextToSpeechOptions`                                     | Default configuration merged into HTTP and streaming requests.              |
 
-#### Methods
+#### Returned methods
 
-| Name | Signature | Description |
-| --- | --- | --- |
-| `synthesize` | `(text: string) => Promise<ArrayBuffer>` | Send a single piece of text via REST and resolve with the returned audio bytes. |
-| `startStreaming` | `(text: string) => Promise<void>` | Open the streaming WebSocket and queue the first message. |
-| `sendText` | `(text: string, options?: { flush?: boolean; sequenceId?: number }) => boolean` | Push additional text frames into the active stream. Optionally suppress automatic flushing or supply a sequence id. |
-| `flushStream` | `() => boolean` | Request Deepgram to emit all buffered audio immediately. |
-| `clearStream` | `() => boolean` | Clear the buffered text/audio without closing the socket. |
-| `closeStreamGracefully` | `() => boolean` | Ask Deepgram to finish outstanding audio then close the stream. |
-| `stopStreaming` | `() => void` | Force-close the socket and reset playback. |
+| Method                | Signature                                                                 | Description                                                                                     |
+| --------------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `synthesize`          | `(text: string) => Promise<ArrayBuffer>`                                  | Sends a single piece of text via REST and resolves with the full audio buffer.                  |
+| `startStreaming`      | `(text: string) => Promise<void>`                                         | Opens the streaming WebSocket and queues the first message.                                     |
+| `sendMessage`         | `(message: DeepgramTextToSpeechStreamInputMessage) => boolean`            | Sends a raw control message (`Text`, `Flush`, `Clear`, `Close`) to the active stream.           |
+| `sendText`            | `(text: string, options?: { flush?: boolean; sequenceId?: number }) => boolean` | Queues additional text frames, optionally suppressing auto-flush or setting a sequence id. |
+| `flushStream`         | `() => boolean`                                                           | Requests Deepgram to emit all buffered audio immediately.                                      |
+| `clearStream`         | `() => boolean`                                                           | Clears buffered text/audio without closing the socket.                                         |
+| `closeStreamGracefully` | `() => boolean`                                                         | Asks Deepgram to finish outstanding audio then close the stream.                               |
+| `stopStreaming`       | `() => void`                                                              | Force-closes the socket and releases resources.                                                |
+
+#### Configuration (`UseDeepgramTextToSpeechOptions`)
+
+`UseDeepgramTextToSpeechOptions` mirrors the SDK's structure and is merged into both HTTP and WebSocket requests.
 
 <details>
-<summary>Types</summary>
+<summary>Global options</summary>
 
-```ts
-import type {
-  DeepgramTextToSpeechModel,
-  DeepgramTextToSpeechHttpEncoding,
-  DeepgramTextToSpeechStreamEncoding,
-  DeepgramTextToSpeechSampleRate,
-  DeepgramTextToSpeechCallbackMethod,
-  DeepgramTextToSpeechContainer,
-  DeepgramTextToSpeechBitRate,
-  DeepgramTextToSpeechHttpOptions,
-  DeepgramTextToSpeechStreamOptions,
-  DeepgramTextToSpeechStreamMetadataMessage,
-  DeepgramTextToSpeechStreamFlushedMessage,
-  DeepgramTextToSpeechStreamClearedMessage,
-  DeepgramTextToSpeechStreamWarningMessage,
-  UseDeepgramTextToSpeechOptions,
-} from 'react-native-deepgram';
-```
+| Option        | Type                                             | Applies to       | Purpose                                                                       |
+| ------------- | ------------------------------------------------ | ---------------- | ----------------------------------------------------------------------------- |
+| `model`*      | `DeepgramTextToSpeechModel \| (string & {})`     | Both             | Legacy shortcut for selecting a model (prefer per-transport `model`).         |
+| `encoding`*   | `DeepgramTextToSpeechEncoding`                   | Both             | Legacy shortcut for selecting encoding (prefer `http.encoding` / `stream.encoding`). |
+| `sampleRate`* | `DeepgramTextToSpeechSampleRate`                 | Both             | Legacy shortcut for sample rate (prefer transport-specific overrides).        |
+| `bitRate`*    | `DeepgramTextToSpeechBitRate`                    | HTTP             | Legacy shortcut for bit rate.                                                 |
+| `container`*  | `DeepgramTextToSpeechContainer`                  | HTTP             | Legacy shortcut for container.                                                |
+| `format`*     | `'mp3' \| 'wav' \| 'opus' \| 'pcm' \| (string & {})` | HTTP         | Legacy shortcut for container/format.                                        |
+| `callback`*   | `string`                                         | HTTP             | Legacy shortcut for callback URL.                                             |
+| `callbackMethod`* | `DeepgramTextToSpeechCallbackMethod`         | HTTP             | Legacy shortcut for callback method.                                          |
+| `mipOptOut`*  | `boolean`                                        | Both             | Legacy shortcut for Model Improvement Program opt-out.                        |
+| `queryParams` | `Record<string, string \| number \| boolean>`   | Both             | Shared query string parameters appended to all requests.                      |
+| `http`        | `DeepgramTextToSpeechHttpOptions`                | HTTP             | Fine-grained HTTP synthesis configuration.                                    |
+| `stream`      | `DeepgramTextToSpeechStreamOptions`              | Streaming        | Fine-grained streaming configuration.                                         |
+
+<small>*Marked fields are supported for backwards compatibility but the transport-specific `http`/`stream` options are recommended.</small>
+
+</details>
+
+<details>
+<summary>`options.http` (REST synthesis)</summary>
+
+| Option         | Type                                               | Purpose                                                                       |
+| -------------- | -------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `model`        | `DeepgramTextToSpeechModel \| (string & {})`       | Select the TTS voice/model.                                                   |
+| `encoding`     | `DeepgramTextToSpeechHttpEncoding`                 | Output audio codec.                                                           |
+| `sampleRate`   | `DeepgramTextToSpeechSampleRate`                   | Output sample rate in Hz.                                                     |
+| `container`    | `DeepgramTextToSpeechContainer`                    | Wrap audio in a container (`'none'`, `'wav'`, `'ogg'`).                       |
+| `format`       | `'mp3' \| 'wav' \| 'opus' \| 'pcm' \| (string & {})` | Deprecated alias for `container`.                                             |
+| `bitRate`      | `DeepgramTextToSpeechBitRate`                      | Bit rate for compressed formats (e.g. MP3).                                   |
+| `callback`     | `string`                                           | Webhook URL invoked after synthesis completes.                                |
+| `callbackMethod` | `DeepgramTextToSpeechCallbackMethod`             | HTTP verb used for the callback.                                              |
+| `mipOptOut`    | `boolean`                                          | Opt out of the Model Improvement Program.                                     |
+| `queryParams`  | `Record<string, string \| number \| boolean>`     | Extra query parameters appended to the request.                               |
+
+</details>
+
+<details>
+<summary>`options.stream` (WebSocket streaming)</summary>
+
+| Option       | Type                                               | Purpose                                                                 |
+| ------------ | -------------------------------------------------- | ----------------------------------------------------------------------- |
+| `model`      | `DeepgramTextToSpeechModel \| (string & {})`       | Select the streaming voice/model.                                      |
+| `encoding`   | `DeepgramTextToSpeechStreamEncoding`               | Output PCM encoding for streamed chunks.                               |
+| `sampleRate` | `DeepgramTextToSpeechSampleRate`                   | Output sample rate in Hz.                                              |
+| `mipOptOut`  | `boolean`                                          | Opt out of the Model Improvement Program.                              |
+| `queryParams`| `Record<string, string \| number \| boolean>`     | Extra query parameters appended to the streaming URL.                  |
+| `autoFlush`  | `boolean`                                          | Automatically flush after each `sendText` call (defaults to `true`).   |
 
 </details>
 
 ---
 
-### `useDeepgramTextIntelligence`
+## Text Intelligence (`useDeepgramTextIntelligence`)
 
-<details>
-<summary>Example</summary>
+Run summarisation, topic detection, intent detection, sentiment analysis, and more over plain text or URLs.
 
 ```tsx
 const { analyze } = useDeepgramTextIntelligence({
+  onAnalyzeSuccess: (result) => console.log(result.summary),
   options: {
     summarize: true,
     topics: true,
-    customTopic: ['Spacewalk', 'Podcast'],
-    customTopicMode: 'extended',
     intents: true,
-    customIntent: ['Encourage podcasting'],
-    customIntentMode: 'extended',
-    sentiment: true,
     language: 'en-US',
   },
-  onAnalyzeSuccess: console.log,
 });
 
-await analyze({ text: 'React Native makes mobile easy.' });
+await analyze({ text: 'Deepgram makes voice data useful.' });
 ```
 
-</details>
+### Options (`UseDeepgramTextIntelligenceOptions`)
 
-#### Properties
-
-| Name               | Type                                 | Description                                       | Default |
-| ------------------ | ------------------------------------ | ------------------------------------------------- | ------- |
-| `onBeforeAnalyze`  | `() => void`                         | Called before analysis begins (e.g. show spinner) | –       |
-| `onAnalyzeSuccess` | `(results: any) => void`             | Called with the analysis results on success       | –       |
-| `onAnalyzeError`   | `(error: Error) => void`             | Called if the analysis request fails              | –       |
-| `options`          | `UseDeepgramTextIntelligenceOptions` | Which NLP tasks to run                            | `{}`    |
-
-##### `UseDeepgramTextIntelligenceOptions`
-
-| Name               | Type                                | Description                                                                                 | Default     |
-| ------------------ | ----------------------------------- | ------------------------------------------------------------------------------------------- | ----------- |
-| `summarize`        | `boolean`                           | Enable summarization                                                                        | `false`     |
-| `topics`           | `boolean`                           | Detect topics within the text                                                               | `false`     |
-| `customTopic`      | `string \| string[]`                | Provide custom topics to bias topic detection (up to 100 entries)                           | –           |
-| `customTopicMode`  | `'extended' \| 'strict'`            | Return only custom topics (`strict`) or include Deepgram-detected topics (`extended`)        | `'extended'` |
-| `intents`          | `boolean`                           | Detect speaker intents                                                                      | `false`     |
-| `customIntent`     | `string \| string[]`                | Provide custom intents to bias intent detection                                             | –           |
-| `customIntentMode` | `'extended' \| 'strict'`            | Return only custom intents (`strict`) or include Deepgram-detected intents (`extended`)      | `'extended'` |
-| `sentiment`        | `boolean`                           | Analyze sentiment throughout the text                                                       | `false`     |
-| `language`         | `DeepgramTextIntelligenceLanguage`  | Hint the primary language with a BCP-47 tag                                                 | `'en'`      |
-| `callback`         | `string`                            | URL to receive Deepgram's webhook when analysis finishes                                    | –           |
-| `callbackMethod`   | `'POST' \| 'PUT' \| (string & {})` | HTTP method Deepgram should use when invoking the `callback` URL                            | `'POST'`    |
-
-#### Methods
-
-| Name      | Signature                                                | Description                                         |
-| --------- | -------------------------------------------------------- | --------------------------------------------------- |
-| `analyze` | `(input: DeepgramTextIntelligenceInput) => Promise<void>` | Send raw text (or a URL) to Deepgram for processing |
-
-<details id="usedeepgramtextintelligence-types">
-<summary>Types</summary>
-
-```ts
-export type DeepgramTextIntelligenceInput =
-  | { text: string; url?: string }
-  | { text?: string; url: string };
-
-export type DeepgramTextIntelligenceLanguage =
-  | 'bg'
-  | 'ca'
-  | 'zh'
-  | 'zh-CN'
-  | 'zh-TW'
-  | 'zh-HK'
-  | 'zh-Hans'
-  | 'zh-Hant'
-  | 'cs'
-  | 'da'
-  | 'da-DK'
-  | 'nl'
-  | 'nl-BE'
-  | 'en'
-  | 'en-US'
-  | 'en-AU'
-  | 'en-GB'
-  | 'en-NZ'
-  | 'en-IN'
-  | 'et'
-  | 'fi'
-  | 'fr'
-  | 'fr-CA'
-  | 'de'
-  | 'de-CH'
-  | 'el'
-  | 'hi'
-  | 'hi-Latn'
-  | 'hu'
-  | 'id'
-  | 'it'
-  | 'ja'
-  | 'ko'
-  | 'ko-KR'
-  | 'lv'
-  | 'lt'
-  | 'ms'
-  | 'no'
-  | 'pl'
-  | 'pt'
-  | 'pt-BR'
-  | 'pt-PT'
-  | 'ro'
-  | 'ru'
-  | 'sk'
-  | 'es'
-  | 'es-419'
-  | 'es-LATAM'
-  | 'sv'
-  | 'sv-SE'
-  | 'taq'
-  | 'th'
-  | 'th-TH'
-  | 'tr'
-  | 'uk'
-  | 'vi'
-  | (string & {});
-
-export interface UseDeepgramTextIntelligenceOptions {
-  summarize?: boolean;
-  topics?: boolean;
-  customTopic?: string | string[];
-  customTopicMode?: 'extended' | 'strict';
-  intents?: boolean;
-  customIntent?: string | string[];
-  customIntentMode?: 'extended' | 'strict';
-  sentiment?: boolean;
-  language?: DeepgramTextIntelligenceLanguage;
-  callback?: string;
-  callbackMethod?: 'POST' | 'PUT' | (string & {});
-}
-
-export interface UseDeepgramTextIntelligenceReturn {
-  analyze: (input: DeepgramTextIntelligenceInput) => Promise<void>;
-}
-```
-
-</details>
+| Option             | Type                                         | Purpose                                                                      |
+| ------------------ | -------------------------------------------- | ---------------------------------------------------------------------------- |
+| `summarize`        | `boolean`                                    | Run summarisation on the input.                                              |
+| `topics`           | `boolean`                                    | Detect topics.                                                               |
+| `customTopic`      | `string \| string[]`                        | Supply additional topics to monitor.                                        |
+| `customTopicMode`  | `'extended' \| 'strict'`                    | Interpret custom topics as additive (`extended`) or exact (`strict`).        |
+| `intents`          | `boolean`                                    | Detect intents.                                                              |
+| `customIntent`     | `string \| string[]`                        | Provide custom intents to bias detection.                                   |
+| `customIntentMode` | `'extended' \| 'strict'`                    | Interpret custom intents as additive (`extended`) or exact (`strict`).       |
+| `sentiment`        | `boolean`                                    | Run sentiment analysis.                                                      |
+| `language`         | `DeepgramTextIntelligenceLanguage`          | BCP-47 language hint (defaults to `'en'`).                                   |
+| `callback`         | `string`                                    | Webhook URL invoked after processing completes.                              |
+| `callbackMethod`   | `'POST' \| 'PUT' \| (string & {})`          | HTTP method used for the callback.                                           |
 
 ---
 
-### `useDeepgramManagement`
+## Management API (`useDeepgramManagement`)
 
-<details>
-<summary>Example</summary>
+Receive a fully typed REST client for the Deepgram Management API. No props are required.
 
 ```tsx
 const dg = useDeepgramManagement();
 
-// List all projects linked to the key
 const projects = await dg.projects.list();
-console.log(
-  'Projects:',
-  projects.map((p) => p.name)
-);
+console.log('Projects:', projects.map((p) => p.name));
 ```
 
-</details>
+### Snapshot of available groups
 
-#### Properties
-
-This hook accepts **no props** – simply call it to receive a typed client.
-
-#### Methods (snapshot)
-
-| Group      | Representative methods                                                                                            |
-| ---------- | ----------------------------------------------------------------------------------------------------------------- |
-| `models`   | `list(includeOutdated?)`, `get(modelId)`                                                                          |
-| `projects` | `list()`, `get(id)`, `delete(id)`, `patch(id, body)`, `listModels(id)`, `getModel(projectId, modelId)`            |
-| `keys`     | `list(projectId)`, `create(projectId, body)`, `get(projectId, keyId)`, `delete(projectId, keyId)`                 |
-| `usage`    | `listRequests(projectId)`, `getRequest(projectId, requestId)`, `listFields(projectId)`, `getBreakdown(projectId)` |
-| `balances` | `list(projectId)`, `get(projectId, balanceId)`                                                                    |
+| Group      | Representative methods                                                                |
+| ---------- | -------------------------------------------------------------------------------------- |
+| `models`   | `list(includeOutdated?)`, `get(modelId)`                                               |
+| `projects` | `list()`, `get(id)`, `delete(id)`, `patch(id, body)`, `listModels(id)`                  |
+| `keys`     | `list(projectId)`, `create(projectId, body)`, `get(projectId, keyId)`, `delete(...)`   |
+| `usage`    | `listRequests(projectId)`, `getRequest(projectId, requestId)`, `getBreakdown(projectId)` |
+| `balances` | `list(projectId)`, `get(projectId, balanceId)`                                         |
 
 _(Plus helpers for `members`, `scopes`, `invitations`, and `purchases`.)_
-
-<details>
-<summary>Types</summary>
-
-```ts
-export interface UseDeepgramManagementReturn {
-  models: {
-    list(includeOutdated?: boolean): Promise<DeepgramListModelsResponse>;
-    get(modelId: string): Promise<DeepgramSttModel | DeepgramTtsModel>;
-  };
-  projects: {
-    list(): Promise<DeepgramProject[]>;
-    // …see source for full surface
-  };
-  // …keys, members, scopes, invitations, usage, balances, purchases
-}
-```
-
-</details>
 
 ---
 
@@ -640,6 +478,7 @@ yarn && yarn start   # or expo start
 ## Roadmap
 
 - ✅ Speech-to-Text (WebSocket + REST)
+- ✅ Speech-to-Text v2 / Flux streaming support
 - ✅ Text-to-Speech (HTTP synthesis + WebSocket streaming)
 - ✅ Text Intelligence (summaries, topics, sentiment, intents)
 - ✅ Management API wrapper
@@ -649,7 +488,7 @@ yarn && yarn start   # or expo start
 
 ## Contributing
 
-Issues / PRs welcome—see **CONTRIBUTING.md**.
+Issues and PRs are welcome—see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ---
 

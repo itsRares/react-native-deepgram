@@ -432,7 +432,17 @@ import type {
 
 ```tsx
 const { analyze } = useDeepgramTextIntelligence({
-  options: { summarize: true, topics: true, sentiment: true },
+  options: {
+    summarize: true,
+    topics: true,
+    customTopic: ['Spacewalk', 'Podcast'],
+    customTopicMode: 'extended',
+    intents: true,
+    customIntent: ['Encourage podcasting'],
+    customIntentMode: 'extended',
+    sentiment: true,
+    language: 'en-US',
+  },
   onAnalyzeSuccess: console.log,
 });
 
@@ -450,30 +460,111 @@ await analyze({ text: 'React Native makes mobile easy.' });
 | `onAnalyzeError`   | `(error: Error) => void`             | Called if the analysis request fails              | –       |
 | `options`          | `UseDeepgramTextIntelligenceOptions` | Which NLP tasks to run                            | `{}`    |
 
+##### `UseDeepgramTextIntelligenceOptions`
+
+| Name               | Type                                | Description                                                                                 | Default     |
+| ------------------ | ----------------------------------- | ------------------------------------------------------------------------------------------- | ----------- |
+| `summarize`        | `boolean`                           | Enable summarization                                                                        | `false`     |
+| `topics`           | `boolean`                           | Detect topics within the text                                                               | `false`     |
+| `customTopic`      | `string \| string[]`                | Provide custom topics to bias topic detection (up to 100 entries)                           | –           |
+| `customTopicMode`  | `'extended' \| 'strict'`            | Return only custom topics (`strict`) or include Deepgram-detected topics (`extended`)        | `'extended'` |
+| `intents`          | `boolean`                           | Detect speaker intents                                                                      | `false`     |
+| `customIntent`     | `string \| string[]`                | Provide custom intents to bias intent detection                                             | –           |
+| `customIntentMode` | `'extended' \| 'strict'`            | Return only custom intents (`strict`) or include Deepgram-detected intents (`extended`)      | `'extended'` |
+| `sentiment`        | `boolean`                           | Analyze sentiment throughout the text                                                       | `false`     |
+| `language`         | `DeepgramTextIntelligenceLanguage`  | Hint the primary language with a BCP-47 tag                                                 | `'en'`      |
+| `callback`         | `string`                            | URL to receive Deepgram's webhook when analysis finishes                                    | –           |
+| `callbackMethod`   | `'POST' \| 'PUT' \| (string & {})` | HTTP method Deepgram should use when invoking the `callback` URL                            | `'POST'`    |
+
 #### Methods
 
-| Name      | Signature                                                   | Description                                         |
-| --------- | ----------------------------------------------------------- | --------------------------------------------------- |
-| `analyze` | `(input: { text?: string; url?: string }) => Promise<void>` | Send raw text (or a URL) to Deepgram for processing |
+| Name      | Signature                                                | Description                                         |
+| --------- | -------------------------------------------------------- | --------------------------------------------------- |
+| `analyze` | `(input: DeepgramTextIntelligenceInput) => Promise<void>` | Send raw text (or a URL) to Deepgram for processing |
 
 <details id="usedeepgramtextintelligence-types">
 <summary>Types</summary>
 
 ```ts
+export type DeepgramTextIntelligenceInput =
+  | { text: string; url?: string }
+  | { text?: string; url: string };
+
+export type DeepgramTextIntelligenceLanguage =
+  | 'bg'
+  | 'ca'
+  | 'zh'
+  | 'zh-CN'
+  | 'zh-TW'
+  | 'zh-HK'
+  | 'zh-Hans'
+  | 'zh-Hant'
+  | 'cs'
+  | 'da'
+  | 'da-DK'
+  | 'nl'
+  | 'nl-BE'
+  | 'en'
+  | 'en-US'
+  | 'en-AU'
+  | 'en-GB'
+  | 'en-NZ'
+  | 'en-IN'
+  | 'et'
+  | 'fi'
+  | 'fr'
+  | 'fr-CA'
+  | 'de'
+  | 'de-CH'
+  | 'el'
+  | 'hi'
+  | 'hi-Latn'
+  | 'hu'
+  | 'id'
+  | 'it'
+  | 'ja'
+  | 'ko'
+  | 'ko-KR'
+  | 'lv'
+  | 'lt'
+  | 'ms'
+  | 'no'
+  | 'pl'
+  | 'pt'
+  | 'pt-BR'
+  | 'pt-PT'
+  | 'ro'
+  | 'ru'
+  | 'sk'
+  | 'es'
+  | 'es-419'
+  | 'es-LATAM'
+  | 'sv'
+  | 'sv-SE'
+  | 'taq'
+  | 'th'
+  | 'th-TH'
+  | 'tr'
+  | 'uk'
+  | 'vi'
+  | (string & {});
+
 export interface UseDeepgramTextIntelligenceOptions {
   summarize?: boolean;
   topics?: boolean;
-  intents?: boolean;
-  sentiment?: boolean;
-  language?: string;
   customTopic?: string | string[];
   customTopicMode?: 'extended' | 'strict';
+  intents?: boolean;
+  customIntent?: string | string[];
+  customIntentMode?: 'extended' | 'strict';
+  sentiment?: boolean;
+  language?: DeepgramTextIntelligenceLanguage;
   callback?: string;
-  callbackMethod?: 'POST' | 'PUT' | string;
+  callbackMethod?: 'POST' | 'PUT' | (string & {});
 }
 
 export interface UseDeepgramTextIntelligenceReturn {
-  analyze: (input: { text?: string; url?: string }) => Promise<void>;
+  analyze: (input: DeepgramTextIntelligenceInput) => Promise<void>;
 }
 ```
 

@@ -19,9 +19,13 @@ export default function TextIntelligence() {
     options: {
       summarize: true,
       topics: true,
+      customTopic: ['Spacewalk', 'Podcast'],
+      customTopicMode: 'extended',
       intents: true,
+      customIntent: ['Encourage podcasting'],
+      customIntentMode: 'extended',
       sentiment: true,
-      language: 'en',
+      language: 'en-US',
     },
     onBeforeAnalyze: () => {
       setLoading(true);

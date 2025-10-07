@@ -2,6 +2,7 @@ import { useRef, useCallback, useEffect } from 'react';
 import type {
   UseDeepgramTextIntelligenceProps,
   UseDeepgramTextIntelligenceReturn,
+  DeepgramTextIntelligenceInput,
 } from './types';
 import { DEEPGRAM_BASEURL } from './constants';
 import { buildParams } from './helpers';
@@ -14,29 +15,53 @@ export function useDeepgramTextIntelligence({
 }: UseDeepgramTextIntelligenceProps = {}): UseDeepgramTextIntelligenceReturn {
   const abortCtrl = useRef<AbortController | null>(null);
 
+  const {
+    summarize,
+    topics,
+    customTopic,
+    customTopicMode,
+    intents,
+    customIntent,
+    customIntentMode,
+    sentiment,
+    language,
+    callback,
+    callbackMethod,
+  } = options;
+
   const analyze = useCallback(
-    async (input: { text?: string; url?: string }) => {
+    async (input: DeepgramTextIntelligenceInput) => {
       onBeforeAnalyze();
 
       try {
         const apiKey = (globalThis as any).__DEEPGRAM_API_KEY__;
         if (!apiKey) throw new Error('Deepgram API key missing');
 
+        const { text, url: sourceUrl } = input;
+
+        if (!text && !sourceUrl) {
+          throw new Error(
+            'Either `text` or `url` is required to analyze content.'
+          );
+        }
+
         const paramMap = {
-          summarize: options.summarize,
-          topics: options.topics,
-          intents: options.intents,
-          sentiment: options.sentiment,
-          language: options.language,
-          custom_topic: options.customTopic, // string or string[]
-          custom_topic_mode: options.customTopicMode,
-          callback: options.callback,
-          callback_method: options.callbackMethod,
+          summarize,
+          topics,
+          intents,
+          sentiment,
+          language,
+          custom_topic: customTopic,
+          custom_topic_mode: customTopicMode,
+          custom_intent: customIntent,
+          custom_intent_mode: customIntentMode,
+          callback,
+          callback_method: callbackMethod,
         };
 
         const params = buildParams(paramMap);
 
-        const url = `${DEEPGRAM_BASEURL}/read?${params.toString()}`;
+        const url = `${DEEPGRAM_BASEURL}/read${params ? `?${params}` : ''}`;
         abortCtrl.current?.abort();
         abortCtrl.current = new AbortController();
 
@@ -46,7 +71,10 @@ export function useDeepgramTextIntelligence({
             'Content-Type': 'application/json',
             'Authorization': `Token ${apiKey}`,
           },
-          body: JSON.stringify(input),
+          body: JSON.stringify({
+            ...(text ? { text } : {}),
+            ...(sourceUrl ? { url: sourceUrl } : {}),
+          }),
           signal: abortCtrl.current.signal,
         });
 
@@ -66,15 +94,17 @@ export function useDeepgramTextIntelligence({
       onBeforeAnalyze,
       onAnalyzeSuccess,
       onAnalyzeError,
-      options.customTopic,
-      options.customTopicMode,
-      options.summarize,
-      options.topics,
-      options.intents,
-      options.sentiment,
-      options.language,
-      options.callback,
-      options.callbackMethod,
+      summarize,
+      topics,
+      customTopic,
+      customTopicMode,
+      intents,
+      customIntent,
+      customIntentMode,
+      sentiment,
+      language,
+      callback,
+      callbackMethod,
     ]
   );
 

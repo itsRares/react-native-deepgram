@@ -29,6 +29,7 @@ import type {
 
 const DEFAULT_AGENT_ENDPOINT = 'wss://agent.deepgram.com/v1/agent/converse';
 const DEFAULT_INPUT_SAMPLE_RATE = 24_000;
+const DEFAULT_OUTPUT_SAMPLE_RATE = 24_000;
 const BASE_NATIVE_SAMPLE_RATE = 48_000;
 
 const eventName = Platform.select({
@@ -176,7 +177,12 @@ export function useDeepgramVoiceAgent({
     downsampleFactor ?? computeDownsampleFactor(DEFAULT_INPUT_SAMPLE_RATE)
   );
   const playbackActive = useRef(false);
+  const playbackConfig = useRef<{
+    sampleRate: number;
+    channels: number;
+  } | null>(null);
   const microphoneActive = useRef(false);
+  const suppressMicRef = useRef(false);
   const defaultSettingsRef = useRef(defaultSettings);
   const endpointRef = useRef(endpoint);
 
@@ -202,6 +208,67 @@ export function useDeepgramVoiceAgent({
   const onAgentAudioChunkRef = useRef(onAgentAudioChunk);
   const autoStartMicRef = useRef(autoStartMicrophone);
   const autoPlayAudioRef = useRef(autoPlayAgentAudio);
+
+  const applyOutputSampleRate = useCallback(
+    (sampleRate?: number, channels?: number) => {
+      const normalizedSampleRate =
+        typeof sampleRate === 'number' && Number.isFinite(sampleRate)
+          ? sampleRate
+          : undefined;
+
+      if (!normalizedSampleRate) {
+        return;
+      }
+
+      let normalizedChannels = 1;
+      if (
+        typeof channels === 'number' &&
+        Number.isFinite(channels) &&
+        channels > 0
+      ) {
+        normalizedChannels = channels;
+      }
+
+      playbackConfig.current = {
+        sampleRate: normalizedSampleRate,
+        channels: normalizedChannels,
+      };
+
+      if (!autoPlayAudioRef.current) {
+        return;
+      }
+
+      try {
+        if (typeof Deepgram.setAudioConfig === 'function') {
+          Deepgram.setAudioConfig(normalizedSampleRate, normalizedChannels);
+          playbackActive.current = true;
+          return;
+        }
+
+        if (typeof Deepgram.startPlayer === 'function') {
+          Deepgram.startPlayer(normalizedSampleRate, normalizedChannels);
+          playbackActive.current = true;
+          return;
+        }
+
+        if (
+          !playbackActive.current &&
+          typeof Deepgram.startAudio === 'function'
+        ) {
+          Promise.resolve(Deepgram.startAudio())
+            .then(() => {
+              playbackActive.current = true;
+            })
+            .catch((err) => {
+              onErrorRef.current?.(err);
+            });
+        }
+      } catch (err) {
+        onErrorRef.current?.(err);
+      }
+    },
+    [onErrorRef]
+  );
 
   defaultSettingsRef.current = defaultSettings;
   endpointRef.current = endpoint;
@@ -231,6 +298,33 @@ export function useDeepgramVoiceAgent({
     currentDownsample.current = downsampleFactor;
   }
 
+  useEffect(() => {
+    if (!autoPlayAgentAudio) {
+      if (playbackActive.current) {
+        try {
+          if (typeof Deepgram.stopPlayer === 'function') {
+            Deepgram.stopPlayer();
+          } else if (typeof Deepgram.stopAudio === 'function') {
+            Deepgram.stopAudio().catch((err) => {
+              onErrorRef.current?.(err);
+            });
+          }
+        } catch (err) {
+          onErrorRef.current?.(err);
+        } finally {
+          playbackActive.current = false;
+        }
+      }
+      suppressMicRef.current = false;
+      return;
+    }
+
+    const config = playbackConfig.current;
+    if (config) {
+      applyOutputSampleRate(config.sampleRate, config.channels);
+    }
+  }, [autoPlayAgentAudio, applyOutputSampleRate, onErrorRef]);
+
   const cleanup = useCallback(() => {
     audioSub.current?.remove();
     audioSub.current = null;
@@ -240,10 +334,24 @@ export function useDeepgramVoiceAgent({
       microphoneActive.current = false;
     }
 
+    suppressMicRef.current = false;
+
     if (playbackActive.current) {
-      Deepgram.stopAudio().catch(() => {});
+      try {
+        if (typeof Deepgram.stopPlayer === 'function') {
+          Deepgram.stopPlayer();
+        } else if (typeof Deepgram.stopAudio === 'function') {
+          Deepgram.stopAudio().catch((err) => {
+            onErrorRef.current?.(err);
+          });
+        }
+      } catch (err) {
+        onErrorRef.current?.(err);
+      }
       playbackActive.current = false;
     }
+
+    playbackConfig.current = null;
 
     const socket = ws.current;
     if (socket) {
@@ -261,7 +369,7 @@ export function useDeepgramVoiceAgent({
         // ignore socket close errors
       }
     }
-  }, []);
+  }, [onErrorRef]);
 
   useEffect(() => () => cleanup(), [cleanup]);
 
@@ -269,6 +377,10 @@ export function useDeepgramVoiceAgent({
     (ev: any) => {
       const socket = ws.current;
       if (!socket || socket.readyState !== WebSocket.OPEN) {
+        return;
+      }
+
+      if (suppressMicRef.current) {
         return;
       }
 
@@ -314,17 +426,64 @@ export function useDeepgramVoiceAgent({
   );
 
   const handleAgentAudio = useCallback(
-    (buffer: ArrayBuffer) => {
-      onAgentAudioChunkRef.current?.(buffer);
+    (base64: string, rawBuffer?: ArrayBuffer) => {
+      if (!base64) {
+        return;
+      }
+
+      if (autoPlayAudioRef.current) {
+        suppressMicRef.current = true;
+      }
+
+      let buffer = rawBuffer ?? null;
+
+      if (!buffer) {
+        try {
+          const audio = Buffer.from(base64, 'base64');
+          if (audio.length > 0) {
+            buffer = audio.buffer.slice(
+              audio.byteOffset,
+              audio.byteOffset + audio.length
+            );
+          }
+        } catch (err) {
+          onErrorRef.current?.(err);
+          return;
+        }
+      }
+
+      if (buffer) {
+        onAgentAudioChunkRef.current?.(buffer);
+      }
 
       if (!autoPlayAudioRef.current) {
         return;
       }
 
-      const base64 = Buffer.from(new Uint8Array(buffer)).toString('base64');
-      Deepgram.playAudioChunk(base64).catch((err) => {
+      try {
+        if (typeof Deepgram.feedAudio === 'function') {
+          Deepgram.feedAudio(base64);
+          playbackActive.current = true;
+          return;
+        }
+
+        if (typeof Deepgram.playAudioChunk === 'function') {
+          const result = Deepgram.playAudioChunk(base64);
+          if (result && typeof (result as Promise<void>).then === 'function') {
+            (result as Promise<void>)
+              .then(() => {
+                playbackActive.current = true;
+              })
+              .catch((err) => {
+                onErrorRef.current?.(err);
+              });
+          } else {
+            playbackActive.current = true;
+          }
+        }
+      } catch (err) {
         onErrorRef.current?.(err);
-      });
+      }
     },
     [onAgentAudioChunkRef, onErrorRef]
   );
@@ -366,16 +525,21 @@ export function useDeepgramVoiceAgent({
               }
               break;
             case 'AgentStartedSpeaking':
+              if (autoPlayAudioRef.current) {
+                suppressMicRef.current = true;
+              }
               onAgentStartedSpeakingRef.current?.(
                 message as DeepgramVoiceAgentAgentStartedSpeakingMessage
               );
               break;
             case 'AgentAudioDone':
+              suppressMicRef.current = false;
               onAgentAudioDoneRef.current?.(
                 message as DeepgramVoiceAgentAgentAudioDoneMessage
               );
               break;
             case 'UserStartedSpeaking':
+              suppressMicRef.current = false;
               onUserStartedSpeakingRef.current?.(
                 message as DeepgramVoiceAgentUserStartedSpeakingMessage
               );
@@ -404,6 +568,36 @@ export function useDeepgramVoiceAgent({
                 message as DeepgramVoiceAgentSpeakUpdatedMessage
               );
               break;
+            case 'Audio': {
+              const payload = message as {
+                chunk?: string;
+                sample_rate?: number;
+                channels?: number;
+              };
+
+              if (typeof payload.sample_rate === 'number') {
+                applyOutputSampleRate(payload.sample_rate, payload.channels);
+              }
+
+              if (typeof payload.chunk === 'string' && payload.chunk) {
+                if (autoPlayAudioRef.current) {
+                  suppressMicRef.current = true;
+                }
+                handleAgentAudio(payload.chunk);
+              }
+              break;
+            }
+            case 'AudioConfig': {
+              const sampleRate = Number((message as any)?.sample_rate);
+              const channels = Number((message as any)?.channels);
+              if (Number.isFinite(sampleRate)) {
+                applyOutputSampleRate(
+                  sampleRate,
+                  Number.isFinite(channels) ? channels : undefined
+                );
+              }
+              break;
+            }
             case 'InjectionRefused':
               if (hasKeys(message, ['message'])) {
                 onInjectionRefusedRef.current?.(
@@ -445,14 +639,8 @@ export function useDeepgramVoiceAgent({
           }
         } catch (err) {
           try {
-            const audio = Buffer.from(ev.data, 'base64');
-            if (audio.length > 0) {
-              handleAgentAudio(
-                audio.buffer.slice(
-                  audio.byteOffset,
-                  audio.byteOffset + audio.length
-                )
-              );
+            if (ev.data) {
+              handleAgentAudio(ev.data);
             }
           } catch (error) {
             onErrorRef.current?.(err ?? error);
@@ -463,10 +651,11 @@ export function useDeepgramVoiceAgent({
 
       const buffer = ensureArrayBuffer(ev.data);
       if (buffer) {
-        handleAgentAudio(buffer);
+        const base64 = Buffer.from(new Uint8Array(buffer)).toString('base64');
+        handleAgentAudio(base64, buffer);
       }
     },
-    [handleAgentAudio]
+    [applyOutputSampleRate, handleAgentAudio]
   );
 
   const sendJsonMessage = useCallback(
@@ -545,6 +734,7 @@ export function useDeepgramVoiceAgent({
         }
         await Deepgram.startRecording();
         microphoneActive.current = true;
+        suppressMicRef.current = false;
 
         const emitter = new NativeEventEmitter(NativeModules.Deepgram);
         if (eventName) {
@@ -553,8 +743,16 @@ export function useDeepgramVoiceAgent({
       }
 
       if (autoPlayAudioRef.current) {
-        await Deepgram.startAudio();
-        playbackActive.current = true;
+        const outputSampleRate =
+          overrideSettings?.audio?.output?.sample_rate ??
+          defaultSettingsRef.current?.audio?.output?.sample_rate ??
+          DEFAULT_OUTPUT_SAMPLE_RATE;
+
+        const outputChannels =
+          (overrideSettings?.audio?.output as any)?.channels ??
+          (defaultSettingsRef.current?.audio?.output as any)?.channels;
+
+        applyOutputSampleRate(outputSampleRate, outputChannels);
       }
 
       const mergedSettings: DeepgramVoiceAgentSettingsMessage = {
@@ -592,6 +790,7 @@ export function useDeepgramVoiceAgent({
       };
     },
     [
+      applyOutputSampleRate,
       cleanup,
       downsampleFactor,
       handleMicChunk,

@@ -82,7 +82,7 @@ export default function VoiceAgent() {
   const [tagsInput, setTagsInput] = useState('demo');
   const [autoStartMic, setAutoStartMic] = useState(true);
   const [audioResponsesEnabled, setAudioResponsesEnabled] = useState(true);
-  const [autoPlayAudio, setAutoPlayAudio] = useState(true);
+  const [autoPlayAudio, setAutoPlayAudio] = useState(false);
   const [inputSampleRate, setInputSampleRate] = useState('24000');
   const [outputSampleRate, setOutputSampleRate] = useState('24000');
   const [outputEncoding, setOutputEncoding] = useState('linear16');
@@ -365,6 +365,14 @@ export default function VoiceAgent() {
 
         <View style={styles.settingsCard}>
           <Text style={styles.sectionTitle}>Audio Pipeline</Text>
+
+          <View style={styles.warningBox}>
+            <Text style={styles.warningText}>
+              ⚠️ Audio playback disabled by default to prevent echo. Enable
+              "Auto-play agent audio" to test with audio (may cause echo).
+            </Text>
+          </View>
+
           <View style={styles.switchRow}>
             <Text style={styles.switchLabel}>Auto-start microphone</Text>
             <Switch value={autoStartMic} onValueChange={setAutoStartMic} />
@@ -382,7 +390,9 @@ export default function VoiceAgent() {
             />
           </View>
           <View style={styles.switchRow}>
-            <Text style={styles.switchLabel}>Auto-play agent audio</Text>
+            <Text style={styles.switchLabel}>
+              Auto-play agent audio (⚠️ may echo)
+            </Text>
             <Switch
               value={audioResponsesEnabled && autoPlayAudio}
               onValueChange={setAutoPlayAudio}
@@ -476,7 +486,14 @@ export default function VoiceAgent() {
         {warning && <Text style={styles.warning}>Warning: {warning}</Text>}
         {error && <Text style={styles.error}>Error: {error}</Text>}
 
-        <Text style={styles.sectionTitle}>Conversation</Text>
+        <Text style={styles.sectionTitle}>Conversation (Text Only)</Text>
+        {!autoPlayAudio && (
+          <View style={styles.infoBox}>
+            <Text style={styles.infoText}>
+              💬 Audio playback is disabled. You'll see text responses below.
+            </Text>
+          </View>
+        )}
         <View style={styles.conversation}>
           {conversation.map((entry, index) => (
             <View key={`${entry.role}-${index}`} style={styles.messageRow}>
@@ -556,6 +573,32 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#333',
     marginRight: 12,
+  },
+  warningBox: {
+    backgroundColor: '#fff3cd',
+    borderWidth: 1,
+    borderColor: '#ffc107',
+    borderRadius: 6,
+    padding: 12,
+    marginBottom: 16,
+  },
+  warningText: {
+    fontSize: 13,
+    color: '#856404',
+    lineHeight: 18,
+  },
+  infoBox: {
+    backgroundColor: '#d1ecf1',
+    borderWidth: 1,
+    borderColor: '#bee5eb',
+    borderRadius: 6,
+    padding: 12,
+    marginBottom: 12,
+  },
+  infoText: {
+    fontSize: 13,
+    color: '#0c5460',
+    lineHeight: 18,
   },
   status: {
     marginBottom: 8,

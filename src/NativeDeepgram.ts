@@ -6,6 +6,10 @@ interface DeepgramNative {
   startAudio(): Promise<void>;
   stopAudio(): Promise<void>;
   playAudioChunk(chunk: string): Promise<void>;
+  setAudioConfig?(sampleRate: number, channels?: number): void;
+  feedAudio?(base64Chunk: string): void;
+  stopPlayer?(): void;
+  startPlayer?(sampleRate: number, channels?: number): void;
 }
 
 const LINKING_ERROR = `react-native-deepgram: Native code not linked—did you run “pod install” & rebuild?`;

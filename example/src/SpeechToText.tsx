@@ -59,6 +59,15 @@ export default function SpeechToText() {
         setFileStatus('error');
         setFileError(err instanceof Error ? err.message : String(err));
       },
+      live: {
+        model: 'nova-2',
+        interimResults: true,
+        punctuate: true,
+      },
+      prerecorded: {
+        punctuate: true,
+        summarize: 'v2',
+      },
     });
 
   const pickAndTranscribe = async () => {
@@ -69,11 +78,17 @@ export default function SpeechToText() {
       });
 
       if (result.assets && result.assets.length > 0) {
-        await transcribeFile({
-          uri: result.assets[0].uri,
-          name: result.assets[0].name || 'audio-file',
-          type: result.assets[0].mimeType || 'audio/mpeg',
-        });
+        await transcribeFile(
+          {
+            uri: result.assets[0].uri,
+            name: result.assets[0].name || 'audio-file',
+            type: result.assets[0].mimeType || 'audio/mpeg',
+          },
+          {
+            topics: true,
+            intents: true,
+          }
+        );
       }
     } catch (err) {
       Alert.alert('File picker error', String(err));
@@ -86,7 +101,7 @@ export default function SpeechToText() {
       <View style={styles.buttonRow}>
         <Button
           title="Start Listening"
-          onPress={startListening}
+          onPress={() => startListening({ keywords: ['Deepgram'] })}
           disabled={liveStatus === 'listening'}
         />
         <Button

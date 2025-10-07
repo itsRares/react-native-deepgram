@@ -1,21 +1,31 @@
-export function buildParams(
-  map: Record<string, string | boolean | string[] | undefined | number>
-): string {
+type ParamValue =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | Array<string | number | boolean | null | undefined>;
+
+export function buildParams(map: Record<string, ParamValue>): string {
   const p = new URLSearchParams();
 
   Object.entries(map).forEach(([key, value]) => {
     if (value == null) return; // skip undefined/null
-    if (Array.isArray(value)) {
-      // multiple values
-      value.forEach((v) => p.append(key, v));
-    } else if (typeof value === 'boolean') {
-      if (value) p.append(key, 'true'); // only include true flags
-    } else {
-      if (typeof value === 'number') {
-        p.append(key, String(value)); // convert number to string
+    const append = (v: string | number | boolean) => {
+      if (typeof v === 'boolean') {
+        p.append(key, v ? 'true' : 'false');
       } else {
-        p.append(key, value); // plain string
+        p.append(key, String(v));
       }
+    };
+
+    if (Array.isArray(value)) {
+      value.forEach((v) => {
+        if (v == null) return;
+        append(v);
+      });
+    } else {
+      append(value);
     }
   });
 

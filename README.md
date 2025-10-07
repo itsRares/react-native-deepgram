@@ -86,9 +86,17 @@ configure({ apiKey: 'YOUR_DEEPGRAM_API_KEY' });
 ```tsx
 const { startListening, stopListening } = useDeepgramSpeechToText({
   onTranscript: console.log,
+  live: {
+    model: 'nova-2',
+    interimResults: true,
+    punctuate: true,
+  },
 });
 
-<Button title="Start" onPress={startListening} />
+<Button
+  title="Start"
+  onPress={() => startListening({ keywords: ['Deepgram'] })}
+/>
 <Button title="Stop"  onPress={stopListening} />
 ```
 
@@ -99,12 +107,18 @@ const { startListening, stopListening } = useDeepgramSpeechToText({
 
 ```tsx
 const { transcribeFile } = useDeepgramSpeechToText({
-  onTranscribeSuccess: console.log,
+  onTranscribeSuccess: (text) => console.log(text),
+  prerecorded: {
+    punctuate: true,
+    summarize: 'v2',
+  },
 });
 
 const pickFile = async () => {
   const f = await DocumentPicker.getDocumentAsync({ type: 'audio/*' });
-  if (f.type === 'success') await transcribeFile(f);
+  if (f.type === 'success') {
+    await transcribeFile(f, { topics: true, intents: true });
+  }
 };
 ```
 
@@ -122,25 +136,174 @@ const pickFile = async () => {
 | `onBeforeTranscribe`  | `() => void`                   | Called before file transcription begins             | –       |
 | `onTranscribeSuccess` | `(transcript: string) => void` | Called with the final transcript of the file        | –       |
 | `onTranscribeError`   | `(error: unknown) => void`     | Called if file transcription fails                  | –       |
+| `live`                | `DeepgramLiveListenOptions`    | Default Live transcription params (query string)    | –       |
+| `prerecorded`         | `DeepgramPrerecordedOptions`   | Default options for pre-recorded transcription      | –       |
 
 #### Methods
 
-| Name             | Signature                                                                        | Description                                                   |
-| ---------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| `startListening` | `() => Promise<void>`                                                            | Begin mic capture and stream audio to Deepgram                |
-| `stopListening`  | `() => Promise<void>`                                                            | Stop capture and close WebSocket                              |
-| `transcribeFile` | `(file: Blob \| { uri: string; name?: string; type?: string }) => Promise<void>` | Upload an audio file and receive its transcript via callbacks |
+| Name             | Signature                                                                        | Description                                                                       |
+| ---------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `startListening` | `(options?: DeepgramLiveListenOptions) => Promise<void>`                         | Begin mic capture and stream audio to Deepgram (override defaults with `options`) |
+| `stopListening`  | `() => void`                                                                     | Stop capture and close WebSocket                                                  |
+| `transcribeFile` | `(file: DeepgramPrerecordedSource, options?: DeepgramPrerecordedOptions) => Promise<void>` | Upload a local blob/URI or remote URL and receive its transcript via callbacks |
 
 <details>
 <summary>Types</summary>
 
 ```ts
+export type DeepgramLiveListenRedaction =
+  | 'pci'
+  | 'numbers'
+  | 'dates'
+  | 'names'
+  | 'addresses'
+  | 'all'
+  | (string & {});
+
+export type DeepgramLiveListenOptions = {
+  callback?: string;
+  callbackMethod?: 'POST' | 'GET' | 'PUT' | 'DELETE';
+  channels?: number;
+  diarize?: boolean;
+  dictation?: boolean;
+  encoding?:
+    | 'linear16'
+    | 'linear32'
+    | 'flac'
+    | 'alaw'
+    | 'mulaw'
+    | 'amr-nb'
+    | 'amr-wb'
+    | 'opus'
+    | 'ogg-opus'
+    | 'speex'
+    | 'g729'
+    | (string & {});
+  endpointing?: number | boolean;
+  extra?: Record<string, string | number | boolean>;
+  fillerWords?: boolean;
+  interimResults?: boolean;
+  keyterm?: string | string[];
+  keywords?: string | string[];
+  language?: string;
+  mipOptOut?: boolean;
+  model?:
+    | 'nova-3'
+    | 'nova-3-general'
+    | 'nova-3-medical'
+    | 'nova-2'
+    | 'nova-2-general'
+    | 'nova-2-meeting'
+    | 'nova-2-finance'
+    | 'nova-2-conversationalai'
+    | 'nova-2-voicemail'
+    | 'nova-2-video'
+    | 'nova-2-medical'
+    | 'nova-2-drivethru'
+    | 'nova-2-automotive'
+    | 'nova'
+    | 'nova-general'
+    | 'nova-phonecall'
+    | 'nova-medical'
+    | 'enhanced'
+    | 'enhanced-general'
+    | 'enhanced-meeting'
+    | 'enhanced-phonecall'
+    | 'enhanced-finance'
+    | 'base'
+    | 'meeting'
+    | 'phonecall'
+    | 'finance'
+    | 'conversationalai'
+    | 'voicemail'
+    | 'video'
+    | 'custom'
+    | (string & {});
+  multichannel?: boolean;
+  numerals?: boolean;
+  profanityFilter?: boolean;
+  punctuate?: boolean;
+  redact?: DeepgramLiveListenRedaction | DeepgramLiveListenRedaction[];
+  replace?: string | string[];
+  sampleRate?: number;
+  search?: string | string[];
+  smartFormat?: boolean;
+  tag?: string;
+  utteranceEndMs?: number;
+  vadEvents?: boolean;
+  version?: string;
+};
+
+export type DeepgramPrerecordedCallbackMethod = 'POST' | 'PUT' | (string & {});
+
+export type DeepgramPrerecordedEncoding =
+  | 'linear16'
+  | 'flac'
+  | 'mulaw'
+  | 'amr-nb'
+  | 'amr-wb'
+  | 'opus'
+  | 'speex'
+  | 'g729'
+  | (string & {});
+
+export type DeepgramPrerecordedRedaction =
+  | 'pci'
+  | 'pii'
+  | 'numbers'
+  | (string & {});
+
+export type DeepgramPrerecordedOptions = {
+  callback?: string;
+  callbackMethod?: DeepgramPrerecordedCallbackMethod;
+  extra?: string | string[] | Record<string, string | number | boolean>;
+  sentiment?: boolean;
+  summarize?: boolean | 'v1' | 'v2' | (string & {});
+  tag?: string | string[];
+  topics?: boolean;
+  customTopic?: string | string[];
+  customTopicMode?: 'extended' | 'strict';
+  intents?: boolean;
+  customIntent?: string | string[];
+  customIntentMode?: 'extended' | 'strict';
+  detectEntities?: boolean;
+  detectLanguage?: boolean | string | string[];
+  diarize?: boolean;
+  dictation?: boolean;
+  encoding?: DeepgramPrerecordedEncoding;
+  fillerWords?: boolean;
+  keyterm?: string | string[];
+  keywords?: string | string[];
+  language?: string;
+  measurements?: boolean;
+  model?: DeepgramLiveListenOptions['model'] | (string & {});
+  multichannel?: boolean;
+  numerals?: boolean;
+  paragraphs?: boolean;
+  profanityFilter?: boolean;
+  punctuate?: boolean;
+  redact?: DeepgramPrerecordedRedaction | DeepgramPrerecordedRedaction[];
+  replace?: string | string[];
+  search?: string | string[];
+  smartFormat?: boolean;
+  utterances?: boolean;
+  uttSplit?: number;
+  version?: 'latest' | (string & {});
+};
+
+export type DeepgramPrerecordedSource =
+  | Blob
+  | { uri: string; name?: string; type?: string }
+  | { url: string }
+  | string;
+
 export type UseDeepgramSpeechToTextProps = /* …see above table… */
 export type UseDeepgramSpeechToTextReturn = {
-  startListening: () => void;
+  startListening: (options?: DeepgramLiveListenOptions) => Promise<void>;
   stopListening: () => void;
   transcribeFile: (
-    file: Blob | { uri: string; name?: string; type?: string }
+    file: DeepgramPrerecordedSource,
+    options?: DeepgramPrerecordedOptions
   ) => Promise<void>;
 };
 ```

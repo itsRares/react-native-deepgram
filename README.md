@@ -315,115 +315,110 @@ export type UseDeepgramSpeechToTextReturn = {
 ### `useDeepgramTextToSpeech`
 
 <details>
-<summary>Example – one-shot synthesis</summary>
+<summary>Example – single request (HTTP)</summary>
 
 ```tsx
 const { synthesize } = useDeepgramTextToSpeech({
-  onSynthesizeSuccess: () => console.log('Audio played successfully'),
-  onSynthesizeError: (error) => console.error('TTS error:', error),
+  options: {
+    http: {
+      model: 'aura-2-asteria-en',
+      encoding: 'mp3',
+      bitRate: 48000,
+      container: 'none',
+    },
+  },
+  onSynthesizeSuccess: (buffer) => {
+    // Persist the returned ArrayBuffer or feed it into a custom player
+    console.log('Received bytes', buffer.byteLength);
+  },
 });
 
-<Button
-  title="Speak Text"
-  onPress={() => synthesize('Hello from Deepgram!')}
-/>;
+await synthesize('Hello from Deepgram!');
 ```
 
 </details>
 
 <details>
-<summary>Example – streaming with continuous text</summary>
+<summary>Example – streaming (WebSocket)</summary>
 
 ```tsx
-const { startStreaming, sendText, stopStreaming } = useDeepgramTextToSpeech({
-  onStreamStart: () => console.log('Stream started'),
-  onStreamEnd: () => console.log('Stream ended'),
-  onStreamError: (error) => console.error('Stream error:', error),
+const {
+  startStreaming,
+  sendText,
+  flushStream,
+  clearStream,
+  closeStreamGracefully,
+  stopStreaming,
+} = useDeepgramTextToSpeech({
+  options: {
+    stream: {
+      encoding: 'linear16',
+      sampleRate: 24000,
+      autoFlush: false,
+    },
+  },
+  onAudioChunk: (chunk) => console.log('Audio chunk', chunk.byteLength),
+  onStreamMetadata: (meta) => console.log(meta.model_name),
 });
 
-// Start streaming with initial text
-<Button
-  title="Start Stream"
-  onPress={() => startStreaming('This is the first message.')}
-/>
-
-// Send additional text to the same stream
-<Button
-  title="Send More Text"
-  onPress={() => sendText('And this is a follow-up message.')}
-/>
-
-// Stop the stream
-<Button title="Stop Stream" onPress={stopStreaming} />
+await startStreaming('Booting stream…');
+sendText('Queue another sentence', { sequenceId: 1 });
+flushStream();
+closeStreamGracefully();
 ```
 
 </details>
 
 #### Properties
 
-| Name                  | Type                             | Description                                        | Default |
-| --------------------- | -------------------------------- | -------------------------------------------------- | ------- |
-| `onBeforeSynthesize`  | `() => void`                     | Called before HTTP synthesis begins                | –       |
-| `onSynthesizeSuccess` | `(audio: ArrayBuffer) => void`   | Called when HTTP synthesis completes successfully  | –       |
-| `onSynthesizeError`   | `(error: unknown) => void`       | Called if HTTP synthesis fails                     | –       |
-| `onBeforeStream`      | `() => void`                     | Called before WebSocket stream starts              | –       |
-| `onStreamStart`       | `() => void`                     | Called when WebSocket connection opens             | –       |
-| `onAudioChunk`        | `(chunk: ArrayBuffer) => void`   | Called for each audio chunk received via WebSocket | –       |
-| `onStreamError`       | `(error: unknown) => void`       | Called on WebSocket streaming errors               | –       |
-| `onStreamEnd`         | `() => void`                     | Called when WebSocket stream ends                  | –       |
-| `options`             | `UseDeepgramTextToSpeechOptions` | TTS configuration options                          | `{}`    |
+| Name | Type | Description |
+| --- | --- | --- |
+| `onBeforeSynthesize` | `() => void` | Called before dispatching an HTTP synthesis request. |
+| `onSynthesizeSuccess` | `(audio: ArrayBuffer) => void` | Called with the raw audio bytes when the HTTP request succeeds. |
+| `onSynthesizeError` | `(error: unknown) => void` | Fired if the HTTP request fails. |
+| `onBeforeStream` | `() => void` | Called prior to opening the WebSocket stream. |
+| `onStreamStart` | `() => void` | Fired once the socket is open and the initial text has been queued. |
+| `onAudioChunk` | `(chunk: ArrayBuffer) => void` | Called for each PCM chunk received from the stream. |
+| `onStreamMetadata` | `(metadata: DeepgramTextToSpeechStreamMetadataMessage) => void` | Emits metadata describing the current stream. |
+| `onStreamFlushed` | `(event: DeepgramTextToSpeechStreamFlushedMessage) => void` | Raised when Deepgram confirms a flush. |
+| `onStreamCleared` | `(event: DeepgramTextToSpeechStreamClearedMessage) => void` | Raised when Deepgram confirms a clear operation. |
+| `onStreamWarning` | `(warning: DeepgramTextToSpeechStreamWarningMessage) => void` | Raised when Deepgram emits a warning about the stream. |
+| `onStreamError` | `(error: unknown) => void` | Fired when the WebSocket errors. |
+| `onStreamEnd` | `() => void` | Fired when the stream closes (gracefully or otherwise). |
+| `options` | `UseDeepgramTextToSpeechOptions` | Global/default configuration for HTTP and streaming parameters. |
 
 #### Methods
 
-| Name             | Signature                         | Description                                                |
-| ---------------- | --------------------------------- | ---------------------------------------------------------- |
-| `synthesize`     | `(text: string) => Promise<void>` | Generate and play audio for text using HTTP API (one-shot) |
-| `startStreaming` | `(text: string) => Promise<void>` | Start WebSocket stream and send initial text               |
-| `sendText`       | `(text: string) => boolean`       | Send additional text to active WebSocket stream            |
-| `stopStreaming`  | `() => void`                      | Close WebSocket stream and stop audio playback             |
-
-#### Options
-
-| Name             | Type              | Description                                  | Default              |
-| ---------------- | ----------------- | -------------------------------------------- | -------------------- |
-| `model`          | `string`          | TTS model to use                             | `'aura-2-thalia-en'` |
-| `sampleRate`     | `number`          | Audio sample rate (8000, 16000, 24000, etc.) | `16000`              |
-| `bitRate`        | `number`          | Audio bit rate                               | –                    |
-| `callback`       | `string`          | Webhook URL for completion notifications     | –                    |
-| `callbackMethod` | `'POST' \| 'PUT'` | HTTP method for webhook                      | –                    |
-| `mipOptOut`      | `boolean`         | Opt out of Model Improvement Program         | –                    |
+| Name | Signature | Description |
+| --- | --- | --- |
+| `synthesize` | `(text: string) => Promise<ArrayBuffer>` | Send a single piece of text via REST and resolve with the returned audio bytes. |
+| `startStreaming` | `(text: string) => Promise<void>` | Open the streaming WebSocket and queue the first message. |
+| `sendText` | `(text: string, options?: { flush?: boolean; sequenceId?: number }) => boolean` | Push additional text frames into the active stream. Optionally suppress automatic flushing or supply a sequence id. |
+| `flushStream` | `() => boolean` | Request Deepgram to emit all buffered audio immediately. |
+| `clearStream` | `() => boolean` | Clear the buffered text/audio without closing the socket. |
+| `closeStreamGracefully` | `() => boolean` | Ask Deepgram to finish outstanding audio then close the stream. |
+| `stopStreaming` | `() => void` | Force-close the socket and reset playback. |
 
 <details>
 <summary>Types</summary>
 
 ```ts
-export interface UseDeepgramTextToSpeechOptions {
-  model?: string;
-  sampleRate?: number;
-  bitRate?: number;
-  callback?: string;
-  callbackMethod?: 'POST' | 'PUT' | string;
-  mipOptOut?: boolean;
-}
-
-export interface UseDeepgramTextToSpeechProps {
-  onBeforeSynthesize?: () => void;
-  onSynthesizeSuccess?: (audio: ArrayBuffer) => void;
-  onSynthesizeError?: (error: unknown) => void;
-  onBeforeStream?: () => void;
-  onStreamStart?: () => void;
-  onAudioChunk?: (chunk: ArrayBuffer) => void;
-  onStreamError?: (error: unknown) => void;
-  onStreamEnd?: () => void;
-  options?: UseDeepgramTextToSpeechOptions;
-}
-
-export interface UseDeepgramTextToSpeechReturn {
-  synthesize: (text: string) => Promise<void>;
-  startStreaming: (text: string) => Promise<void>;
-  sendText: (text: string) => boolean;
-  stopStreaming: () => void;
-}
+import type {
+  DeepgramTextToSpeechModel,
+  DeepgramTextToSpeechHttpEncoding,
+  DeepgramTextToSpeechStreamEncoding,
+  DeepgramTextToSpeechSampleRate,
+  DeepgramTextToSpeechCallbackMethod,
+  DeepgramTextToSpeechContainer,
+  DeepgramTextToSpeechBitRate,
+  DeepgramTextToSpeechHttpOptions,
+  DeepgramTextToSpeechStreamOptions,
+  DeepgramTextToSpeechStreamMetadataMessage,
+  DeepgramTextToSpeechStreamFlushedMessage,
+  DeepgramTextToSpeechStreamClearedMessage,
+  DeepgramTextToSpeechStreamWarningMessage,
+  UseDeepgramTextToSpeechOptions,
+} from 'react-native-deepgram';
 ```
 
 </details>

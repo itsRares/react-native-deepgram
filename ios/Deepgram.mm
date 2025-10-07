@@ -10,6 +10,7 @@
 @property (nonatomic, strong) NSMutableData      *audioBuffer;
 @property (nonatomic, assign) BOOL                isPlaying;
 @property (nonatomic, assign) int                 currentSampleRate;
+@property (nonatomic, assign) BOOL                audioSessionConfigured;
 @end
 
 @implementation Deepgram
@@ -25,17 +26,190 @@ RCT_EXPORT_MODULE();
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                           */
 /* ------------------------------------------------------------------ */
+- (instancetype)init
+{
+  if (self = [super init]) {
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self
+           selector:@selector(handleAudioRouteChange:)
+               name:AVAudioSessionRouteChangeNotification
+             object:nil];
+  }
+  return self;
+}
+
+- (void)dealloc
+{
+  [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
 - (void)activateAudioSession
 {
-  AVAudioSession *s = [AVAudioSession sharedInstance];
+  if ([NSThread isMainThread]) {
+    [self configureAudioSessionIfNeeded];
+  } else {
+    dispatch_sync(dispatch_get_main_queue(), ^{
+      [self configureAudioSessionIfNeeded];
+    });
+  }
+}
+
+- (void)configureAudioSessionIfNeeded
+{
+  if (!self.audioSessionConfigured) {
+    [self configureAudioSession];
+  } else {
+    NSError *activeError = nil;
+    [[AVAudioSession sharedInstance]
+        setActive:YES
+        withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation
+              error:&activeError];
+    if (activeError) {
+      NSLog(@"[Deepgram] Failed to keep audio session active: %@",
+            activeError.localizedDescription);
+    }
+  }
+}
+
+- (void)configureAudioSession
+{
+  AVAudioSession *session = [AVAudioSession sharedInstance];
   NSError *error = nil;
-  
-  [s setCategory:AVAudioSessionCategoryPlayAndRecord
-     withOptions:AVAudioSessionCategoryOptionDefaultToSpeaker | 
-                AVAudioSessionCategoryOptionAllowBluetooth
-           error:&error];
-  
-  [s setActive:YES error:&error];
+
+  AVAudioSessionCategoryOptions options =
+      AVAudioSessionCategoryOptionDefaultToSpeaker |
+      AVAudioSessionCategoryOptionAllowBluetooth;
+
+  if (@available(iOS 10.0, *)) {
+    options |= AVAudioSessionCategoryOptionAllowBluetoothA2DP;
+    error = nil;
+    BOOL ok = [session setCategory:AVAudioSessionCategoryPlayAndRecord
+                              mode:AVAudioSessionModeVoiceChat
+                           options:options
+                             error:&error];
+    if (!ok || error) {
+      NSLog(@"[Deepgram] Failed to set audio session category: %@",
+            error.localizedDescription);
+    }
+  } else {
+    BOOL ok = [session setCategory:AVAudioSessionCategoryPlayAndRecord
+                       withOptions:options
+                             error:&error];
+    if (!ok || error) {
+      NSLog(@"[Deepgram] Failed to set audio session category: %@",
+            error.localizedDescription);
+    }
+
+    error = nil;
+    BOOL modeOk = [session setMode:AVAudioSessionModeVoiceChat error:&error];
+    if (!modeOk || error) {
+      NSLog(@"[Deepgram] Failed to set audio session mode: %@",
+            error.localizedDescription);
+    }
+  }
+
+  error = nil;
+  if (![session setPreferredSampleRate:48000 error:&error] && error) {
+    NSLog(@"[Deepgram] Failed to set preferred sample rate: %@",
+          error.localizedDescription);
+  }
+
+  error = nil;
+  if (![session setPreferredIOBufferDuration:0.01 error:&error] && error) {
+    NSLog(@"[Deepgram] Failed to set IO buffer duration: %@",
+          error.localizedDescription);
+  }
+
+  if (@available(iOS 10.0, *)) {
+    error = nil;
+    if (![session setPreferredInputNumberOfChannels:1 error:&error] && error) {
+      NSLog(@"[Deepgram] Failed to set preferred input channels: %@",
+            error.localizedDescription);
+    }
+
+    error = nil;
+    if (![session setPreferredOutputNumberOfChannels:1 error:&error] && error) {
+      NSLog(@"[Deepgram] Failed to set preferred output channels: %@",
+            error.localizedDescription);
+    }
+  }
+
+  [self routeToBuiltInMic:session];
+
+  error = nil;
+  if (![session setActive:YES
+               withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation
+                     error:&error] && error) {
+    NSLog(@"[Deepgram] Failed to activate audio session: %@",
+          error.localizedDescription);
+  }
+
+  error = nil;
+  if (![session overrideOutputAudioPort:AVAudioSessionPortOverrideSpeaker
+                                  error:&error] && error) {
+    NSLog(@"[Deepgram] Failed to force speaker output: %@",
+          error.localizedDescription);
+  }
+
+  self.audioSessionConfigured = YES;
+}
+
+- (void)routeToBuiltInMic:(AVAudioSession *)session
+{
+  if (!session) {
+    return;
+  }
+
+  for (AVAudioSessionPortDescription *input in session.currentRoute.inputs) {
+    NSString *portType = input.portType;
+    BOOL isBluetoothLE = NO;
+    if (@available(iOS 10.0, *)) {
+      isBluetoothLE = [portType isEqualToString:AVAudioSessionPortBluetoothLE];
+    }
+
+    if ([portType isEqualToString:AVAudioSessionPortBluetoothHFP] ||
+        [portType isEqualToString:AVAudioSessionPortHeadsetMic] ||
+        isBluetoothLE) {
+      return;
+    }
+  }
+
+  for (AVAudioSessionPortDescription *port in session.availableInputs) {
+    if ([port.portType isEqualToString:AVAudioSessionPortBuiltInMic]) {
+      NSError *error = nil;
+      if (![session setPreferredInput:port error:&error] && error) {
+        NSLog(@"[Deepgram] Failed to pin built-in mic: %@",
+              error.localizedDescription);
+      }
+
+      if (@available(iOS 10.0, *)) {
+        AVAudioSessionDataSourceDescription *front = nil;
+        for (AVAudioSessionDataSourceDescription *source in port.dataSources) {
+          if ([source.orientation isEqualToString:AVAudioSessionOrientationFront]) {
+            front = source;
+            break;
+          }
+        }
+
+        if (front) {
+          NSError *dataSourceError = nil;
+          if (![port setPreferredDataSource:front error:&dataSourceError] &&
+              dataSourceError) {
+            NSLog(@"[Deepgram] Failed to set mic data source: %@",
+                  dataSourceError.localizedDescription);
+          }
+        }
+      }
+
+      break;
+    }
+  }
+}
+
+- (void)handleAudioRouteChange:(NSNotification *)note
+{
+  self.audioSessionConfigured = NO;
+  [self activateAudioSession];
 }
 
 /* ================================================================== */

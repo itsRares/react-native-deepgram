@@ -40,26 +40,10 @@ const THINK_MODEL_OPTIONS = [
   { label: 'OpenAI gpt-4o-audio-preview', value: 'gpt-4o-audio-preview' },
 ];
 
-const SPEAK_MODEL_OPTIONS = [
-  { label: 'Aura Asteria (en)', value: 'aura-2-asteria-en' },
-  { label: 'Aura Vega (en)', value: 'aura-2-vega-en' },
-  { label: 'Aura Stella (es)', value: 'aura-2-stella-es' },
-];
-
 const SAMPLE_RATE_OPTIONS = [
   { label: '48 kHz', value: '48000' },
   { label: '24 kHz', value: '24000' },
   { label: '16 kHz', value: '16000' },
-];
-
-const ENCODING_OPTIONS = [
-  { label: 'Linear16 PCM', value: 'linear16' },
-  { label: 'Mulaw', value: 'mulaw' },
-];
-
-const CONTAINER_OPTIONS = [
-  { label: 'Raw PCM', value: 'none' },
-  { label: 'WAV', value: 'wav' },
 ];
 
 export default function VoiceAgent() {
@@ -74,19 +58,13 @@ export default function VoiceAgent() {
   const [language, setLanguage] = useState('en');
   const [listenModel, setListenModel] = useState('nova-3');
   const [thinkModel, setThinkModel] = useState('gpt-4o');
-  const [speakModel, setSpeakModel] = useState('aura-2-asteria-en');
   const [greeting, setGreeting] = useState('Hello! How can I help you today?');
   const [prompt, setPrompt] = useState(
     'You are a friendly concierge for a travel agency.'
   );
   const [tagsInput, setTagsInput] = useState('demo');
   const [autoStartMic, setAutoStartMic] = useState(true);
-  const [audioResponsesEnabled, setAudioResponsesEnabled] = useState(true);
-  const [autoPlayAudio, setAutoPlayAudio] = useState(false);
   const [inputSampleRate, setInputSampleRate] = useState('24000');
-  const [outputSampleRate, setOutputSampleRate] = useState('24000');
-  const [outputEncoding, setOutputEncoding] = useState('linear16');
-  const [outputContainer, setOutputContainer] = useState('none');
   const [temperature, setTemperature] = useState('0.7');
   const [customMessage, setCustomMessage] = useState('');
 
@@ -97,9 +75,7 @@ export default function VoiceAgent() {
       .filter(Boolean);
     const resolvedListenModel = listenModel.trim() || 'nova-3';
     const resolvedThinkModel = thinkModel.trim() || 'gpt-4o';
-    const resolvedSpeakModel = speakModel.trim() || 'aura-2-asteria-en';
     const inputRate = Number(inputSampleRate) || 24_000;
-    const outputRate = Number(outputSampleRate) || 24_000;
     const parsedTemperature = parseFloat(temperature);
     const boundedTemperature = Number.isFinite(parsedTemperature)
       ? Math.max(0, Math.min(2, parsedTemperature))
@@ -108,15 +84,6 @@ export default function VoiceAgent() {
     return {
       audio: {
         input: { encoding: 'linear16', sample_rate: inputRate },
-        ...(audioResponsesEnabled
-          ? {
-              output: {
-                encoding: outputEncoding || 'linear16',
-                sample_rate: outputRate,
-                container: outputContainer || 'none',
-              },
-            }
-          : {}),
       },
       agent: {
         language: language.trim() || 'en',
@@ -136,30 +103,15 @@ export default function VoiceAgent() {
           },
           prompt: prompt.trim(),
         },
-        ...(audioResponsesEnabled
-          ? {
-              speak: {
-                provider: {
-                  type: 'deepgram',
-                  model: resolvedSpeakModel,
-                },
-              },
-            }
-          : {}),
       },
       ...(tags.length ? { tags } : {}),
     };
   }, [
-    audioResponsesEnabled,
     greeting,
     inputSampleRate,
     language,
     listenModel,
-    outputContainer,
-    outputEncoding,
-    outputSampleRate,
     prompt,
-    speakModel,
     tagsInput,
     temperature,
     thinkModel,
@@ -181,7 +133,6 @@ export default function VoiceAgent() {
   } = useDeepgramVoiceAgent({
     defaultSettings: agentSettings,
     autoStartMicrophone: autoStartMic,
-    autoPlayAgentAudio: audioResponsesEnabled && autoPlayAudio,
     downsampleFactor,
     onBeforeConnect: () => {
       setStatus('connecting');
@@ -364,40 +315,18 @@ export default function VoiceAgent() {
         </View>
 
         <View style={styles.settingsCard}>
-          <Text style={styles.sectionTitle}>Audio Pipeline</Text>
+          <Text style={styles.sectionTitle}>Capture Settings</Text>
 
-          <View style={styles.warningBox}>
-            <Text style={styles.warningText}>
-              ⚠️ Audio playback disabled by default to prevent echo. Enable
-              "Auto-play agent audio" to test with audio (may cause echo).
+          <View style={styles.infoBox}>
+            <Text style={styles.infoText}>
+              🎧 Agent replies are delivered as text only. Speak into the
+              microphone and read the responses below.
             </Text>
           </View>
 
           <View style={styles.switchRow}>
             <Text style={styles.switchLabel}>Auto-start microphone</Text>
             <Switch value={autoStartMic} onValueChange={setAutoStartMic} />
-          </View>
-          <View style={styles.switchRow}>
-            <Text style={styles.switchLabel}>Enable audio responses</Text>
-            <Switch
-              value={audioResponsesEnabled}
-              onValueChange={(value) => {
-                setAudioResponsesEnabled(value);
-                if (!value) {
-                  setAutoPlayAudio(false);
-                }
-              }}
-            />
-          </View>
-          <View style={styles.switchRow}>
-            <Text style={styles.switchLabel}>
-              Auto-play agent audio (⚠️ may echo)
-            </Text>
-            <Switch
-              value={audioResponsesEnabled && autoPlayAudio}
-              onValueChange={setAutoPlayAudio}
-              disabled={!audioResponsesEnabled}
-            />
           </View>
 
           <OptionSelect
@@ -417,41 +346,6 @@ export default function VoiceAgent() {
             customPlaceholder="e.g. 16000"
             customKeyboardType="number-pad"
           />
-          {audioResponsesEnabled && (
-            <>
-              <OptionSelect
-                label="Voice model"
-                value={speakModel}
-                onChange={setSpeakModel}
-                options={SPEAK_MODEL_OPTIONS}
-                allowCustom
-                customPlaceholder="Voice model id"
-              />
-              <OptionSelect
-                label="Output encoding"
-                value={outputEncoding}
-                onChange={setOutputEncoding}
-                options={ENCODING_OPTIONS}
-                allowCustom
-                customPlaceholder="Encoding name"
-              />
-              <OptionSelect
-                label="Output sample rate"
-                value={outputSampleRate}
-                onChange={setOutputSampleRate}
-                options={SAMPLE_RATE_OPTIONS}
-                allowCustom
-                customPlaceholder="e.g. 24000"
-                customKeyboardType="number-pad"
-              />
-              <OptionSelect
-                label="Output container"
-                value={outputContainer}
-                onChange={setOutputContainer}
-                options={CONTAINER_OPTIONS}
-              />
-            </>
-          )}
         </View>
 
         <View style={styles.settingsCard}>
@@ -487,13 +381,12 @@ export default function VoiceAgent() {
         {error && <Text style={styles.error}>Error: {error}</Text>}
 
         <Text style={styles.sectionTitle}>Conversation (Text Only)</Text>
-        {!autoPlayAudio && (
-          <View style={styles.infoBox}>
-            <Text style={styles.infoText}>
-              💬 Audio playback is disabled. You'll see text responses below.
-            </Text>
-          </View>
-        )}
+        <View style={styles.infoBox}>
+          <Text style={styles.infoText}>
+            💬 The agent responds with text transcripts so playback can't echo
+            back into the microphone.
+          </Text>
+        </View>
         <View style={styles.conversation}>
           {conversation.map((entry, index) => (
             <View key={`${entry.role}-${index}`} style={styles.messageRow}>
@@ -573,19 +466,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#333',
     marginRight: 12,
-  },
-  warningBox: {
-    backgroundColor: '#fff3cd',
-    borderWidth: 1,
-    borderColor: '#ffc107',
-    borderRadius: 6,
-    padding: 12,
-    marginBottom: 16,
-  },
-  warningText: {
-    fontSize: 13,
-    color: '#856404',
-    lineHeight: 18,
   },
   infoBox: {
     backgroundColor: '#d1ecf1',

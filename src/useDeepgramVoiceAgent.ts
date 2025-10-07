@@ -1,5 +1,3 @@
-import { Buffer } from 'buffer';
-if (!globalThis.Buffer) globalThis.Buffer = Buffer;
 import { useRef, useCallback, useEffect } from 'react';
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 import { Deepgram } from './NativeDeepgram';
@@ -7,7 +5,6 @@ import { askMicPermission } from './helpers/askMicPermission';
 import type {
   DeepgramVoiceAgentSettings,
   DeepgramVoiceAgentSettingsMessage,
-  DeepgramVoiceAgentUpdateSpeakMessage,
   DeepgramVoiceAgentFunctionCallResponseMessage,
   DeepgramVoiceAgentClientMessage,
   DeepgramVoiceAgentServerMessage,
@@ -29,7 +26,6 @@ import type {
 
 const DEFAULT_AGENT_ENDPOINT = 'wss://agent.deepgram.com/v1/agent/converse';
 const DEFAULT_INPUT_SAMPLE_RATE = 24_000;
-const DEFAULT_OUTPUT_SAMPLE_RATE = 24_000;
 const BASE_NATIVE_SAMPLE_RATE = 48_000;
 
 const eventName = Platform.select({
@@ -85,7 +81,6 @@ export interface UseDeepgramVoiceAgentProps {
   endpoint?: string;
   defaultSettings?: DeepgramVoiceAgentSettings;
   autoStartMicrophone?: boolean;
-  autoPlayAgentAudio?: boolean;
   downsampleFactor?: number;
   onBeforeConnect?: () => void;
   onConnect?: () => void;
@@ -120,7 +115,6 @@ export interface UseDeepgramVoiceAgentProps {
   ) => void;
   onWarning?: (message: DeepgramVoiceAgentWarningMessage) => void;
   onServerError?: (message: DeepgramVoiceAgentErrorMessage) => void;
-  onAgentAudioChunk?: (chunk: ArrayBuffer) => void;
 }
 
 export interface UseDeepgramVoiceAgentReturn {
@@ -128,9 +122,6 @@ export interface UseDeepgramVoiceAgentReturn {
   disconnect: () => void;
   sendMessage: (message: DeepgramVoiceAgentClientMessage) => boolean;
   sendSettings: (settings: DeepgramVoiceAgentSettings) => boolean;
-  updateSpeak: (
-    speak: DeepgramVoiceAgentUpdateSpeakMessage['speak']
-  ) => boolean;
   injectUserMessage: (content: string) => boolean;
   injectAgentMessage: (message: string) => boolean;
   sendFunctionCallResponse: (
@@ -146,7 +137,6 @@ export function useDeepgramVoiceAgent({
   endpoint = DEFAULT_AGENT_ENDPOINT,
   defaultSettings,
   autoStartMicrophone = true,
-  autoPlayAgentAudio = true,
   downsampleFactor,
   onBeforeConnect,
   onConnect,
@@ -167,7 +157,6 @@ export function useDeepgramVoiceAgent({
   onInjectionRefused,
   onWarning,
   onServerError,
-  onAgentAudioChunk,
 }: UseDeepgramVoiceAgentProps = {}): UseDeepgramVoiceAgentReturn {
   const ws = useRef<WebSocketLike | null>(null);
   const audioSub = useRef<ReturnType<NativeEventEmitter['addListener']> | null>(
@@ -176,13 +165,7 @@ export function useDeepgramVoiceAgent({
   const currentDownsample = useRef(
     downsampleFactor ?? computeDownsampleFactor(DEFAULT_INPUT_SAMPLE_RATE)
   );
-  const playbackActive = useRef(false);
-  const playbackConfig = useRef<{
-    sampleRate: number;
-    channels: number;
-  } | null>(null);
   const microphoneActive = useRef(false);
-  const suppressMicRef = useRef(false);
   const defaultSettingsRef = useRef(defaultSettings);
   const endpointRef = useRef(endpoint);
 
@@ -205,69 +188,85 @@ export function useDeepgramVoiceAgent({
   const onInjectionRefusedRef = useRef(onInjectionRefused);
   const onWarningRef = useRef(onWarning);
   const onServerErrorRef = useRef(onServerError);
-  const onAgentAudioChunkRef = useRef(onAgentAudioChunk);
   const autoStartMicRef = useRef(autoStartMicrophone);
-  const autoPlayAudioRef = useRef(autoPlayAgentAudio);
 
-  const applyOutputSampleRate = useCallback(
-    (sampleRate?: number, channels?: number) => {
-      const normalizedSampleRate =
-        typeof sampleRate === 'number' && Number.isFinite(sampleRate)
-          ? sampleRate
-          : undefined;
-
-      if (!normalizedSampleRate) {
-        return;
+  const sanitizeAudioSettings = useCallback(
+    (audio?: DeepgramVoiceAgentSettings['audio']) => {
+      if (!audio) {
+        return undefined;
       }
 
-      let normalizedChannels = 1;
-      if (
-        typeof channels === 'number' &&
-        Number.isFinite(channels) &&
-        channels > 0
-      ) {
-        normalizedChannels = channels;
+      const sanitized: DeepgramVoiceAgentSettings['audio'] = {};
+
+      if (audio.input) {
+        sanitized.input = { ...audio.input };
       }
 
-      playbackConfig.current = {
-        sampleRate: normalizedSampleRate,
-        channels: normalizedChannels,
-      };
-
-      if (!autoPlayAudioRef.current) {
-        return;
-      }
-
-      try {
-        if (typeof Deepgram.setAudioConfig === 'function') {
-          Deepgram.setAudioConfig(normalizedSampleRate, normalizedChannels);
-          playbackActive.current = true;
+      Object.entries(audio).forEach(([key, value]) => {
+        if (key === 'input' || key === 'output') {
           return;
         }
+        (sanitized as any)[key] = value;
+      });
 
-        if (typeof Deepgram.startPlayer === 'function') {
-          Deepgram.startPlayer(normalizedSampleRate, normalizedChannels);
-          playbackActive.current = true;
-          return;
-        }
-
-        if (
-          !playbackActive.current &&
-          typeof Deepgram.startAudio === 'function'
-        ) {
-          Promise.resolve(Deepgram.startAudio())
-            .then(() => {
-              playbackActive.current = true;
-            })
-            .catch((err) => {
-              onErrorRef.current?.(err);
-            });
-        }
-      } catch (err) {
-        onErrorRef.current?.(err);
-      }
+      return Object.keys(sanitized).length > 0 ? sanitized : undefined;
     },
-    [onErrorRef]
+    []
+  );
+
+  const sanitizeAgentConfig = useCallback(
+    (agent?: DeepgramVoiceAgentSettings['agent']) => {
+      if (!agent) {
+        return undefined;
+      }
+
+      const sanitized: DeepgramVoiceAgentSettings['agent'] = {};
+
+      Object.entries(agent).forEach(([key, value]) => {
+        if (key === 'speak') {
+          return;
+        }
+        (sanitized as any)[key] = value;
+      });
+
+      return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+    },
+    []
+  );
+
+  const sanitizeSettings = useCallback(
+    (
+      settings?: DeepgramVoiceAgentSettings
+    ): DeepgramVoiceAgentSettings | undefined => {
+      if (!settings) {
+        return undefined;
+      }
+
+      const sanitized: DeepgramVoiceAgentSettings = {};
+
+      Object.entries(settings).forEach(([key, value]) => {
+        if (key === 'audio') {
+          const audio = sanitizeAudioSettings(value as any);
+          if (audio) {
+            sanitized.audio = audio;
+          }
+          return;
+        }
+
+        if (key === 'agent') {
+          const agent = sanitizeAgentConfig(value as any);
+          if (agent) {
+            sanitized.agent = agent;
+          }
+          return;
+        }
+
+        (sanitized as any)[key] = value;
+      });
+
+      return sanitized;
+    },
+    [sanitizeAgentConfig, sanitizeAudioSettings]
   );
 
   defaultSettingsRef.current = defaultSettings;
@@ -291,39 +290,10 @@ export function useDeepgramVoiceAgent({
   onInjectionRefusedRef.current = onInjectionRefused;
   onWarningRef.current = onWarning;
   onServerErrorRef.current = onServerError;
-  onAgentAudioChunkRef.current = onAgentAudioChunk;
   autoStartMicRef.current = autoStartMicrophone;
-  autoPlayAudioRef.current = autoPlayAgentAudio;
   if (downsampleFactor != null) {
     currentDownsample.current = downsampleFactor;
   }
-
-  useEffect(() => {
-    if (!autoPlayAgentAudio) {
-      if (playbackActive.current) {
-        try {
-          if (typeof Deepgram.stopPlayer === 'function') {
-            Deepgram.stopPlayer();
-          } else if (typeof Deepgram.stopAudio === 'function') {
-            Deepgram.stopAudio().catch((err) => {
-              onErrorRef.current?.(err);
-            });
-          }
-        } catch (err) {
-          onErrorRef.current?.(err);
-        } finally {
-          playbackActive.current = false;
-        }
-      }
-      suppressMicRef.current = false;
-      return;
-    }
-
-    const config = playbackConfig.current;
-    if (config) {
-      applyOutputSampleRate(config.sampleRate, config.channels);
-    }
-  }, [autoPlayAgentAudio, applyOutputSampleRate, onErrorRef]);
 
   const cleanup = useCallback(() => {
     audioSub.current?.remove();
@@ -333,25 +303,6 @@ export function useDeepgramVoiceAgent({
       Deepgram.stopRecording().catch(() => {});
       microphoneActive.current = false;
     }
-
-    suppressMicRef.current = false;
-
-    if (playbackActive.current) {
-      try {
-        if (typeof Deepgram.stopPlayer === 'function') {
-          Deepgram.stopPlayer();
-        } else if (typeof Deepgram.stopAudio === 'function') {
-          Deepgram.stopAudio().catch((err) => {
-            onErrorRef.current?.(err);
-          });
-        }
-      } catch (err) {
-        onErrorRef.current?.(err);
-      }
-      playbackActive.current = false;
-    }
-
-    playbackConfig.current = null;
 
     const socket = ws.current;
     if (socket) {
@@ -369,7 +320,7 @@ export function useDeepgramVoiceAgent({
         // ignore socket close errors
       }
     }
-  }, [onErrorRef]);
+  }, []);
 
   useEffect(() => () => cleanup(), [cleanup]);
 
@@ -377,10 +328,6 @@ export function useDeepgramVoiceAgent({
     (ev: any) => {
       const socket = ws.current;
       if (!socket || socket.readyState !== WebSocket.OPEN) {
-        return;
-      }
-
-      if (suppressMicRef.current) {
         return;
       }
 
@@ -425,69 +372,6 @@ export function useDeepgramVoiceAgent({
     [onErrorRef]
   );
 
-  const handleAgentAudio = useCallback(
-    (base64: string, rawBuffer?: ArrayBuffer) => {
-      if (!base64) {
-        return;
-      }
-
-      if (autoPlayAudioRef.current) {
-        suppressMicRef.current = true;
-      }
-
-      let buffer = rawBuffer ?? null;
-
-      if (!buffer) {
-        try {
-          const audio = Buffer.from(base64, 'base64');
-          if (audio.length > 0) {
-            buffer = audio.buffer.slice(
-              audio.byteOffset,
-              audio.byteOffset + audio.length
-            );
-          }
-        } catch (err) {
-          onErrorRef.current?.(err);
-          return;
-        }
-      }
-
-      if (buffer) {
-        onAgentAudioChunkRef.current?.(buffer);
-      }
-
-      if (!autoPlayAudioRef.current) {
-        return;
-      }
-
-      try {
-        if (typeof Deepgram.feedAudio === 'function') {
-          Deepgram.feedAudio(base64);
-          playbackActive.current = true;
-          return;
-        }
-
-        if (typeof Deepgram.playAudioChunk === 'function') {
-          const result = Deepgram.playAudioChunk(base64);
-          if (result && typeof (result as Promise<void>).then === 'function') {
-            (result as Promise<void>)
-              .then(() => {
-                playbackActive.current = true;
-              })
-              .catch((err) => {
-                onErrorRef.current?.(err);
-              });
-          } else {
-            playbackActive.current = true;
-          }
-        }
-      } catch (err) {
-        onErrorRef.current?.(err);
-      }
-    },
-    [onAgentAudioChunkRef, onErrorRef]
-  );
-
   const handleSocketMessage = useCallback(
     (ev: any) => {
       if (typeof ev.data === 'string') {
@@ -525,21 +409,16 @@ export function useDeepgramVoiceAgent({
               }
               break;
             case 'AgentStartedSpeaking':
-              if (autoPlayAudioRef.current) {
-                suppressMicRef.current = true;
-              }
               onAgentStartedSpeakingRef.current?.(
                 message as DeepgramVoiceAgentAgentStartedSpeakingMessage
               );
               break;
             case 'AgentAudioDone':
-              suppressMicRef.current = false;
               onAgentAudioDoneRef.current?.(
                 message as DeepgramVoiceAgentAgentAudioDoneMessage
               );
               break;
             case 'UserStartedSpeaking':
-              suppressMicRef.current = false;
               onUserStartedSpeakingRef.current?.(
                 message as DeepgramVoiceAgentUserStartedSpeakingMessage
               );
@@ -568,36 +447,10 @@ export function useDeepgramVoiceAgent({
                 message as DeepgramVoiceAgentSpeakUpdatedMessage
               );
               break;
-            case 'Audio': {
-              const payload = message as {
-                chunk?: string;
-                sample_rate?: number;
-                channels?: number;
-              };
-
-              if (typeof payload.sample_rate === 'number') {
-                applyOutputSampleRate(payload.sample_rate, payload.channels);
-              }
-
-              if (typeof payload.chunk === 'string' && payload.chunk) {
-                if (autoPlayAudioRef.current) {
-                  suppressMicRef.current = true;
-                }
-                handleAgentAudio(payload.chunk);
-              }
+            case 'Audio':
+            case 'AudioConfig':
+              // Audio responses are ignored in text-only mode.
               break;
-            }
-            case 'AudioConfig': {
-              const sampleRate = Number((message as any)?.sample_rate);
-              const channels = Number((message as any)?.channels);
-              if (Number.isFinite(sampleRate)) {
-                applyOutputSampleRate(
-                  sampleRate,
-                  Number.isFinite(channels) ? channels : undefined
-                );
-              }
-              break;
-            }
             case 'InjectionRefused':
               if (hasKeys(message, ['message'])) {
                 onInjectionRefusedRef.current?.(
@@ -638,24 +491,33 @@ export function useDeepgramVoiceAgent({
               break;
           }
         } catch (err) {
-          try {
-            if (ev.data) {
-              handleAgentAudio(ev.data);
-            }
-          } catch (error) {
-            onErrorRef.current?.(err ?? error);
-          }
+          onErrorRef.current?.(err);
         }
         return;
       }
 
       const buffer = ensureArrayBuffer(ev.data);
       if (buffer) {
-        const base64 = Buffer.from(new Uint8Array(buffer)).toString('base64');
-        handleAgentAudio(base64, buffer);
+        // Binary audio responses are ignored in text-only mode.
       }
     },
-    [applyOutputSampleRate, handleAgentAudio]
+    [
+      onAgentAudioDoneRef,
+      onAgentStartedSpeakingRef,
+      onAgentThinkingRef,
+      onConversationTextRef,
+      onErrorRef,
+      onFunctionCallRequestRef,
+      onFunctionCallResponseRef,
+      onInjectionRefusedRef,
+      onMessageRef,
+      onPromptUpdatedRef,
+      onServerErrorRef,
+      onSettingsAppliedRef,
+      onSpeakUpdatedRef,
+      onUserStartedSpeakingRef,
+      onWarningRef,
+    ]
   );
 
   const sendJsonMessage = useCallback(
@@ -734,7 +596,6 @@ export function useDeepgramVoiceAgent({
         }
         await Deepgram.startRecording();
         microphoneActive.current = true;
-        suppressMicRef.current = false;
 
         const emitter = new NativeEventEmitter(NativeModules.Deepgram);
         if (eventName) {
@@ -742,23 +603,13 @@ export function useDeepgramVoiceAgent({
         }
       }
 
-      if (autoPlayAudioRef.current) {
-        const outputSampleRate =
-          overrideSettings?.audio?.output?.sample_rate ??
-          defaultSettingsRef.current?.audio?.output?.sample_rate ??
-          DEFAULT_OUTPUT_SAMPLE_RATE;
-
-        const outputChannels =
-          (overrideSettings?.audio?.output as any)?.channels ??
-          (defaultSettingsRef.current?.audio?.output as any)?.channels;
-
-        applyOutputSampleRate(outputSampleRate, outputChannels);
-      }
+      const sanitizedDefault = sanitizeSettings(defaultSettingsRef.current);
+      const sanitizedOverride = sanitizeSettings(overrideSettings);
 
       const mergedSettings: DeepgramVoiceAgentSettingsMessage = {
         type: 'Settings',
-        ...(defaultSettingsRef.current ?? {}),
-        ...(overrideSettings ?? {}),
+        ...(sanitizedDefault ?? {}),
+        ...(sanitizedOverride ?? {}),
       };
 
       const targetSampleRate =
@@ -790,11 +641,11 @@ export function useDeepgramVoiceAgent({
       };
     },
     [
-      applyOutputSampleRate,
       cleanup,
       downsampleFactor,
       handleMicChunk,
       handleSocketMessage,
+      sanitizeSettings,
       sendJsonMessage,
     ]
   );
@@ -804,15 +655,11 @@ export function useDeepgramVoiceAgent({
   }, [cleanup]);
 
   const sendSettings = useCallback(
-    (settings: DeepgramVoiceAgentSettings) =>
-      sendJsonMessage({ type: 'Settings', ...settings }),
-    [sendJsonMessage]
-  );
-
-  const updateSpeak = useCallback(
-    (speak: DeepgramVoiceAgentUpdateSpeakMessage['speak']) =>
-      sendJsonMessage({ type: 'UpdateSpeak', speak }),
-    [sendJsonMessage]
+    (settings: DeepgramVoiceAgentSettings) => {
+      const sanitized = sanitizeSettings(settings);
+      return sendJsonMessage({ type: 'Settings', ...(sanitized ?? {}) });
+    },
+    [sanitizeSettings, sendJsonMessage]
   );
 
   const injectUserMessage = useCallback(
@@ -861,7 +708,6 @@ export function useDeepgramVoiceAgent({
     disconnect,
     sendMessage,
     sendSettings,
-    updateSpeak,
     injectUserMessage,
     injectAgentMessage,
     sendFunctionCallResponse,

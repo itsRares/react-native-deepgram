@@ -5,6 +5,9 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.AutomaticGainControl
+import android.media.audiofx.NoiseSuppressor
 import android.util.Base64
 import android.util.Log
 import com.facebook.react.bridge.Promise
@@ -40,6 +43,9 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
   private var audioRecord: AudioRecord? = null
   private var recordingThread: Thread? = null
   private var isRecording = false
+  private var acousticEchoCanceler: AcousticEchoCanceler? = null
+  private var noiseSuppressor: NoiseSuppressor? = null
+  private var automaticGainControl: AutomaticGainControl? = null
 
   // Enhanced TTS Playback Properties
   private var audioTrack: AudioTrack? = null
@@ -71,18 +77,27 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
         bufferSize
       )
 
-      if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+      val recorder = audioRecord
+
+      if (recorder?.state != AudioRecord.STATE_INITIALIZED) {
+        recorder?.release()
+        audioRecord = null
+        releaseAudioEffects()
         promise.reject("init_failed", "AudioRecord initialization failed")
         return
       }
 
-      audioRecord?.startRecording()
+      enableAudioEffects(recorder)
+      recorder.startRecording()
       isRecording = true
 
       startRecordingThread()
       promise.resolve(null)
     } catch (e: Exception) {
       Log.e(TAG, "startRecording error", e)
+      audioRecord?.release()
+      audioRecord = null
+      releaseAudioEffects()
       promise.reject("start_error", e)
     }
   }
@@ -96,10 +111,76 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
       audioRecord?.stop()
       audioRecord?.release()
       audioRecord = null
+      releaseAudioEffects()
       promise.resolve(null)
     } catch (e: Exception) {
       Log.e(TAG, "stopRecording error", e)
       promise.reject("stop_error", e)
+    }
+  }
+
+  private fun enableAudioEffects(recorder: AudioRecord) {
+    val sessionId = recorder.audioSessionId
+    if (sessionId == AudioRecord.ERROR || sessionId == AudioRecord.ERROR_BAD_VALUE) {
+      return
+    }
+
+    releaseAudioEffects()
+
+    if (AcousticEchoCanceler.isAvailable()) {
+      try {
+        acousticEchoCanceler = AcousticEchoCanceler.create(sessionId)?.apply {
+          enabled = true
+        }
+      } catch (e: Exception) {
+        Log.w(TAG, "Unable to enable AcousticEchoCanceler", e)
+      }
+    }
+
+    if (NoiseSuppressor.isAvailable()) {
+      try {
+        noiseSuppressor = NoiseSuppressor.create(sessionId)?.apply {
+          enabled = true
+        }
+      } catch (e: Exception) {
+        Log.w(TAG, "Unable to enable NoiseSuppressor", e)
+      }
+    }
+
+    if (AutomaticGainControl.isAvailable()) {
+      try {
+        automaticGainControl = AutomaticGainControl.create(sessionId)?.apply {
+          enabled = true
+        }
+      } catch (e: Exception) {
+        Log.w(TAG, "Unable to enable AutomaticGainControl", e)
+      }
+    }
+  }
+
+  private fun releaseAudioEffects() {
+    try {
+      acousticEchoCanceler?.release()
+    } catch (e: Exception) {
+      Log.w(TAG, "Error releasing AcousticEchoCanceler", e)
+    } finally {
+      acousticEchoCanceler = null
+    }
+
+    try {
+      noiseSuppressor?.release()
+    } catch (e: Exception) {
+      Log.w(TAG, "Error releasing NoiseSuppressor", e)
+    } finally {
+      noiseSuppressor = null
+    }
+
+    try {
+      automaticGainControl?.release()
+    } catch (e: Exception) {
+      Log.w(TAG, "Error releasing AutomaticGainControl", e)
+    } finally {
+      automaticGainControl = null
     }
   }
 

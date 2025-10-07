@@ -183,7 +183,7 @@ return (
 );
 ```
 
-> 🎧 By default the hook requests mic permissions, streams PCM to Deepgram, and plays the agent's PCM responses through the native playback engine. Disable either behaviour with `autoStartMicrophone` or `autoPlayAgentAudio`.
+> 💬 The hook requests mic permissions, streams PCM to Deepgram, and surfaces the agent's replies as text so nothing plays back into the microphone.
 
 ### API reference (Voice Agent)
 
@@ -194,7 +194,6 @@ return (
 | `endpoint` | `string` | WebSocket endpoint used for the agent conversation (defaults to `wss://agent.deepgram.com/v1/agent/converse`). |
 | `defaultSettings` | `DeepgramVoiceAgentSettings` | Base `Settings` payload sent on connect; merge per-call overrides via `connect(override)`. |
 | `autoStartMicrophone` | `boolean` | Automatically requests mic access and starts streaming PCM when `true` (default). |
-| `autoPlayAgentAudio` | `boolean` | Auto-plays streamed PCM responses through the native audio engine when `true` (default). |
 | `downsampleFactor` | `number` | Manually override the downsample ratio applied to captured audio (defaults to a heuristic based on the requested sample rate). |
 
 #### Callbacks
@@ -216,21 +215,19 @@ return (
 | `onFunctionCallRequest` | `(message: DeepgramVoiceAgentFunctionCallRequestMessage) => void` | The agent asks the client to execute a tool marked `client_side: true`. |
 | `onFunctionCallResponse` | `(message: DeepgramVoiceAgentReceiveFunctionCallResponseMessage) => void` | The server shares the outcome of a non-client-side function call. |
 | `onPromptUpdated` | `(message: DeepgramVoiceAgentPromptUpdatedMessage) => void` | The active prompt is updated (e.g., after `updatePrompt`). |
-| `onSpeakUpdated` | `(message: DeepgramVoiceAgentSpeakUpdatedMessage) => void` | The active speak configuration changes (e.g., after `updateSpeak`). |
+| `onSpeakUpdated` | `(message: DeepgramVoiceAgentSpeakUpdatedMessage) => void` | The active speak configuration changes (sent by the server). |
 | `onInjectionRefused` | `(message: DeepgramVoiceAgentInjectionRefusedMessage) => void` | An inject request is rejected (typically while the agent is speaking). |
 | `onWarning` | `(message: DeepgramVoiceAgentWarningMessage) => void` | The API surfaces a non-fatal warning (e.g., degraded audio quality). |
 | `onServerError` | `(message: DeepgramVoiceAgentErrorMessage) => void` | The API reports a structured error payload (`description` + `code`). |
-| `onAgentAudioChunk` | `(chunk: ArrayBuffer) => void` | Raw PCM audio is received before optional auto-playback. |
 
 #### Returned methods
 
 | Method | Signature | Description |
 | ------ | --------- | ----------- |
-| `connect` | `(settings?: DeepgramVoiceAgentSettings) => Promise<void>` | Opens the socket, optionally merges additional settings, and starts audio pipelines. |
-| `disconnect` | `() => void` | Tears down the socket, stops recording/playback, and removes listeners. |
+| `connect` | `(settings?: DeepgramVoiceAgentSettings) => Promise<void>` | Opens the socket, optionally merges additional settings, and begins microphone streaming. |
+| `disconnect` | `() => void` | Tears down the socket, stops recording, and removes listeners. |
 | `sendMessage` | `(message: DeepgramVoiceAgentClientMessage) => boolean` | Sends a pre-built client envelope (handy for custom message types). |
 | `sendSettings` | `(settings: DeepgramVoiceAgentSettings) => boolean` | Sends a `Settings` message mid-session (merged with the `type` field). |
-| `updateSpeak` | `(speak: DeepgramVoiceAgentUpdateSpeakMessage['speak']) => boolean` | Updates TTS configuration without re-opening the session. |
 | `injectUserMessage` | `(content: string) => boolean` | Injects a user-side text message. |
 | `injectAgentMessage` | `(message: string) => boolean` | Injects an assistant-side text message. |
 | `sendFunctionCallResponse` | `(response: Omit<DeepgramVoiceAgentFunctionCallResponseMessage, 'type'>) => boolean` | Returns tool results for client-side function calls. |

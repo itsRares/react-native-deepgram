@@ -1,16 +1,37 @@
+const { getDefaultConfig } = require('expo/metro-config');
 const path = require('path');
-const { getDefaultConfig } = require('@react-native/metro-config');
-const { withMetroConfig } = require('react-native-monorepo-config');
 
-const root = path.resolve(__dirname, '..');
+const projectRoot = __dirname;
+const workspaceRoot = path.resolve(__dirname, '..');
 
-/**
- * Metro configuration
- * https://facebook.github.io/metro/docs/configuration
- *
- * @type {import('metro-config').MetroConfig}
- */
-module.exports = withMetroConfig(getDefaultConfig(__dirname), {
-  root,
-  dirname: __dirname,
-});
+module.exports = (() => {
+  const config = getDefaultConfig(projectRoot);
+
+  // Let Metro watch files outside the app (monorepo)
+  config.watchFolders = [workspaceRoot];
+
+  // Force Metro to resolve some singletons from the app (avoid duplicate React)
+  const forceFromApp = (name) => path.join(projectRoot, 'node_modules', name);
+  const singletons = ['react', 'react-native'];
+
+  config.resolver = {
+    ...config.resolver,
+    unstable_enableSymlinks: true,
+    nodeModulesPaths: [
+      path.join(projectRoot, 'node_modules'),
+      path.join(workspaceRoot, 'node_modules'),
+    ],
+    extraNodeModules: {
+      ...(config.resolver?.extraNodeModules || {}),
+      'react-native-deepgram': path.join(workspaceRoot, 'lib', 'module'),
+      ...Object.fromEntries(singletons.map((m) => [m, forceFromApp(m)])),
+    },
+    // Explicitly block resolution from workspace root
+    blockList: [
+      new RegExp(`${workspaceRoot}/node_modules/react/.*`),
+      new RegExp(`${workspaceRoot}/node_modules/react-native/.*`),
+    ],
+  };
+
+  return config;
+})();

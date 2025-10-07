@@ -91,6 +91,38 @@ RCT_EXPORT_METHOD(stopRecording
   }
 }
 
+RCT_EXPORT_METHOD(startAudio
+                  :(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+{
+  @try {
+    [self activateAudioSession];
+    if (!self.audioBuffer) {
+      self.audioBuffer = [[NSMutableData alloc] init];
+    }
+    if (self.currentSampleRate <= 0) {
+      self.currentSampleRate = 16000;
+    }
+    if (resolve) resolve(nil);
+  }
+  @catch (NSException *e) {
+    if (reject) reject(@"audio_start_error", e.reason, nil);
+  }
+}
+
+RCT_EXPORT_METHOD(stopAudio
+                  :(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+{
+  @try {
+    [self stopPlayer:nil rejecter:nil];
+    if (resolve) resolve(nil);
+  }
+  @catch (NSException *e) {
+    if (reject) reject(@"audio_stop_error", e.reason, nil);
+  }
+}
+
 /* ================================================================== */
 /*  2.  SIMPLE AUDIO PLAYBACK (USING AVAUDIOPLAYER)                   */
 /* ================================================================== */

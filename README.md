@@ -632,11 +632,33 @@ _(Plus helpers for `members`, `scopes`, `invitations`, and `purchases`.)_
 
 ## Example app
 
+The repository includes an Expo-managed playground under `example/` that wires up every hook in this package.
+
+### 1. Install workspace dependencies
+
 ```bash
 git clone https://github.com/itsRares/react-native-deepgram
-cd react-native-deepgram/example
-yarn && yarn start   # or expo start
+cd react-native-deepgram
+yarn install
 ```
+
+### 2. Configure your Deepgram key
+
+Create `example/.env` with an Expo public key so the app can authenticate:
+
+```bash
+echo "EXPO_PUBLIC_DEEPGRAM_API_KEY=your_deepgram_key" > example/.env
+```
+
+You can generate API keys from the [Deepgram Console](https://console.deepgram.com/). For management endpoints, ensure the key carries the right scopes.
+
+### 3. Run or build the example
+
+- `yarn example` – start Expo bundler in development mode (web preview + QR code)
+- `yarn example:ios` – compile and launch the iOS app with `expo run:ios`
+- `yarn example:android` – compile and launch the Android app with `expo run:android`
+
+If you prefer using bare Expo commands, `cd example` and run `yarn start`, `yarn ios`, or `yarn android`.
 
 ---
 

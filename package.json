@@ -2,17 +2,30 @@
   "name": "react-native-deepgram",
   "version": "1.0.3",
   "description": "React Native SDK for Deepgram's AI-powered speech-to-text, real-time transcription, and text intelligence APIs. Supports live audio streaming, file transcription, sentiment analysis, and topic detection for iOS and Android.",
-  "main": "lib/commonjs/index.js",
-  "module": "lib/module/index.js",
-  "react-native": "src/index.ts",
-  "types": "lib/typescript/src/index.d.ts",
+  "source": "./src/index.tsx",
+  "main": "./lib/commonjs/index.js",
+  "module": "./lib/module/index.js",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./lib/typescript/module/src/index.d.ts",
+        "default": "./lib/module/index.js"
+      },
+      "require": {
+        "types": "./lib/typescript/commonjs/src/index.d.ts",
+        "default": "./lib/commonjs/index.js"
+      }
+    },
+    "./app.plugin.js": "./app.plugin.js"
+  },
   "files": [
     "src",
     "lib",
+    "plugin",
+    "app.plugin.js",
     "android",
     "ios",
     "cpp",
-    "/plugin/",
     "*.podspec",
     "react-native.config.js",
     "!ios/build",
@@ -25,17 +38,20 @@
     "!**/__fixtures__",
     "!**/__mocks__",
     "!**/.*",
-    "/app.plugin.js"
+    "metro"
   ],
   "scripts": {
-    "example": "yarn workspace react-native-deepgram-example ios",
     "test": "jest",
     "typecheck": "tsc",
     "lint": "eslint \"**/*.{js,ts,tsx}\"",
     "clean": "del-cli android/build example/android/build example/android/app/build example/ios/build lib",
     "prepare": "bob build",
     "release": "release-it --only-version",
-    "build:plugin": "npx tsc --build plugin"
+    "build": "npx react-native-builder-bob build",
+    "build:plugin": "npx tsc --build plugin",
+    "example": "yarn workspace react-native-deepgram-example start",
+    "example:ios": "yarn workspace react-native-deepgram-example ios",
+    "example:android": "yarn workspace react-native-deepgram-example android"
   },
   "keywords": [
     "react-native",
@@ -91,6 +107,7 @@
     "del-cli": "^5.1.0",
     "eslint": "^9.22.0",
     "eslint-config-prettier": "^10.1.1",
+    "eslint-plugin-ft-flow": "^3.0.11",
     "eslint-plugin-jest": "^29.0.1",
     "eslint-plugin-prettier": "^5.2.3",
     "eslint-plugin-react-native": "^5.0.0",
@@ -98,8 +115,8 @@
     "jest": "^29.7.0",
     "prettier": "^3.0.3",
     "react": "19.0.0",
-    "react-native": "0.79.2",
-    "react-native-builder-bob": "^0.40.12",
+    "react-native": "0.76.6",
+    "react-native-builder-bob": "^0.35.2",
     "release-it": "^17.10.0",
     "turbo": "^1.10.7",
     "typescript": "^5.5.4"
@@ -109,7 +126,6 @@
     "react-native": "*"
   },
   "workspaces": [
-    ".",
     "example"
   ],
   "packageManager": "yarn@3.6.1",
@@ -155,17 +171,38 @@
     "source": "src",
     "output": "lib",
     "targets": [
-      "commonjs",
-      "module",
-      "typescript"
+      "codegen",
+      [
+        "commonjs",
+        {
+          "esm": true
+        }
+      ],
+      [
+        "module",
+        {
+          "esm": true
+        }
+      ],
+      [
+        "typescript",
+        {
+          "project": "tsconfig.build.json",
+          "esm": true
+        }
+      ]
     ]
   },
   "codegenConfig": {
     "name": "DeepgramSpec",
     "type": "modules",
     "jsSrcsDir": "src",
+    "outputDir": {
+      "ios": "ios/generated",
+      "android": "android/generated"
+    },
     "android": {
-      "javaPackageName": "com.deepgram"
+      "javaPackageName": "com.ahhzo.react-native-deepgram"
     }
   },
   "create-react-native-library": {
@@ -174,5 +211,15 @@
     "languages": "kotlin-objc",
     "type": "turbo-module",
     "version": "0.51.1"
+  },
+  "resolutions": {
+    "metro": "0.81.5",
+    "metro-config": "0.81.5",
+    "metro-resolver": "0.81.5",
+    "metro-core": "0.81.5",
+    "metro-runtime": "0.81.5",
+    "metro-source-map": "0.81.5",
+    "metro-symbolicate": "0.81.5",
+    "metro-transform-worker": "0.81.5"
   }
 }

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   View,
   Button,
@@ -19,6 +19,87 @@ import {
   type DeepgramTextToSpeechContainer,
   type DeepgramTextToSpeechBitRate,
 } from 'react-native-deepgram';
+
+import OptionSelect, { type Option } from './components/OptionSelect';
+
+const POPULAR_TTS_MODELS = [
+  'aura-2-asteria-en',
+  'aura-2-athena-en',
+  'aura-2-luna-en',
+  'aura-2-orion-en',
+  'aura-2-zeus-en',
+  'aura-2-apollo-en',
+  'aura-2-electra-en',
+  'aura-2-celeste-es',
+  'aura-2-diana-es',
+  'aura-2-javier-es',
+];
+
+const HTTP_ENCODING_OPTIONS: Option[] = [
+  { label: 'Linear PCM (linear16)', value: 'linear16' },
+  { label: 'FLAC', value: 'flac' },
+  { label: 'μ-law (mulaw)', value: 'mulaw' },
+  { label: 'A-law (alaw)', value: 'alaw' },
+  { label: 'MP3', value: 'mp3' },
+  { label: 'Opus', value: 'opus' },
+  { label: 'AAC', value: 'aac' },
+];
+
+const STREAM_ENCODING_OPTIONS: Option[] = [
+  { label: 'Linear PCM (linear16)', value: 'linear16' },
+  { label: 'μ-law (mulaw)', value: 'mulaw' },
+  { label: 'A-law (alaw)', value: 'alaw' },
+];
+
+const SAMPLE_RATE_OPTIONS: Option[] = [
+  '8000',
+  '16000',
+  '22050',
+  '24000',
+  '32000',
+  '44100',
+  '48000',
+].map((value) => ({ label: `${value} Hz`, value }));
+
+const CONTAINER_OPTIONS: Option[] = [
+  { label: 'None', value: 'none' },
+  { label: 'WAV', value: 'wav' },
+  { label: 'OGG', value: 'ogg' },
+];
+
+const BITRATE_OPTIONS: Option[] = [
+  { label: '32 kbps', value: '32000' },
+  { label: '48 kbps', value: '48000' },
+];
+
+const CALLBACK_METHOD_OPTIONS: Option[] = [
+  { label: 'POST', value: 'POST' },
+  { label: 'PUT', value: 'PUT' },
+];
+
+const formatModelLabel = (model: string) => {
+  const segments = model.split('-');
+  if (segments.length < 2) return model;
+  const language = segments.pop() ?? '';
+  const readable = segments
+    .map((segment) => {
+      if (!segment) return segment;
+      if (/^\d+$/.test(segment)) return segment;
+      return segment.charAt(0).toUpperCase() + segment.slice(1);
+    })
+    .join(' ');
+  return `${readable} (${language.toUpperCase()})`;
+};
+
+const useModelOptions = (): Option[] =>
+  useMemo(
+    () =>
+      POPULAR_TTS_MODELS.map((value) => ({
+        label: formatModelLabel(value),
+        value,
+      })),
+    []
+  );
 
 const parseNumber = (value: string): number | undefined => {
   const trimmed = value.trim();
@@ -64,6 +145,7 @@ export default function TextToSpeech() {
   const [streamEncoding, setStreamEncoding] = useState('linear16');
   const [streamSampleRate, setStreamSampleRate] = useState('24000');
   const [streamMipOptOut, setStreamMipOptOut] = useState(false);
+  const modelOptions = useModelOptions();
 
   const httpModelValue = httpModel.trim() || undefined;
   const httpEncodingValue = httpEncoding.trim()
@@ -75,15 +157,17 @@ export default function TextToSpeech() {
   const httpContainerValue = httpContainer.trim()
     ? (httpContainer.trim().toLowerCase() as DeepgramTextToSpeechContainer)
     : undefined;
-  const httpBitRateValue = parseNumber(httpBitRate) as
-    | DeepgramTextToSpeechBitRate
-    | undefined;
+  const httpBitRateValue =
+    httpEncodingValue && httpEncodingValue !== 'linear16'
+      ? (parseNumber(httpBitRate) as DeepgramTextToSpeechBitRate | undefined)
+      : undefined; // Deepgram rejects bitRate when encoding=linear16
   const httpCallbackValue = httpCallbackUrl.trim() || undefined;
-  const httpCallbackMethodValue = httpCallbackMethod.trim()
-    ? (httpCallbackMethod
-        .trim()
-        .toUpperCase() as DeepgramTextToSpeechCallbackMethod)
-    : undefined;
+  const httpCallbackMethodValue =
+    httpCallbackValue && httpCallbackMethod.trim()
+      ? (httpCallbackMethod
+          .trim()
+          .toUpperCase() as DeepgramTextToSpeechCallbackMethod)
+      : undefined; // Deepgram requires callbackMethod only if callback is set
 
   const streamModelValue = streamModel.trim() || undefined;
   const streamEncodingValue = streamEncoding.trim()
@@ -182,238 +266,255 @@ export default function TextToSpeech() {
   const handleCloseGracefully = () => closeStreamGracefully();
 
   return (
-    <View style={styles.container}>
-      <TextInput
-        value={text}
-        onChangeText={setText}
-        placeholder="Enter text to speak"
-        style={styles.input}
-        multiline
-      />
+    <ScrollView>
+      <View style={styles.container}>
+        <TextInput
+          value={text}
+          onChangeText={setText}
+          placeholder="Enter text to speak"
+          style={styles.input}
+          multiline
+        />
 
-      <View style={styles.optionsSection}>
-        <Text style={styles.sectionTitle}>HTTP options</Text>
-        <Text style={styles.optionHint}>
-          Configure parameters for single text-to-speech requests.
-        </Text>
-        <Text style={styles.fieldLabel}>Model</Text>
-        <TextInput
-          value={httpModel}
-          onChangeText={setHttpModel}
-          placeholder="Model (leave blank for default)"
-          style={styles.optionInput}
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-        <Text style={styles.fieldLabel}>Encoding</Text>
-        <TextInput
-          value={httpEncoding}
-          onChangeText={setHttpEncoding}
-          placeholder="linear16, mp3, opus…"
-          style={styles.optionInput}
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-        <Text style={styles.fieldLabel}>Sample rate</Text>
-        <TextInput
-          value={httpSampleRate}
-          onChangeText={setHttpSampleRate}
-          placeholder="e.g. 24000"
-          style={styles.optionInput}
-          keyboardType="numeric"
-        />
-        <Text style={styles.fieldLabel}>Container</Text>
-        <TextInput
-          value={httpContainer}
-          onChangeText={setHttpContainer}
-          placeholder="none, wav, ogg…"
-          style={styles.optionInput}
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-        <Text style={styles.fieldLabel}>Bit rate</Text>
-        <TextInput
-          value={httpBitRate}
-          onChangeText={setHttpBitRate}
-          placeholder="mp3: 32000 or 48000"
-          style={styles.optionInput}
-          keyboardType="numeric"
-        />
-        <Text style={styles.fieldLabel}>Callback URL</Text>
-        <TextInput
-          value={httpCallbackUrl}
-          onChangeText={setHttpCallbackUrl}
-          placeholder="Optional webhook URL"
-          style={styles.optionInput}
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-        <Text style={styles.fieldLabel}>Callback method</Text>
-        <TextInput
-          value={httpCallbackMethod}
-          onChangeText={setHttpCallbackMethod}
-          placeholder="POST or PUT"
-          style={styles.optionInput}
-          autoCapitalize="characters"
-          autoCorrect={false}
-        />
-        <View style={styles.toggleRow}>
-          <Text style={styles.switchLabel}>Opt out of the MIP</Text>
-          <Switch value={httpMipOptOut} onValueChange={setHttpMipOptOut} />
-        </View>
-      </View>
-
-      <View style={[styles.optionsSection, styles.optionsSectionSpacing]}>
-        <Text style={styles.sectionTitle}>Streaming options</Text>
-        <Text style={styles.optionHint}>
-          These apply to the WebSocket streaming connection.
-        </Text>
-        <Text style={styles.fieldLabel}>Model</Text>
-        <TextInput
-          value={streamModel}
-          onChangeText={setStreamModel}
-          placeholder="Model (leave blank for default)"
-          style={styles.optionInput}
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-        <Text style={styles.fieldLabel}>Encoding</Text>
-        <TextInput
-          value={streamEncoding}
-          onChangeText={setStreamEncoding}
-          placeholder="linear16, mulaw, alaw…"
-          style={styles.optionInput}
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-        <Text style={styles.fieldLabel}>Sample rate</Text>
-        <TextInput
-          value={streamSampleRate}
-          onChangeText={setStreamSampleRate}
-          placeholder="e.g. 24000"
-          style={styles.optionInput}
-          keyboardType="numeric"
-        />
-        <View style={styles.toggleRow}>
-          <Text style={styles.switchLabel}>Opt out of the MIP</Text>
-          <Switch value={streamMipOptOut} onValueChange={setStreamMipOptOut} />
-        </View>
-      </View>
-
-      {/* HTTP synthesis */}
-      <View style={styles.buttonRow}>
-        <Button
-          title="Synthesize (HTTP)"
-          onPress={handleSynthesize}
-          disabled={httpStatus === 'working' || !text.trim()}
-        />
-      </View>
-      {httpStatus === 'working' && (
-        <Text style={styles.status}>Synthesizing…</Text>
-      )}
-      {httpError && <Text style={styles.error}>Error: {httpError}</Text>}
-
-      {/* streaming */}
-      <View style={[styles.buttonRow, styles.streamingSection]}>
-        <Button
-          title="Start Stream"
-          onPress={handleStream}
-          disabled={streamStatus === 'streaming' || !text.trim()}
-        />
-        <Button
-          title="Stop Stream"
-          onPress={stopStreaming}
-          disabled={streamStatus !== 'streaming'}
-        />
-      </View>
-      {streamStatus === 'streaming' && (
-        <Text style={styles.status}>Streaming…</Text>
-      )}
-      {streamError && (
-        <Text style={styles.error}>Stream error: {streamError}</Text>
-      )}
-
-      {/* Continuous streaming - send additional text to active stream */}
-      {streamStatus === 'streaming' && (
-        <View style={[styles.continuousSection, styles.continuousMargin]}>
-          <Text style={styles.sectionTitle}>Continuous Streaming</Text>
+        <View style={styles.optionsSection}>
+          <Text style={styles.sectionTitle}>HTTP options</Text>
+          <Text style={styles.optionHint}>
+            Configure parameters for single text-to-speech requests.
+          </Text>
+          <OptionSelect
+            label="Model"
+            value={httpModel}
+            onChange={setHttpModel}
+            options={modelOptions}
+            placeholder="Select a voice model"
+            allowCustom
+            customPlaceholder="Enter a Deepgram model id"
+          />
+          <OptionSelect
+            label="Encoding"
+            value={httpEncoding}
+            onChange={setHttpEncoding}
+            options={HTTP_ENCODING_OPTIONS}
+            placeholder="Select encoding"
+            allowCustom
+            customPlaceholder="Enter an encoding"
+          />
+          <OptionSelect
+            label="Sample rate"
+            value={httpSampleRate}
+            onChange={setHttpSampleRate}
+            options={SAMPLE_RATE_OPTIONS}
+            placeholder="Select sample rate"
+            allowCustom
+            customPlaceholder="Enter sample rate (Hz)"
+            customKeyboardType="numeric"
+          />
+          <OptionSelect
+            label="Container"
+            value={httpContainer}
+            onChange={setHttpContainer}
+            options={CONTAINER_OPTIONS}
+            placeholder="Select container"
+            allowCustom
+            customPlaceholder="Enter container format"
+          />
+          <OptionSelect
+            label="Bit rate"
+            value={httpBitRate}
+            onChange={setHttpBitRate}
+            options={BITRATE_OPTIONS}
+            placeholder="Select bit rate"
+            allowCustom
+            customPlaceholder="Enter bit rate (bps)"
+            customKeyboardType="numeric"
+          />
+          <Text style={styles.fieldLabel}>Callback URL</Text>
           <TextInput
-            value={streamText}
-            onChangeText={setStreamText}
-            placeholder="Send more text to the active stream..."
-            style={styles.streamInput}
-            multiline
+            value={httpCallbackUrl}
+            onChangeText={setHttpCallbackUrl}
+            placeholder="Optional webhook URL"
+            style={styles.optionInput}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          <OptionSelect
+            label="Callback method"
+            value={httpCallbackMethod}
+            onChange={setHttpCallbackMethod}
+            options={CALLBACK_METHOD_OPTIONS}
+            placeholder="Select HTTP method"
+            allowCustom
+            customPlaceholder="Enter HTTP method"
           />
           <View style={styles.toggleRow}>
-            <Text style={styles.switchLabel}>Flush automatically</Text>
-            <Switch
-              value={streamAutoFlush}
-              onValueChange={setStreamAutoFlush}
-            />
-          </View>
-          <View style={styles.buttonRow}>
-            <Button
-              title={streamAutoFlush ? 'Send Text' : 'Queue Text (no flush)'}
-              onPress={handleSendText}
-              disabled={!streamText.trim()}
-            />
-            <Button title="Flush" onPress={handleFlush} />
-          </View>
-          <View style={styles.buttonRow}>
-            <Button title="Clear Buffer" onPress={handleClear} />
-            <Button title="Close Gracefully" onPress={handleCloseGracefully} />
+            <Text style={styles.switchLabel}>Opt out of the MIP</Text>
+            <Switch value={httpMipOptOut} onValueChange={setHttpMipOptOut} />
           </View>
         </View>
-      )}
 
-      <ScrollView style={styles.outputContainer}>
-        <Text style={styles.note}>
-          Audio is played automatically by the built-in native player; there’s
-          no transcript to display.
-        </Text>
-        {lastMetadata && (
-          <View style={styles.debugPanel}>
-            <Text style={styles.debugTitle}>Last metadata</Text>
-            <Text style={styles.debugText}>
-              Request: {lastMetadata.request_id}
-            </Text>
-            <Text style={styles.debugText}>
-              Model: {lastMetadata.model_name}
-            </Text>
-            <Text style={styles.debugText}>
-              Version: {lastMetadata.model_version}
-            </Text>
+        <View style={[styles.optionsSection, styles.optionsSectionSpacing]}>
+          <Text style={styles.sectionTitle}>Streaming options</Text>
+          <Text style={styles.optionHint}>
+            These apply to the WebSocket streaming connection.
+          </Text>
+          <OptionSelect
+            label="Model"
+            value={streamModel}
+            onChange={setStreamModel}
+            options={modelOptions}
+            placeholder="Select a voice model"
+            allowCustom
+            customPlaceholder="Enter a Deepgram model id"
+          />
+          <OptionSelect
+            label="Encoding"
+            value={streamEncoding}
+            onChange={setStreamEncoding}
+            options={STREAM_ENCODING_OPTIONS}
+            placeholder="Select encoding"
+            allowCustom
+            customPlaceholder="Enter an encoding"
+          />
+          <OptionSelect
+            label="Sample rate"
+            value={streamSampleRate}
+            onChange={setStreamSampleRate}
+            options={SAMPLE_RATE_OPTIONS}
+            placeholder="Select sample rate"
+            allowCustom
+            customPlaceholder="Enter sample rate (Hz)"
+            customKeyboardType="numeric"
+          />
+          <View style={styles.toggleRow}>
+            <Text style={styles.switchLabel}>Opt out of the MIP</Text>
+            <Switch
+              value={streamMipOptOut}
+              onValueChange={setStreamMipOptOut}
+            />
+          </View>
+        </View>
+
+        {/* HTTP synthesis */}
+        <View style={styles.buttonRow}>
+          <Button
+            title="Synthesize (HTTP)"
+            onPress={handleSynthesize}
+            disabled={httpStatus === 'working' || !text.trim()}
+          />
+        </View>
+        {httpStatus === 'working' && (
+          <Text style={styles.status}>Synthesizing…</Text>
+        )}
+        {httpError && <Text style={styles.error}>Error: {httpError}</Text>}
+
+        {/* streaming */}
+        <View style={[styles.buttonRow, styles.streamingSection]}>
+          <Button
+            title="Start Stream"
+            onPress={handleStream}
+            disabled={streamStatus === 'streaming' || !text.trim()}
+          />
+          <Button
+            title="Stop Stream"
+            onPress={stopStreaming}
+            disabled={streamStatus !== 'streaming'}
+          />
+        </View>
+        {streamStatus === 'streaming' && (
+          <Text style={styles.status}>Streaming…</Text>
+        )}
+        {streamError && (
+          <Text style={styles.error}>Stream error: {streamError}</Text>
+        )}
+
+        {/* Continuous streaming - send additional text to active stream */}
+        {streamStatus === 'streaming' && (
+          <View style={[styles.continuousSection, styles.continuousMargin]}>
+            <Text style={styles.sectionTitle}>Continuous Streaming</Text>
+            <TextInput
+              value={streamText}
+              onChangeText={setStreamText}
+              placeholder="Send more text to the active stream..."
+              style={styles.streamInput}
+              multiline
+            />
+            <View style={styles.toggleRow}>
+              <Text style={styles.switchLabel}>Flush automatically</Text>
+              <Switch
+                value={streamAutoFlush}
+                onValueChange={setStreamAutoFlush}
+              />
+            </View>
+            <View style={styles.buttonRow}>
+              <Button
+                title={streamAutoFlush ? 'Send Text' : 'Queue Text (no flush)'}
+                onPress={handleSendText}
+                disabled={!streamText.trim()}
+              />
+              <Button title="Flush" onPress={handleFlush} />
+            </View>
+            <View style={styles.buttonRow}>
+              <Button title="Clear Buffer" onPress={handleClear} />
+              <Button
+                title="Close Gracefully"
+                onPress={handleCloseGracefully}
+              />
+            </View>
           </View>
         )}
-        {(lastFlushedSequence != null || lastClearedSequence != null) && (
-          <View style={styles.debugPanel}>
-            <Text style={styles.debugTitle}>Stream events</Text>
-            {lastFlushedSequence != null && (
+
+        <ScrollView style={styles.outputContainer}>
+          <Text style={styles.note}>
+            Audio is played automatically by the built-in native player; there’s
+            no transcript to display.
+          </Text>
+          {lastMetadata && (
+            <View style={styles.debugPanel}>
+              <Text style={styles.debugTitle}>Last metadata</Text>
               <Text style={styles.debugText}>
-                Last flushed sequence: {lastFlushedSequence}
+                Request: {lastMetadata.request_id}
               </Text>
-            )}
-            {lastClearedSequence != null && (
               <Text style={styles.debugText}>
-                Last cleared sequence: {lastClearedSequence}
+                Model: {lastMetadata.model_name}
               </Text>
-            )}
-          </View>
-        )}
-        {warnings.length > 0 && (
-          <View style={[styles.debugPanel, styles.warningPanel]}>
-            <Text style={[styles.debugTitle, styles.warningTitle]}>
-              Warnings
-            </Text>
-            {warnings.map((warning, index) => (
-              <Text key={`${warning.code}-${index}`} style={styles.warningText}>
-                {warning.code}: {warning.description}
+              <Text style={styles.debugText}>
+                Version: {lastMetadata.model_version}
               </Text>
-            ))}
-          </View>
-        )}
-      </ScrollView>
-    </View>
+            </View>
+          )}
+          {(lastFlushedSequence != null || lastClearedSequence != null) && (
+            <View style={styles.debugPanel}>
+              <Text style={styles.debugTitle}>Stream events</Text>
+              {lastFlushedSequence != null && (
+                <Text style={styles.debugText}>
+                  Last flushed sequence: {lastFlushedSequence}
+                </Text>
+              )}
+              {lastClearedSequence != null && (
+                <Text style={styles.debugText}>
+                  Last cleared sequence: {lastClearedSequence}
+                </Text>
+              )}
+            </View>
+          )}
+          {warnings.length > 0 && (
+            <View style={[styles.debugPanel, styles.warningPanel]}>
+              <Text style={[styles.debugTitle, styles.warningTitle]}>
+                Warnings
+              </Text>
+              {warnings.map((warning, index) => (
+                <Text
+                  key={`${warning.code}-${index}`}
+                  style={styles.warningText}
+                >
+                  {warning.code}: {warning.description}
+                </Text>
+              ))}
+            </View>
+          )}
+        </ScrollView>
+      </View>
+    </ScrollView>
   );
 }
 

@@ -21,15 +21,17 @@ import VoiceAgent from './VoiceAgent';
 
 // Initialize Deepgram with your API key once (can also be moved to a config file)
 // Use an environment variable or placeholder for the API key
-configure({ apiKey: process.env.DEEPGRAM_API_KEY || 'YOUR_DEEPGRAM_API_KEY' });
+configure({
+  apiKey: process.env.EXPO_PUBLIC_DEEPGRAM_API_KEY || 'YOUR_DEEPGRAM_API_KEY',
+});
 
 type ScreenKey = 'voice' | 'speech' | 'text' | 'management' | 'tts';
 const TABS: { key: ScreenKey; label: string }[] = [
   { key: 'voice', label: 'Voice Agent' },
   { key: 'speech', label: 'Speech to Text' },
   { key: 'text', label: 'Text Intelligence' },
-  { key: 'management', label: 'Management' },
   { key: 'tts', label: 'Text to Speech' },
+  { key: 'management', label: 'Management' },
 ];
 
 export default function App() {
@@ -67,8 +69,8 @@ export default function App() {
         {activeScreen === 'voice' && <VoiceAgent />}
         {activeScreen === 'speech' && <SpeechToText />}
         {activeScreen === 'text' && <TextIntelligence />}
-        {activeScreen === 'management' && <Management />}
         {activeScreen === 'tts' && <TextToSpeech />}
+        {activeScreen === 'management' && <Management />}
       </View>
     </SafeAreaView>
   );

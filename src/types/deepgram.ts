@@ -45,6 +45,7 @@ export type DeepgramLiveListenModel =
   | 'voicemail'
   | 'video'
   | 'custom'
+  | 'flux-general-en'
   | (string & {});
 
 export type DeepgramLiveListenRedaction =
@@ -63,6 +64,8 @@ export type DeepgramLiveListenCallbackMethod =
   | 'DELETE';
 
 export type DeepgramLiveListenOptions = {
+  /** Deepgram real-time API version to use. Defaults to v1. */
+  apiVersion?: 'v1' | 'v2';
   /** URL to receive Deepgram's callback. */
   callback?: string;
   /** HTTP method for the callback. Defaults to POST. */
@@ -116,6 +119,19 @@ export type DeepgramLiveListenOptions = {
   smartFormat?: boolean;
   /** Label requests for downstream reporting. */
   tag?: string;
+  /**
+   * End-of-turn confidence threshold required to emit an eager turn event.
+   * Only applies when using the v2/Flux turn-based API.
+   */
+  eagerEotThreshold?: number;
+  /**
+   * End-of-turn confidence required to finish a turn when using the v2 API.
+   */
+  eotThreshold?: number;
+  /**
+   * Maximum time to wait after speech stops before closing a turn (v2 API).
+   */
+  eotTimeoutMs?: number;
   /** Delay before emitting an utterance end message, in milliseconds. */
   utteranceEndMs?: number;
   /** Receive speech started events. */

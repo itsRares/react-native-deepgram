@@ -9,7 +9,11 @@ import type {
   UseDeepgramSpeechToTextProps,
   UseDeepgramSpeechToTextReturn,
 } from './types';
-import { DEEPGRAM_BASEURL, DEEPGRAM_BASEWSS } from './constants';
+import {
+  DEEPGRAM_BASEURL,
+  DEEPGRAM_BASEWSS,
+  DEEPGRAM_V2_BASEWSS,
+} from './constants';
 import { buildParams } from './helpers';
 
 export function useDeepgramSpeechToText({
@@ -28,12 +32,24 @@ export function useDeepgramSpeechToText({
   const audioSub = useRef<ReturnType<NativeEventEmitter['addListener']> | null>(
     null
   );
+  const apiVersionRef = useRef<'v1' | 'v2'>('v1');
 
   const closeEverything = () => {
     audioSub.current?.remove();
     Deepgram.stopRecording().catch(() => {});
+    if (
+      apiVersionRef.current === 'v2' &&
+      ws.current?.readyState === WebSocket.OPEN
+    ) {
+      try {
+        ws.current.send(JSON.stringify({ type: 'CloseStream' }));
+      } catch {
+        // ignore close errors
+      }
+    }
     ws.current?.close(1000, 'cleanup');
     ws.current = null;
+    apiVersionRef.current = 'v1';
   };
 
   const startListening = useCallback(
@@ -53,9 +69,17 @@ export function useDeepgramSpeechToText({
           encoding: 'linear16',
           sampleRate: 16000,
           model: 'nova-2',
+          apiVersion: 'v1',
           ...live,
           ...overrideOptions,
         };
+
+        if (merged.apiVersion === 'v2' && !merged.model) {
+          merged.model = 'flux-general-en';
+        }
+
+        const isV2 = merged.apiVersion === 'v2';
+        apiVersionRef.current = isV2 ? 'v2' : 'v1';
 
         const query: Record<
           string,
@@ -94,6 +118,12 @@ export function useDeepgramSpeechToText({
           version: merged.version,
         };
 
+        if (isV2) {
+          query.eager_eot_threshold = merged.eagerEotThreshold;
+          query.eot_threshold = merged.eotThreshold;
+          query.eot_timeout_ms = merged.eotTimeoutMs;
+        }
+
         if (merged.redact) {
           query.redact = Array.isArray(merged.redact)
             ? merged.redact
@@ -108,7 +138,9 @@ export function useDeepgramSpeechToText({
 
         const params = buildParams(query);
 
-        const url = `${DEEPGRAM_BASEWSS}/listen?${params}`;
+        const baseWss = isV2 ? DEEPGRAM_V2_BASEWSS : DEEPGRAM_BASEWSS;
+        const baseListenUrl = `${baseWss}/listen`;
+        const url = params ? `${baseListenUrl}?${params}` : baseListenUrl;
 
         ws.current = new (WebSocket as any)(url, undefined, {
           headers: { Authorization: `Token ${apiKey}` },
@@ -160,6 +192,22 @@ export function useDeepgramSpeechToText({
           if (typeof ev.data === 'string') {
             try {
               const msg = JSON.parse(ev.data);
+              if (isV2) {
+                if (msg.type === 'Error') {
+                  const description =
+                    msg.description || 'Deepgram stream error';
+                  onError(new Error(description));
+                  closeEverything();
+                  return;
+                }
+
+                const transcript = msg.transcript;
+                if (typeof transcript === 'string' && transcript.length > 0) {
+                  onTranscript(transcript);
+                }
+                return;
+              }
+
               const transcript = msg.channel?.alternatives?.[0]?.transcript;
               if (transcript) onTranscript(transcript);
             } catch {

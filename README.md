@@ -13,14 +13,17 @@
 2. [Installation](#installation)
 3. [Configuration](#configuration)
 4. [Usage overview](#usage-overview)
-5. [Speech-to-Text](#speech-to-text-usedeepgramspeechtotext)
-6. [Text-to-Speech](#text-to-speech-usedeepgramtexttospeech)
-7. [Text Intelligence](#text-intelligence-usedeepgramtextintelligence)
-8. [Management API](#management-api-usedeepgrammanagement)
-9. [Example app](#example-app)
-10. [Roadmap](#roadmap)
-11. [Contributing](#contributing)
-12. [License](#license)
+5. [Voice Agent](#voice-agent-usedeepgramvoiceagent)
+   - [API reference](#api-reference-voice-agent)
+6. [Speech-to-Text](#speech-to-text-usedeepgramspeechtotext)
+   - [API reference](#api-reference-speech-to-text)
+7. [Text-to-Speech](#text-to-speech-usedeepgramtexttospeech)
+8. [Text Intelligence](#text-intelligence-usedeepgramtextintelligence)
+9. [Management API](#management-api-usedeepgrammanagement)
+10. [Example app](#example-app)
+11. [Roadmap](#roadmap)
+12. [Contributing](#contributing)
+13. [License](#license)
 
 ---
 
@@ -29,6 +32,7 @@
 - 🔊 **Live Speech-to-Text** – capture PCM audio and stream it over WebSocket (STT v1 or v2/Flux).
 - 📄 **File Transcription** – send audio files/URIs to Deepgram and receive transcripts.
 - 🎤 **Text-to-Speech** – synthesize speech with HTTP requests or WebSocket streaming controls.
+- 🗣️ **Voice Agent** – orchestrate realtime conversational agents with microphone capture + audio playback.
 - 🧠 **Text Intelligence** – summarisation, topic detection, intents, sentiment and more.
 - 🛠️ **Management API** – list models, keys, usage, projects, balances, etc.
 - ⚙️ **Expo config plugin** – automatic native configuration for managed and bare workflows.
@@ -92,10 +96,171 @@ configure({ apiKey: 'YOUR_DEEPGRAM_API_KEY' });
 
 | Hook                          | Purpose                                              |
 | ----------------------------- | ---------------------------------------------------- |
+| `useDeepgramVoiceAgent`       | Build conversational agents with streaming audio I/O |
 | `useDeepgramSpeechToText`     | Live microphone streaming and file transcription     |
 | `useDeepgramTextToSpeech`     | Text-to-Speech synthesis (HTTP + WebSocket streaming) |
 | `useDeepgramTextIntelligence` | Text analysis (summaries, topics, intents, sentiment) |
 | `useDeepgramManagement`       | Typed wrapper around the Management REST API         |
+
+---
+
+## Voice Agent (`useDeepgramVoiceAgent`)
+
+`useDeepgramVoiceAgent` connects to `wss://agent.deepgram.com/v1/agent/converse`, captures microphone audio, and optionally auto-plays the agent's streamed responses. It wraps the full Voice Agent messaging surface so you can react to conversation updates, function calls, warnings, and raw PCM audio.
+
+### Quick start
+
+```tsx
+const {
+  connect,
+  disconnect,
+  injectUserMessage,
+  sendFunctionCallResponse,
+  updatePrompt,
+} = useDeepgramVoiceAgent({
+  defaultSettings: {
+    audio: {
+      input: { encoding: 'linear16', sample_rate: 24_000 },
+      output: { encoding: 'linear16', sample_rate: 24_000, container: 'none' },
+    },
+    agent: {
+      language: 'en',
+      greeting: 'Hello! How can I help you today?',
+      listen: {
+        provider: { type: 'deepgram', model: 'nova-3', smart_format: true },
+      },
+      think: {
+        provider: { type: 'open_ai', model: 'gpt-4o', temperature: 0.7 },
+        prompt: 'You are a helpful voice concierge.',
+      },
+      speak: {
+        provider: { type: 'deepgram', model: 'aura-2-asteria-en' },
+      },
+    },
+    tags: ['demo'],
+  },
+  onConversationText: (msg) => {
+    console.log(`${msg.role}: ${msg.content}`);
+  },
+  onAgentThinking: (msg) => console.log('thinking:', msg.content),
+  onAgentAudioDone: () => console.log('Agent finished speaking'),
+  onServerError: (err) => console.error('Agent error', err.description),
+});
+
+const begin = async () => {
+  try {
+    await connect();
+  } catch (err) {
+    console.error('Failed to start agent', err);
+  }
+};
+
+const askQuestion = () => {
+  injectUserMessage("What's the weather like?");
+};
+
+const provideTooling = () => {
+  sendFunctionCallResponse({
+    id: 'func_12345',
+    name: 'get_weather',
+    content: JSON.stringify({ temperature: 72, condition: 'sunny' }),
+    client_side: true,
+  });
+};
+
+const rePrompt = () => {
+  updatePrompt('You are now a helpful travel assistant.');
+};
+
+return (
+  <>
+    <Button title="Start agent" onPress={begin} />
+    <Button title="Ask" onPress={askQuestion} />
+    <Button title="Send tool output" onPress={provideTooling} />
+    <Button title="Update prompt" onPress={rePrompt} />
+    <Button title="Stop" onPress={disconnect} />
+  </>
+);
+```
+
+> 🎧 By default the hook requests mic permissions, streams PCM to Deepgram, and plays the agent's PCM responses through the native playback engine. Disable either behaviour with `autoStartMicrophone` or `autoPlayAgentAudio`.
+
+### API reference (Voice Agent)
+
+#### Hook props
+
+| Prop | Type | Description |
+| ---- | ---- | ----------- |
+| `endpoint` | `string` | WebSocket endpoint used for the agent conversation (defaults to `wss://agent.deepgram.com/v1/agent/converse`). |
+| `defaultSettings` | `DeepgramVoiceAgentSettings` | Base `Settings` payload sent on connect; merge per-call overrides via `connect(override)`. |
+| `autoStartMicrophone` | `boolean` | Automatically requests mic access and starts streaming PCM when `true` (default). |
+| `autoPlayAgentAudio` | `boolean` | Auto-plays streamed PCM responses through the native audio engine when `true` (default). |
+| `downsampleFactor` | `number` | Manually override the downsample ratio applied to captured audio (defaults to a heuristic based on the requested sample rate). |
+
+#### Callbacks
+
+| Callback | Signature | Fired when |
+| -------- | --------- | ---------- |
+| `onBeforeConnect` | `() => void` | `connect` is called—before requesting mic permissions or opening the socket. |
+| `onConnect` | `() => void` | The socket opens and the initial settings payload is delivered. |
+| `onClose` | `(event?: any) => void` | The socket closes (manual disconnect or remote). |
+| `onError` | `(error: unknown) => void` | Any unexpected error occurs (mic, playback, socket send, etc.). |
+| `onMessage` | `(message: DeepgramVoiceAgentServerMessage) => void` | Every JSON message from the Voice Agent API. |
+| `onWelcome` | `(message: DeepgramVoiceAgentWelcomeMessage) => void` | The agent returns the initial `Welcome` envelope. |
+| `onSettingsApplied` | `(message: DeepgramVoiceAgentSettingsAppliedMessage) => void` | Settings are acknowledged by the agent. |
+| `onConversationText` | `(message: DeepgramVoiceAgentConversationTextMessage) => void` | Transcript updates (`role` + `content`) arrive. |
+| `onAgentThinking` | `(message: DeepgramVoiceAgentAgentThinkingMessage) => void` | The agent reports internal reasoning state. |
+| `onAgentStartedSpeaking` | `(message: DeepgramVoiceAgentAgentStartedSpeakingMessage) => void` | A response playback session begins (latency metrics included). |
+| `onAgentAudioDone` | `(message: DeepgramVoiceAgentAgentAudioDoneMessage) => void` | The agent finishes emitting audio for a turn. |
+| `onUserStartedSpeaking` | `(message: DeepgramVoiceAgentUserStartedSpeakingMessage) => void` | Server-side VAD detects the user speaking. |
+| `onFunctionCallRequest` | `(message: DeepgramVoiceAgentFunctionCallRequestMessage) => void` | The agent asks the client to execute a tool marked `client_side: true`. |
+| `onFunctionCallResponse` | `(message: DeepgramVoiceAgentReceiveFunctionCallResponseMessage) => void` | The server shares the outcome of a non-client-side function call. |
+| `onPromptUpdated` | `(message: DeepgramVoiceAgentPromptUpdatedMessage) => void` | The active prompt is updated (e.g., after `updatePrompt`). |
+| `onSpeakUpdated` | `(message: DeepgramVoiceAgentSpeakUpdatedMessage) => void` | The active speak configuration changes (e.g., after `updateSpeak`). |
+| `onInjectionRefused` | `(message: DeepgramVoiceAgentInjectionRefusedMessage) => void` | An inject request is rejected (typically while the agent is speaking). |
+| `onWarning` | `(message: DeepgramVoiceAgentWarningMessage) => void` | The API surfaces a non-fatal warning (e.g., degraded audio quality). |
+| `onServerError` | `(message: DeepgramVoiceAgentErrorMessage) => void` | The API reports a structured error payload (`description` + `code`). |
+| `onAgentAudioChunk` | `(chunk: ArrayBuffer) => void` | Raw PCM audio is received before optional auto-playback. |
+
+#### Returned methods
+
+| Method | Signature | Description |
+| ------ | --------- | ----------- |
+| `connect` | `(settings?: DeepgramVoiceAgentSettings) => Promise<void>` | Opens the socket, optionally merges additional settings, and starts audio pipelines. |
+| `disconnect` | `() => void` | Tears down the socket, stops recording/playback, and removes listeners. |
+| `sendMessage` | `(message: DeepgramVoiceAgentClientMessage) => boolean` | Sends a pre-built client envelope (handy for custom message types). |
+| `sendSettings` | `(settings: DeepgramVoiceAgentSettings) => boolean` | Sends a `Settings` message mid-session (merged with the `type` field). |
+| `updateSpeak` | `(speak: DeepgramVoiceAgentUpdateSpeakMessage['speak']) => boolean` | Updates TTS configuration without re-opening the session. |
+| `injectUserMessage` | `(content: string) => boolean` | Injects a user-side text message. |
+| `injectAgentMessage` | `(message: string) => boolean` | Injects an assistant-side text message. |
+| `sendFunctionCallResponse` | `(response: Omit<DeepgramVoiceAgentFunctionCallResponseMessage, 'type'>) => boolean` | Returns tool results for client-side function calls. |
+| `sendKeepAlive` | `() => boolean` | Emits a `KeepAlive` ping to keep the session warm. |
+| `updatePrompt` | `(prompt: string) => boolean` | Replaces the active system prompt. |
+| `sendMedia` | `(chunk: ArrayBuffer \| Uint8Array \| number[]) => boolean` | Streams additional PCM audio to the agent (e.g., pre-recorded buffers). |
+| `isConnected` | `() => boolean` | Returns `true` when the socket is open. |
+
+#### Settings payload (`DeepgramVoiceAgentSettings`)
+
+<details>
+<summary>Expand settings fields</summary>
+
+| Field | Type | Purpose |
+| ----- | ---- | ------- |
+| `tags` | `string[]` | Labels applied to the session for analytics/routing. |
+| `flags.history` | `boolean` | Enable prior history playback to the agent. |
+| `audio.input` | `DeepgramVoiceAgentAudioConfig` | Configure encoding/sample rate for microphone audio. |
+| `audio.output` | `DeepgramVoiceAgentAudioConfig` | Choose output encoding/sample rate/bitrate for agent speech. |
+| `agent.language` | `string` | Primary language for the conversation. |
+| `agent.context.messages` | `DeepgramVoiceAgentContextMessage[]` | Seed the conversation with prior turns or system notes. |
+| `agent.listen.provider` | `DeepgramVoiceAgentListenProvider` | Speech recognition provider/model configuration. |
+| `agent.think.provider` | `DeepgramVoiceAgentThinkProvider` | LLM selection (`type`, `model`, `temperature`, etc.). |
+| `agent.think.functions` | `DeepgramVoiceAgentFunctionConfig[]` | Tooling exposed to the agent (name, parameters, optional endpoint metadata). |
+| `agent.think.prompt` | `string` | System prompt presented to the thinking provider. |
+| `agent.speak.provider` | `Record<string, unknown>` | Text-to-speech model selection for spoken replies. |
+| `agent.greeting` | `string` | Optional greeting played once settings are applied. |
+| `mip_opt_out` | `boolean` | Opt the session out of the Model Improvement Program. |
+
+</details>
 
 ---
 
@@ -144,7 +309,7 @@ const pickFile = async () => {
 };
 ```
 
-### API reference
+### API reference (Speech-to-Text)
 
 #### Hook props
 

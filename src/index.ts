@@ -2,6 +2,7 @@ export { useDeepgramSpeechToText } from './useDeepgramSpeechToText';
 export { useDeepgramTextIntelligence } from './useDeepgramTextIntelligence';
 export { useDeepgramManagement } from './useDeepgramManagement';
 export { useDeepgramTextToSpeech } from './useDeepgramTextToSpeech';
+export { useDeepgramVoiceAgent } from './useDeepgramVoiceAgent';
 export { Deepgram } from './NativeDeepgram';
 export type {
   DeepgramTextToSpeechModel,

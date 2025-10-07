@@ -12,6 +12,7 @@ import SpeechToText from './SpeechToText';
 import TextIntelligence from './TextIntelligence';
 import Management from './Management';
 import TextToSpeech from './TextToSpeech';
+import VoiceAgent from './VoiceAgent';
 
 /**
  * Entry point for the Deepgram demo app.
@@ -22,8 +23,9 @@ import TextToSpeech from './TextToSpeech';
 // Use an environment variable or placeholder for the API key
 configure({ apiKey: process.env.DEEPGRAM_API_KEY || 'YOUR_DEEPGRAM_API_KEY' });
 
-type ScreenKey = 'speech' | 'text' | 'management' | 'tts';
+type ScreenKey = 'voice' | 'speech' | 'text' | 'management' | 'tts';
 const TABS: { key: ScreenKey; label: string }[] = [
+  { key: 'voice', label: 'Voice Agent' },
   { key: 'speech', label: 'Speech to Text' },
   { key: 'text', label: 'Text Intelligence' },
   { key: 'management', label: 'Management' },
@@ -31,7 +33,7 @@ const TABS: { key: ScreenKey; label: string }[] = [
 ];
 
 export default function App() {
-  const [activeScreen, setActiveScreen] = useState<ScreenKey>('speech');
+  const [activeScreen, setActiveScreen] = useState<ScreenKey>('voice');
 
   return (
     <SafeAreaView style={styles.container}>
@@ -62,6 +64,7 @@ export default function App() {
       </View>
 
       <View style={styles.content}>
+        {activeScreen === 'voice' && <VoiceAgent />}
         {activeScreen === 'speech' && <SpeechToText />}
         {activeScreen === 'text' && <TextIntelligence />}
         {activeScreen === 'management' && <Management />}

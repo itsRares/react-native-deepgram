@@ -16,6 +16,35 @@ import {
 } from './constants';
 import { buildParams } from './helpers';
 
+const DEFAULT_SAMPLE_RATE = 16_000;
+const BASE_NATIVE_SAMPLE_RATE = 16_000;
+
+const computeDownsampleFactor = (
+  target: number | undefined,
+  base: number = BASE_NATIVE_SAMPLE_RATE
+) => {
+  if (!target || target >= base || base <= 0) {
+    return 1;
+  }
+  const ratio = Math.round(base / target);
+  return ratio > 0 ? ratio : 1;
+};
+
+const downsampleInt16 = (
+  data: Int16Array<ArrayBufferLike>,
+  factor: number
+): Int16Array<ArrayBufferLike> => {
+  if (factor <= 1 || data.length < factor) {
+    return data;
+  }
+
+  const downsampled = new Int16Array(Math.floor(data.length / factor));
+  for (let i = 0; i < downsampled.length; i++) {
+    downsampled[i] = data[i * factor];
+  }
+  return downsampled as Int16Array<ArrayBufferLike>;
+};
+
 export function useDeepgramSpeechToText({
   onBeforeStart = () => {},
   onStart = () => {},
@@ -33,10 +62,16 @@ export function useDeepgramSpeechToText({
     null
   );
   const apiVersionRef = useRef<'v1' | 'v2'>('v1');
+  const nativeInputSampleRateRef = useRef(BASE_NATIVE_SAMPLE_RATE);
+  const targetSampleRateRef = useRef(DEFAULT_SAMPLE_RATE);
+  const downsampleFactorRef = useRef(1);
 
   const closeEverything = () => {
     audioSub.current?.remove();
     Deepgram.stopRecording().catch(() => {});
+    nativeInputSampleRateRef.current = BASE_NATIVE_SAMPLE_RATE;
+    targetSampleRateRef.current = DEFAULT_SAMPLE_RATE;
+    downsampleFactorRef.current = 1;
     if (
       apiVersionRef.current === 'v2' &&
       ws.current?.readyState === WebSocket.OPEN
@@ -67,12 +102,21 @@ export function useDeepgramSpeechToText({
 
         const merged: DeepgramLiveListenOptions = {
           encoding: 'linear16',
-          sampleRate: 16000,
+          sampleRate: DEFAULT_SAMPLE_RATE,
           model: 'nova-2',
           apiVersion: 'v1',
           ...live,
           ...overrideOptions,
         };
+
+        targetSampleRateRef.current =
+          typeof merged.sampleRate === 'number' && merged.sampleRate > 0
+            ? merged.sampleRate
+            : DEFAULT_SAMPLE_RATE;
+        downsampleFactorRef.current = computeDownsampleFactor(
+          targetSampleRateRef.current,
+          nativeInputSampleRateRef.current
+        );
 
         if (merged.apiVersion === 'v2' && !merged.model) {
           merged.model = 'flux-general-en';
@@ -155,12 +199,27 @@ export function useDeepgramSpeechToText({
             android: 'AudioChunk',
           }) as string,
           (ev: any) => {
-            let chunk: ArrayBuffer | undefined;
+            if (typeof ev?.sampleRate === 'number' && ev.sampleRate > 0) {
+              if (ev.sampleRate !== nativeInputSampleRateRef.current) {
+                nativeInputSampleRateRef.current = ev.sampleRate;
+                downsampleFactorRef.current = computeDownsampleFactor(
+                  targetSampleRateRef.current,
+                  nativeInputSampleRateRef.current
+                );
+              }
+            }
+
+            const factor = downsampleFactorRef.current;
+            let chunk: ArrayBufferLike | undefined;
             if (typeof ev?.b64 === 'string') {
               const bytes = Uint8Array.from(atob(ev.b64), (c) =>
                 c.charCodeAt(0)
               );
-              chunk = bytes.buffer;
+              let int16: Int16Array<ArrayBufferLike> = new Int16Array(
+                bytes.buffer
+              );
+              int16 = downsampleInt16(int16, factor);
+              chunk = int16.buffer;
             } else if (Array.isArray(ev?.data)) {
               const bytes = new Uint8Array(ev.data.length);
               for (let i = 0; i < ev.data.length; i++) {
@@ -172,7 +231,11 @@ export function useDeepgramSpeechToText({
               for (let i = 0; i < int16.length; i++) {
                 int16[i] = view.getInt16(i * 2, true);
               }
-              chunk = int16.buffer;
+              const downsampled = downsampleInt16(
+                int16 as Int16Array<ArrayBufferLike>,
+                factor
+              );
+              chunk = downsampled.buffer;
             }
 
             if (chunk && ws.current?.readyState === WebSocket.OPEN) {

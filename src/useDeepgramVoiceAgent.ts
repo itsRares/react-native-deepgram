@@ -58,11 +58,14 @@ const hasKeys = (value: unknown, keys: string[]) =>
   value !== null &&
   keys.every((key) => key in (value as Record<string, unknown>));
 
-const computeDownsampleFactor = (target: number | undefined) => {
-  if (!target || target >= BASE_NATIVE_SAMPLE_RATE) {
+const computeDownsampleFactor = (
+  target: number | undefined,
+  base: number = BASE_NATIVE_SAMPLE_RATE
+) => {
+  if (!target || target >= base || base <= 0) {
     return 1;
   }
-  const ratio = Math.round(BASE_NATIVE_SAMPLE_RATE / target);
+  const ratio = Math.round(base / target);
   return ratio > 0 ? ratio : 1;
 };
 
@@ -162,8 +165,14 @@ export function useDeepgramVoiceAgent({
   const audioSub = useRef<ReturnType<NativeEventEmitter['addListener']> | null>(
     null
   );
+  const nativeInputSampleRate = useRef(BASE_NATIVE_SAMPLE_RATE);
+  const targetInputSampleRate = useRef(DEFAULT_INPUT_SAMPLE_RATE);
   const currentDownsample = useRef(
-    downsampleFactor ?? computeDownsampleFactor(DEFAULT_INPUT_SAMPLE_RATE)
+    downsampleFactor ??
+      computeDownsampleFactor(
+        targetInputSampleRate.current,
+        nativeInputSampleRate.current
+      )
   );
   const microphoneActive = useRef(false);
   const defaultSettingsRef = useRef(defaultSettings);
@@ -331,6 +340,18 @@ export function useDeepgramVoiceAgent({
         return;
       }
 
+      if (typeof ev?.sampleRate === 'number' && ev.sampleRate > 0) {
+        if (ev.sampleRate !== nativeInputSampleRate.current) {
+          nativeInputSampleRate.current = ev.sampleRate;
+          if (downsampleFactor == null) {
+            currentDownsample.current = computeDownsampleFactor(
+              targetInputSampleRate.current,
+              nativeInputSampleRate.current
+            );
+          }
+        }
+      }
+
       const factor = currentDownsample.current ?? 1;
       let chunk: ArrayBuffer | null = null;
 
@@ -369,7 +390,7 @@ export function useDeepgramVoiceAgent({
         onErrorRef.current?.(err);
       }
     },
-    [onErrorRef]
+    [downsampleFactor, onErrorRef]
   );
 
   const handleSocketMessage = useCallback(
@@ -616,8 +637,13 @@ export function useDeepgramVoiceAgent({
         overrideSettings?.audio?.input?.sample_rate ??
         defaultSettingsRef.current?.audio?.input?.sample_rate ??
         DEFAULT_INPUT_SAMPLE_RATE;
+      targetInputSampleRate.current = targetSampleRate;
       currentDownsample.current =
-        downsampleFactor ?? computeDownsampleFactor(targetSampleRate);
+        downsampleFactor ??
+        computeDownsampleFactor(
+          targetInputSampleRate.current,
+          nativeInputSampleRate.current
+        );
 
       const socket = new (WebSocket as any)(endpointRef.current, undefined, {
         headers: { Authorization: `Token ${apiKey}` },

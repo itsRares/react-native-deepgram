@@ -278,6 +278,19 @@ RCT_EXPORT_MODULE();
 
   NSError *activeError = nil;
   BOOL activeSuccess = [session setActive:YES error:&activeError];
+  if (!activeSuccess && activeError.code == AVAudioSessionErrorCodeInsufficientPriority) {
+    DGLogWarn(@"[Deepgram] configureAudioSession: insufficient priority, retrying with mix-with-others");
+    NSError *retryError = nil;
+    BOOL categoryRetry = [session setCategory:session.category
+                                        mode:session.mode
+                                     options:options | AVAudioSessionCategoryOptionMixWithOthers
+                                       error:&retryError];
+    if (!categoryRetry) {
+      DGLogWarn(@"[Deepgram] configureAudioSession: unable to update category options %@", retryError.localizedDescription ?: retryError);
+    }
+    activeError = nil;
+    activeSuccess = [session setActive:YES error:&activeError];
+  }
   if (!activeSuccess || activeError) {
     DGLogError(@"[Deepgram] configureAudioSession: setActive failed error=%@",
           activeError.localizedDescription ?: activeError);

@@ -904,6 +904,34 @@ RCT_EXPORT_METHOD(playAudioChunk
   }
 }
 
+- (void)invalidate
+{
+  DGLogDebug(@"[Deepgram] invalidate: begin");
+
+  @try {
+    [self cleanupRecordingQueue];
+  } @catch (NSException *e) {
+    DGLogError(@"[Deepgram] invalidate: cleanupRecordingQueue exception %@", e);
+  }
+
+  self.pendingPCMBuffer = nil;
+
+  if (self.audioPlayer) {
+    [self.audioPlayer stop];
+    self.audioPlayer = nil;
+  }
+
+  self.audioBuffer = nil;
+  self.isPlaying = NO;
+  self.hasListeners = NO;
+  self.appIsActive = NO;
+
+  [self maybeDeactivateAudioSession];
+
+  DGLogDebug(@"[Deepgram] invalidate: finished");
+  [super invalidate];
+}
+
 /* ================================================================== */
 /*  3.  AVAUDIOPLAYER DELEGATE METHODS                                */
 /* ================================================================== */

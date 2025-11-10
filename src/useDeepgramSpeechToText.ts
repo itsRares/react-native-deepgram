@@ -70,7 +70,10 @@ export function useDeepgramSpeechToText({
   const lastFinalTranscriptRef = useRef('');
 
   const closeEverything = () => {
-    audioSub.current?.remove();
+    if (audioSub.current) {
+      audioSub.current.remove();
+      audioSub.current = null;
+    }
     Deepgram.stopRecording().catch(() => {});
     nativeInputSampleRateRef.current = BASE_NATIVE_SAMPLE_RATE;
     targetSampleRateRef.current = DEFAULT_SAMPLE_RATE;

@@ -4,6 +4,12 @@
 @interface Deepgram : RCTEventEmitter <AVAudioPlayerDelegate>
 // Recording
 @property (nonatomic, strong) AVAudioEngine      *recEngine;
+@property (nonatomic, strong) AVAudioConverter   *pcmConverter;
+@property (nonatomic, strong) AVAudioFormat      *targetPCMFormat;
+@property (nonatomic, strong) NSMutableData      *pendingPCMBuffer;
+@property (nonatomic, strong) dispatch_queue_t    emitterQueue;
+@property (nonatomic, assign) double               resampleRatio;
+@property (nonatomic, assign) NSUInteger           chunkSizeBytes;
 
 // Playback / TTS
 @property (nonatomic, strong) AVAudioPlayer      *audioPlayer;
@@ -29,6 +35,9 @@ RCT_EXPORT_MODULE();
 - (instancetype)init
 {
   if (self = [super init]) {
+    _chunkSizeBytes = 6400; // ≈200 ms of 16 kHz mono PCM16 audio
+    _emitterQueue = dispatch_queue_create("com.deepgram.liveaudiostream",
+                                          DISPATCH_QUEUE_SERIAL);
     [[NSNotificationCenter defaultCenter]
         addObserver:self
            selector:@selector(handleAudioRouteChange:)
@@ -76,12 +85,18 @@ RCT_EXPORT_MODULE();
   AVAudioSession *session = [AVAudioSession sharedInstance];
   NSError *error = nil;
 
-  AVAudioSessionCategoryOptions options =
-      AVAudioSessionCategoryOptionDefaultToSpeaker |
-      AVAudioSessionCategoryOptionAllowBluetooth;
+  AVAudioSessionCategoryOptions options = AVAudioSessionCategoryOptionDefaultToSpeaker;
 
   if (@available(iOS 10.0, *)) {
     options |= AVAudioSessionCategoryOptionAllowBluetoothA2DP;
+  } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    options |= AVAudioSessionCategoryOptionAllowBluetooth;
+#pragma clang diagnostic pop
+  }
+
+  if (@available(iOS 10.0, *)) {
     error = nil;
     BOOL ok = [session setCategory:AVAudioSessionCategoryPlayAndRecord
                               mode:AVAudioSessionModeVoiceChat
@@ -212,8 +227,63 @@ RCT_EXPORT_MODULE();
   [self activateAudioSession];
 }
 
+- (void)emitPCMChunk:(NSData *)chunk sampleRate:(int)sampleRate
+{
+  if (!chunk || chunk.length == 0) {
+    return;
+  }
+
+  __weak __typeof(self) weakSelf = self;
+  NSData *chunkCopy = [chunk copy];
+  dispatch_queue_t queue = self.emitterQueue ?: dispatch_get_main_queue();
+  dispatch_async(queue, ^{
+    if (!weakSelf) {
+      return;
+    }
+
+    NSString *b64 = [chunkCopy base64EncodedStringWithOptions:0];
+    [weakSelf sendEventWithName:@"DeepgramAudioPCM"
+                           body:@{ @"b64": b64, @"sampleRate": @(sampleRate) }];
+  });
+}
+
+- (void)appendPCMDataAndEmitIfNeeded:(NSData *)pcmData
+{
+  if (!pcmData || pcmData.length == 0) {
+    return;
+  }
+
+  if (!self.pendingPCMBuffer) {
+    self.pendingPCMBuffer = [[NSMutableData alloc] init];
+  }
+
+  [self.pendingPCMBuffer appendData:pcmData];
+
+  NSUInteger chunkSize = self.chunkSizeBytes > 0 ? self.chunkSizeBytes : pcmData.length;
+
+  while (self.pendingPCMBuffer.length >= chunkSize) {
+    NSData *chunk =
+        [self.pendingPCMBuffer subdataWithRange:NSMakeRange(0, chunkSize)];
+    [self.pendingPCMBuffer replaceBytesInRange:NSMakeRange(0, chunkSize)
+                                     withBytes:NULL
+                                        length:0];
+    [self emitPCMChunk:chunk sampleRate:self.currentSampleRate];
+  }
+}
+
+- (void)flushPendingPCM
+{
+  if (self.pendingPCMBuffer.length == 0) {
+    return;
+  }
+
+  NSData *remaining = [self.pendingPCMBuffer copy];
+  [self.pendingPCMBuffer setLength:0];
+  [self emitPCMChunk:remaining sampleRate:self.currentSampleRate];
+}
+
 /* ================================================================== */
-/*  1.  MICROPHONE CAPTURE (≈ 48 kHz Float-32)                         */
+/*  1.  MICROPHONE CAPTURE (16 kHz PCM16 emission)                     */
 /* ================================================================== */
 RCT_EXPORT_METHOD(startRecording
                   :(RCTPromiseResolveBlock)resolve
@@ -228,17 +298,75 @@ RCT_EXPORT_METHOD(startRecording
 
     [input removeTapOnBus:0];
 
+    self.pendingPCMBuffer = [[NSMutableData alloc] init];
+
+    double targetSampleRate = 16000.0;
+    AVAudioChannelCount targetChannels = 1;
+    self.targetPCMFormat = [[AVAudioFormat alloc]
+        initWithCommonFormat:AVAudioPCMFormatInt16
+                     sampleRate:targetSampleRate
+                       channels:targetChannels
+                    interleaved:NO];
+
+    self.pcmConverter = [[AVAudioConverter alloc] initFromFormat:hwFmt
+                                                        toFormat:self.targetPCMFormat];
+    self.resampleRatio = hwFmt.sampleRate > 0 ? targetSampleRate / hwFmt.sampleRate : 1.0;
+    if (self.resampleRatio <= 0) {
+      self.resampleRatio = 1.0;
+    }
+
+    self.currentSampleRate = (int)targetSampleRate;
+
     __weak __typeof(self) weakSelf = self;
     [input installTapOnBus:0
                 bufferSize:1024
                     format:hwFmt
                      block:^(AVAudioPCMBuffer *buf, __unused AVAudioTime *when) {
                        if (!weakSelf) return;
-                       NSData *pcm = [NSData dataWithBytes:buf.floatChannelData[0]
-                                                    length:buf.frameLength * sizeof(float)];
-                       NSString *b64 = [pcm base64EncodedStringWithOptions:0];
-                       [weakSelf sendEventWithName:@"DeepgramAudioPCM"
-                                              body:@{ @"b64": b64 }];
+                       if (!weakSelf.pcmConverter || !weakSelf.targetPCMFormat) {
+                         NSLog(@"[Deepgram] PCM converter unavailable; dropping frame");
+                         return;
+                       }
+
+                       AVAudioFrameCount inputFrames = buf.frameLength;
+                       if (inputFrames == 0) {
+                         return;
+                       }
+
+                       double ratio = weakSelf.resampleRatio > 0 ? weakSelf.resampleRatio : 1.0;
+                       AVAudioFrameCount outputCapacity =
+                           (AVAudioFrameCount)ceil(inputFrames * ratio) + 32;
+
+                       AVAudioPCMBuffer *converted = [[AVAudioPCMBuffer alloc]
+                           initWithPCMFormat:weakSelf.targetPCMFormat
+                                   frameCapacity:outputCapacity];
+
+                       if (!converted) {
+                         return;
+                       }
+
+                       buf.frameLength = inputFrames;
+
+                       NSError *conversionError = nil;
+                       BOOL success = [weakSelf.pcmConverter convertToBuffer:converted
+                                                                   fromBuffer:buf
+                                                                        error:&conversionError];
+
+                       if (!success || conversionError) {
+                         NSLog(@"[Deepgram] PCM conversion error: %@",
+                               conversionError.localizedDescription);
+                         return;
+                       }
+
+                       converted.frameLength = MIN(converted.frameLength, outputCapacity);
+                       if (converted.frameLength == 0) {
+                         return;
+                       }
+
+                       AudioBuffer audioBuffer = converted.audioBufferList->mBuffers[0];
+                       NSData *pcmData = [NSData dataWithBytes:audioBuffer.mData
+                                                        length:audioBuffer.mDataByteSize];
+                       [weakSelf appendPCMDataAndEmitIfNeeded:pcmData];
                      }];
 
     [self.recEngine prepare];
@@ -258,6 +386,11 @@ RCT_EXPORT_METHOD(stopRecording
     [self.recEngine.inputNode removeTapOnBus:0];
     [self.recEngine stop];
     self.recEngine = nil;
+    [self flushPendingPCM];
+    self.pcmConverter = nil;
+    self.targetPCMFormat = nil;
+    self.pendingPCMBuffer = nil;
+    self.resampleRatio = 1.0;
     resolve(nil);
   }
   @catch (NSException *e) {

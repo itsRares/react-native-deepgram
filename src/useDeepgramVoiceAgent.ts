@@ -25,8 +25,8 @@ import type {
 } from './types';
 
 const DEFAULT_AGENT_ENDPOINT = 'wss://agent.deepgram.com/v1/agent/converse';
-const DEFAULT_INPUT_SAMPLE_RATE = 24_000;
-const BASE_NATIVE_SAMPLE_RATE = 48_000;
+const DEFAULT_INPUT_SAMPLE_RATE = 16_000;
+const BASE_NATIVE_SAMPLE_RATE = 16_000;
 
 const eventName = Platform.select({
   ios: 'DeepgramAudioPCM',
@@ -336,13 +336,13 @@ export function useDeepgramVoiceAgent({
 
       if (typeof ev?.b64 === 'string') {
         const binary = Uint8Array.from(atob(ev.b64), (c) => c.charCodeAt(0));
-        const float32 = new Float32Array(binary.buffer);
-        const downsampled =
-          factor > 1 ? float32.filter((_, i) => i % factor === 0) : float32;
-        const int16 = new Int16Array(downsampled.length);
-        for (let i = 0; i < downsampled.length; i++) {
-          const sample = Math.max(-1, Math.min(1, downsampled[i]));
-          int16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+        let int16 = new Int16Array(binary.buffer);
+        if (factor > 1 && int16.length >= factor) {
+          const downsampled = new Int16Array(Math.floor(int16.length / factor));
+          for (let i = 0; i < downsampled.length; i++) {
+            downsampled[i] = int16[i * factor];
+          }
+          int16 = downsampled;
         }
         chunk = int16.buffer;
       } else if (Array.isArray(ev?.data)) {

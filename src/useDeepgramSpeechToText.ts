@@ -157,17 +157,10 @@ export function useDeepgramSpeechToText({
           (ev: any) => {
             let chunk: ArrayBuffer | undefined;
             if (typeof ev?.b64 === 'string') {
-              const floatBytes = Uint8Array.from(atob(ev.b64), (c) =>
+              const bytes = Uint8Array.from(atob(ev.b64), (c) =>
                 c.charCodeAt(0)
               );
-              const float32 = new Float32Array(floatBytes.buffer);
-              const downsampled = float32.filter((_, i) => i % 3 === 0);
-              const int16 = new Int16Array(downsampled.length);
-              for (let i = 0; i < downsampled.length; i++) {
-                const s = Math.max(-1, Math.min(1, downsampled[i]));
-                int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-              }
-              chunk = int16.buffer;
+              chunk = bytes.buffer;
             } else if (Array.isArray(ev?.data)) {
               const bytes = new Uint8Array(ev.data.length);
               for (let i = 0; i < ev.data.length; i++) {

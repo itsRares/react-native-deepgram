@@ -49,6 +49,7 @@
     "release": "release-it --only-version",
     "build": "npx react-native-builder-bob build",
     "build:plugin": "npx tsc --build plugin",
+    "start": "yarn workspace react-native-deepgram-example start",
     "build:pod": "cd example && cd ios && npx pod-install && cd ..",
     "example": "yarn workspace react-native-deepgram-example start",
     "example:ios": "yarn workspace react-native-deepgram-example ios",

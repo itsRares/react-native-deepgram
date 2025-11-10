@@ -1,4 +1,5 @@
 #import <React/RCTEventEmitter.h>
+#import <React/RCTLog.h>
 #import <React/RCTUtils.h>
 #import <AVFoundation/AVFoundation.h>
 #import <AudioToolbox/AudioQueue.h>
@@ -10,6 +11,19 @@
 #include <string.h>
 
 #define DGNumberBuffers 3
+
+#ifndef DG_ENABLE_DEBUG_LOGS
+#define DG_ENABLE_DEBUG_LOGS 0
+#endif
+
+#if DG_ENABLE_DEBUG_LOGS
+#define DGLogDebug(...) NSLog(__VA_ARGS__)
+#else
+#define DGLogDebug(...)
+#endif
+
+#define DGLogWarn(...) RCTLogWarn(__VA_ARGS__)
+#define DGLogError(...) RCTLogError(__VA_ARGS__)
 
 @class Deepgram;
 
@@ -61,29 +75,29 @@ static void DGHandleInputBuffer(void *inUserData,
   @autoreleasepool {
     DGRecordState *state = (DGRecordState *)inUserData;
     if (!state || !state->isRunning) {
-      NSLog(@"[Deepgram] DGHandleInputBuffer: inactive state");
+      DGLogDebug(@"[Deepgram] DGHandleInputBuffer: inactive state");
       return;
     }
 
     Deepgram *strongSelf = state->mSelf;
     if (!strongSelf) {
-      NSLog(@"[Deepgram] DGHandleInputBuffer: missing self");
+      DGLogDebug(@"[Deepgram] DGHandleInputBuffer: missing self");
       return;
     }
 
     if (!inBuffer || inBuffer->mAudioDataByteSize == 0) {
-      NSLog(@"[Deepgram] DGHandleInputBuffer: empty buffer");
+      DGLogDebug(@"[Deepgram] DGHandleInputBuffer: empty buffer");
       return;
     }
 
-    NSLog(@"[Deepgram] DGHandleInputBuffer: received %u bytes",
+    DGLogDebug(@"[Deepgram] DGHandleInputBuffer: received %u bytes",
           (unsigned int)inBuffer->mAudioDataByteSize);
     NSData *data = [NSData dataWithBytes:inBuffer->mAudioData
                                    length:inBuffer->mAudioDataByteSize];
     [strongSelf appendPCMDataAndEmitIfNeeded:data];
 
     if (state->queue) {
-      NSLog(@"[Deepgram] DGHandleInputBuffer: re-enqueue buffer");
+      DGLogDebug(@"[Deepgram] DGHandleInputBuffer: re-enqueue buffer");
       AudioQueueEnqueueBuffer(state->queue, inBuffer, 0, NULL);
     }
   }
@@ -101,13 +115,13 @@ RCT_EXPORT_MODULE();
 
 - (void)startObserving
 {
-  NSLog(@"[Deepgram] startObserving: listeners attached");
+  DGLogDebug(@"[Deepgram] startObserving: listeners attached");
   self.hasListeners = YES;
 }
 
 - (void)stopObserving
 {
-  NSLog(@"[Deepgram] stopObserving: listeners detached");
+  DGLogDebug(@"[Deepgram] stopObserving: listeners detached");
   self.hasListeners = NO;
 }
 
@@ -118,7 +132,7 @@ RCT_EXPORT_MODULE();
 {
   if (self = [super init]) {
     _chunkSizeBytes = 6400; // ≈200 ms of 16 kHz mono PCM16 audio
-    NSLog(@"[Deepgram] init: chunkSizeBytes=%lu", (unsigned long)_chunkSizeBytes);
+    DGLogDebug(@"[Deepgram] init: chunkSizeBytes=%lu", (unsigned long)_chunkSizeBytes);
     _emitterQueue = dispatch_queue_create("com.deepgram.liveaudiostream",
                                           DISPATCH_QUEUE_SERIAL);
     memset(&_recordState, 0, sizeof(DGRecordState));
@@ -129,48 +143,48 @@ RCT_EXPORT_MODULE();
            selector:@selector(handleAppDidBecomeActive:)
                name:UIApplicationDidBecomeActiveNotification
              object:nil];
-    NSLog(@"[Deepgram] init: registered for UIApplicationDidBecomeActiveNotification");
+    DGLogDebug(@"[Deepgram] init: registered for UIApplicationDidBecomeActiveNotification");
     [[NSNotificationCenter defaultCenter]
         addObserver:self
            selector:@selector(handleAppDidEnterBackground:)
                name:UIApplicationDidEnterBackgroundNotification
              object:nil];
-    NSLog(@"[Deepgram] init: registered for UIApplicationDidEnterBackgroundNotification");
+    DGLogDebug(@"[Deepgram] init: registered for UIApplicationDidEnterBackgroundNotification");
 #endif
     [[NSNotificationCenter defaultCenter]
         addObserver:self
            selector:@selector(handleAudioRouteChange:)
                 name:AVAudioSessionRouteChangeNotification
               object:nil];
-    NSLog(@"[Deepgram] init: registered for AVAudioSessionRouteChangeNotification");
+    DGLogDebug(@"[Deepgram] init: registered for AVAudioSessionRouteChangeNotification");
   }
   return self;
 }
 
 - (void)dealloc
 {
-  NSLog(@"[Deepgram] dealloc: cleaning up recording queue and removing observers");
+  DGLogDebug(@"[Deepgram] dealloc: cleaning up recording queue and removing observers");
   [self cleanupRecordingQueue];
   [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 - (BOOL)activateAudioSession:(NSError **)outError
 {
-  NSLog(@"[Deepgram] activateAudioSession: begin (configured=%@)",
+  DGLogDebug(@"[Deepgram] activateAudioSession: begin (configured=%@)",
         self.audioSessionConfigured ? @"YES" : @"NO");
   __block BOOL success = YES;
   __block NSError *activationError = nil;
 
   RCTUnsafeExecuteOnMainQueueSync(^{
-    NSLog(@"[Deepgram] activateAudioSession: configuring on main queue");
+    DGLogDebug(@"[Deepgram] activateAudioSession: configuring on main queue");
     success = [self configureAudioSessionIfNeeded:&activationError];
   });
 
   if (!success && activationError) {
-    NSLog(@"[Deepgram] Failed to activate audio session: %@",
+    DGLogError(@"[Deepgram] Failed to activate audio session: %@",
           activationError.localizedDescription ?: activationError);
   } else {
-    NSLog(@"[Deepgram] activateAudioSession: success=%@", success ? @"YES" : @"NO");
+    DGLogDebug(@"[Deepgram] activateAudioSession: success=%@", success ? @"YES" : @"NO");
   }
 
   if (outError) {
@@ -182,11 +196,11 @@ RCT_EXPORT_MODULE();
 
 - (void)deactivateAudioSession
 {
-  NSLog(@"[Deepgram] deactivateAudioSession: begin");
+  DGLogDebug(@"[Deepgram] deactivateAudioSession: begin");
   RCTUnsafeExecuteOnMainQueueSync(^{
     NSError *error = nil;
     if (![[AVAudioSession sharedInstance] setActive:NO error:&error] && error) {
-      NSLog(@"[Deepgram] Failed to deactivate audio session: %@",
+      DGLogError(@"[Deepgram] Failed to deactivate audio session: %@",
             error.localizedDescription ?: error);
     }
   });
@@ -196,11 +210,11 @@ RCT_EXPORT_MODULE();
 - (BOOL)configureAudioSessionIfNeeded:(NSError **)outError
 {
   if (!self.audioSessionConfigured) {
-    NSLog(@"[Deepgram] configureAudioSessionIfNeeded: not configured, configuring");
+    DGLogDebug(@"[Deepgram] configureAudioSessionIfNeeded: not configured, configuring");
     return [self configureAudioSession:outError];
   }
 
-  NSLog(@"[Deepgram] configureAudioSessionIfNeeded: already configured, ensuring active");
+  DGLogDebug(@"[Deepgram] configureAudioSessionIfNeeded: already configured, ensuring active");
   NSError *activeError = nil;
   BOOL success = [[AVAudioSession sharedInstance] setActive:YES error:&activeError];
   if (!success || activeError) {
@@ -214,7 +228,7 @@ RCT_EXPORT_MODULE();
 
 - (BOOL)configureAudioSession:(NSError **)outError
 {
-  NSLog(@"[Deepgram] configureAudioSession: begin");
+  DGLogDebug(@"[Deepgram] configureAudioSession: begin");
   AVAudioSession *session = [AVAudioSession sharedInstance];
   NSError *error = nil;
 
@@ -223,14 +237,14 @@ RCT_EXPORT_MODULE();
                                            AVAudioSessionCategoryOptionAllowBluetooth;
 
   if (@available(iOS 10.0, *)) {
-    NSLog(@"[Deepgram] configureAudioSession: enabling AirPlay option");
+    DGLogDebug(@"[Deepgram] configureAudioSession: enabling AirPlay option");
     options |= AVAudioSessionCategoryOptionAllowAirPlay;
   }
 
   BOOL categorySuccess = NO;
 
   if (@available(iOS 10.0, *)) {
-    NSLog(@"[Deepgram] configureAudioSession: setCategory PlayAndRecord voice chat (iOS10+)");
+    DGLogDebug(@"[Deepgram] configureAudioSession: setCategory PlayAndRecord voice chat (iOS10+)");
     categorySuccess = [session setCategory:AVAudioSessionCategoryPlayAndRecord
                                      mode:AVAudioSessionModeVoiceChat
                                   options:options
@@ -238,7 +252,7 @@ RCT_EXPORT_MODULE();
   } else {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    NSLog(@"[Deepgram] configureAudioSession: setCategory legacy path");
+    DGLogDebug(@"[Deepgram] configureAudioSession: setCategory legacy path");
     categorySuccess = [session setCategory:AVAudioSessionCategoryPlayAndRecord
                              withOptions:options
                                    error:&error];
@@ -253,7 +267,7 @@ RCT_EXPORT_MODULE();
   }
 
   if (!categorySuccess || error) {
-    NSLog(@"[Deepgram] configureAudioSession: category failed error=%@",
+    DGLogError(@"[Deepgram] configureAudioSession: category failed error=%@",
           error.localizedDescription ?: error);
     if (outError) {
       *outError = error;
@@ -265,7 +279,7 @@ RCT_EXPORT_MODULE();
   NSError *activeError = nil;
   BOOL activeSuccess = [session setActive:YES error:&activeError];
   if (!activeSuccess || activeError) {
-    NSLog(@"[Deepgram] configureAudioSession: setActive failed error=%@",
+    DGLogError(@"[Deepgram] configureAudioSession: setActive failed error=%@",
           activeError.localizedDescription ?: activeError);
     if (outError) {
       *outError = activeError;
@@ -275,24 +289,24 @@ RCT_EXPORT_MODULE();
   }
 
   self.audioSessionConfigured = YES;
-  NSLog(@"[Deepgram] configureAudioSession: success");
+  DGLogDebug(@"[Deepgram] configureAudioSession: success");
   return YES;
 }
 
 - (void)maybeDeactivateAudioSession
 {
-  NSLog(@"[Deepgram] maybeDeactivateAudioSession: running=%@ playing=%@",
+  DGLogDebug(@"[Deepgram] maybeDeactivateAudioSession: running=%@ playing=%@",
         _recordState.isRunning ? @"YES" : @"NO",
         self.isPlaying ? @"YES" : @"NO");
   if (!_recordState.isRunning && !self.isPlaying) {
-    NSLog(@"[Deepgram] maybeDeactivateAudioSession: deactivating");
+    DGLogDebug(@"[Deepgram] maybeDeactivateAudioSession: deactivating");
     [self deactivateAudioSession];
   }
 }
 
 - (void)handleAudioRouteChange:(NSNotification *)note
 {
-  NSLog(@"[Deepgram] handleAudioRouteChange: %@", note.userInfo);
+  DGLogDebug(@"[Deepgram] handleAudioRouteChange: %@", note.userInfo);
   NSNumber *reasonValue = note.userInfo[AVAudioSessionRouteChangeReasonKey];
   AVAudioSessionRouteChangeReason reason = reasonValue
                                                  ? (AVAudioSessionRouteChangeReason)
@@ -308,39 +322,39 @@ RCT_EXPORT_MODULE();
   }
 
   if (!_recordState.isRunning && !self.isPlaying) {
-    NSLog(@"[Deepgram] handleAudioRouteChange: ignoring (inactive)");
+    DGLogDebug(@"[Deepgram] handleAudioRouteChange: ignoring (inactive)");
     return;
   }
 
   if (!self.appIsActive) {
-    NSLog(@"[Deepgram] handleAudioRouteChange: app inactive, skipping");
+    DGLogDebug(@"[Deepgram] handleAudioRouteChange: app inactive, skipping");
     return;
   }
 
   if (causedByCategory) {
-    NSLog(@"[Deepgram] handleAudioRouteChange: category change detected, keeping session");
+    DGLogDebug(@"[Deepgram] handleAudioRouteChange: category change detected, keeping session");
     return;
   }
 
-  NSLog(@"[Deepgram] handleAudioRouteChange: reactivating session");
+  DGLogDebug(@"[Deepgram] handleAudioRouteChange: reactivating session");
   [self activateAudioSession:NULL];
 }
 
 #if TARGET_OS_IOS
 - (void)handleAppDidBecomeActive:(NSNotification *)note
 {
-  NSLog(@"[Deepgram] handleAppDidBecomeActive: %@", note.userInfo);
+  DGLogDebug(@"[Deepgram] handleAppDidBecomeActive: %@", note.userInfo);
   self.appIsActive = YES;
 
   if (_recordState.isRunning || self.isPlaying) {
-    NSLog(@"[Deepgram] handleAppDidBecomeActive: reactivating session");
+    DGLogDebug(@"[Deepgram] handleAppDidBecomeActive: reactivating session");
     [self activateAudioSession:NULL];
   }
 }
 
 - (void)handleAppDidEnterBackground:(NSNotification *)note
 {
-  NSLog(@"[Deepgram] handleAppDidEnterBackground: %@", note.userInfo);
+  DGLogDebug(@"[Deepgram] handleAppDidEnterBackground: %@", note.userInfo);
   self.appIsActive = NO;
   [self maybeDeactivateAudioSession];
 }
@@ -349,7 +363,7 @@ RCT_EXPORT_MODULE();
 - (void)emitPCMChunk:(NSData *)chunk sampleRate:(int)sampleRate
 {
   if (!chunk || chunk.length == 0) {
-    NSLog(@"[Deepgram] emitPCMChunk: empty chunk, skipping");
+    DGLogDebug(@"[Deepgram] emitPCMChunk: empty chunk, skipping");
     return;
   }
 
@@ -358,22 +372,22 @@ RCT_EXPORT_MODULE();
   dispatch_queue_t queue = self.emitterQueue ?: dispatch_get_main_queue();
   dispatch_async(queue, ^{
     if (!weakSelf) {
-      NSLog(@"[Deepgram] emitPCMChunk: self released, aborting");
+      DGLogDebug(@"[Deepgram] emitPCMChunk: self released, aborting");
       return;
     }
 
     if (!weakSelf.hasListeners) {
-      NSLog(@"[Deepgram] emitPCMChunk: no listeners, dropping %lu bytes",
+      DGLogDebug(@"[Deepgram] emitPCMChunk: no listeners, dropping %lu bytes",
             (unsigned long)chunkCopy.length);
       return;
     }
 
     if (!weakSelf.bridge || !weakSelf.callableJSModules) {
-      NSLog(@"[Deepgram] Skipping DeepgramAudioPCM event (bridge not ready)");
+      DGLogDebug(@"[Deepgram] Skipping DeepgramAudioPCM event (bridge not ready)");
       return;
     }
 
-    NSLog(@"[Deepgram] emitPCMChunk: sending %lu bytes sampleRate=%d",
+    DGLogDebug(@"[Deepgram] emitPCMChunk: sending %lu bytes sampleRate=%d",
           (unsigned long)chunkCopy.length,
           sampleRate);
     NSString *b64 = [chunkCopy base64EncodedStringWithOptions:0];
@@ -385,16 +399,16 @@ RCT_EXPORT_MODULE();
 - (void)appendPCMDataAndEmitIfNeeded:(NSData *)pcmData
 {
   if (!pcmData || pcmData.length == 0) {
-    NSLog(@"[Deepgram] appendPCMDataAndEmitIfNeeded: empty PCM, skipping");
+    DGLogDebug(@"[Deepgram] appendPCMDataAndEmitIfNeeded: empty PCM, skipping");
     return;
   }
 
   if (!self.pendingPCMBuffer) {
-    NSLog(@"[Deepgram] appendPCMDataAndEmitIfNeeded: allocate pending buffer");
+    DGLogDebug(@"[Deepgram] appendPCMDataAndEmitIfNeeded: allocate pending buffer");
     self.pendingPCMBuffer = [[NSMutableData alloc] init];
   }
 
-  NSLog(@"[Deepgram] appendPCMDataAndEmitIfNeeded: append %lu bytes (pending=%lu)",
+  DGLogDebug(@"[Deepgram] appendPCMDataAndEmitIfNeeded: append %lu bytes (pending=%lu)",
         (unsigned long)pcmData.length,
         (unsigned long)self.pendingPCMBuffer.length);
   [self.pendingPCMBuffer appendData:pcmData];
@@ -407,7 +421,7 @@ RCT_EXPORT_MODULE();
     [self.pendingPCMBuffer replaceBytesInRange:NSMakeRange(0, chunkSize)
                                      withBytes:NULL
                                         length:0];
-    NSLog(@"[Deepgram] appendPCMDataAndEmitIfNeeded: emitting chunk %lu bytes remaining=%lu",
+    DGLogDebug(@"[Deepgram] appendPCMDataAndEmitIfNeeded: emitting chunk %lu bytes remaining=%lu",
           (unsigned long)chunk.length,
           (unsigned long)self.pendingPCMBuffer.length);
     [self emitPCMChunk:chunk sampleRate:self.currentSampleRate];
@@ -417,40 +431,40 @@ RCT_EXPORT_MODULE();
 - (void)flushPendingPCM
 {
   if (self.pendingPCMBuffer.length == 0) {
-    NSLog(@"[Deepgram] flushPendingPCM: nothing to flush");
+    DGLogDebug(@"[Deepgram] flushPendingPCM: nothing to flush");
     return;
   }
 
   NSData *remaining = [self.pendingPCMBuffer copy];
   [self.pendingPCMBuffer setLength:0];
-  NSLog(@"[Deepgram] flushPendingPCM: flushing %lu bytes",
+  DGLogDebug(@"[Deepgram] flushPendingPCM: flushing %lu bytes",
         (unsigned long)remaining.length);
   [self emitPCMChunk:remaining sampleRate:self.currentSampleRate];
 }
 
 - (void)cleanupRecordingQueue
 {
-  NSLog(@"[Deepgram] cleanupRecordingQueue: begin");
+  DGLogDebug(@"[Deepgram] cleanupRecordingQueue: begin");
   _recordState.isRunning = false;
 
   if (_recordState.queue) {
-    NSLog(@"[Deepgram] cleanupRecordingQueue: stopping queue");
+    DGLogDebug(@"[Deepgram] cleanupRecordingQueue: stopping queue");
     AudioQueueStop(_recordState.queue, true);
 
     for (int i = 0; i < DGNumberBuffers; i++) {
       if (_recordState.buffers[i]) {
-        NSLog(@"[Deepgram] cleanupRecordingQueue: freeing buffer %d", i);
+        DGLogDebug(@"[Deepgram] cleanupRecordingQueue: freeing buffer %d", i);
         AudioQueueFreeBuffer(_recordState.queue, _recordState.buffers[i]);
         _recordState.buffers[i] = NULL;
       }
     }
 
-    NSLog(@"[Deepgram] cleanupRecordingQueue: disposing queue");
+    DGLogDebug(@"[Deepgram] cleanupRecordingQueue: disposing queue");
     AudioQueueDispose(_recordState.queue, true);
   }
 
   memset(&_recordState, 0, sizeof(DGRecordState));
-  NSLog(@"[Deepgram] cleanupRecordingQueue: state cleared");
+  DGLogDebug(@"[Deepgram] cleanupRecordingQueue: state cleared");
   [self maybeDeactivateAudioSession];
 }
 
@@ -462,23 +476,23 @@ RCT_EXPORT_METHOD(startRecording
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
   @try {
-    NSLog(@"[Deepgram] startRecording: begin");
+    DGLogDebug(@"[Deepgram] startRecording: begin");
     self.currentSampleRate = 16000;
-    NSLog(@"[Deepgram] startRecording: targetSampleRate=%d", self.currentSampleRate);
+    DGLogDebug(@"[Deepgram] startRecording: targetSampleRate=%d", self.currentSampleRate);
     NSError *sessionError = nil;
     if (![self activateAudioSession:&sessionError]) {
       NSString *message = sessionError.localizedDescription ?: @"Failed to activate audio session";
-      NSLog(@"[Deepgram] startRecording: activation failed %@", message);
+      DGLogError(@"[Deepgram] startRecording: activation failed %@", message);
       if (reject) reject(@"record_start_error", message, sessionError);
       return;
     }
 
     if (_recordState.isRunning) {
-      NSLog(@"[Deepgram] startRecording: record state already running, cleaning up");
+      DGLogDebug(@"[Deepgram] startRecording: record state already running, cleaning up");
       [self cleanupRecordingQueue];
     }
 
-    NSLog(@"[Deepgram] startRecording: resetting buffers");
+    DGLogDebug(@"[Deepgram] startRecording: resetting buffers");
     self.pendingPCMBuffer = [[NSMutableData alloc] init];
 
     memset(&_recordState, 0, sizeof(DGRecordState));
@@ -507,7 +521,7 @@ RCT_EXPORT_METHOD(startRecording
                                    targetSecondsPerChunk));
     self.chunkSizeBytes = defaultChunkSize;
     _recordState.bufferByteSize = (UInt32)self.chunkSizeBytes;
-    NSLog(@"[Deepgram] startRecording: bufferByteSize=%u (chunkSize=%lu)",
+    DGLogDebug(@"[Deepgram] startRecording: bufferByteSize=%u (chunkSize=%lu)",
           (unsigned int)_recordState.bufferByteSize,
           (unsigned long)self.chunkSizeBytes);
 
@@ -522,7 +536,7 @@ RCT_EXPORT_METHOD(startRecording
     if (status != noErr) {
       NSString *message =
           [NSString stringWithFormat:@"AudioQueueNewInput failed: %d", (int)status];
-      NSLog(@"[Deepgram] startRecording: %@", message);
+      DGLogError(@"[Deepgram] startRecording: %@", message);
       [self cleanupRecordingQueue];
       if (reject) reject(@"record_start_error", message, nil);
       return;
@@ -536,7 +550,7 @@ RCT_EXPORT_METHOD(startRecording
                                    &actualFormatSize);
     if (status == noErr) {
       int resolvedSampleRate = (int)llround(actualFormat.mSampleRate);
-      NSLog(@"[Deepgram] startRecording: actual sampleRate=%f (%d)",
+      DGLogDebug(@"[Deepgram] startRecording: actual sampleRate=%f (%d)",
             actualFormat.mSampleRate,
             resolvedSampleRate);
       if (resolvedSampleRate > 0) {
@@ -551,11 +565,11 @@ RCT_EXPORT_METHOD(startRecording
       if (adaptiveChunk > 0 && adaptiveChunk != self.chunkSizeBytes) {
         self.chunkSizeBytes = adaptiveChunk;
         _recordState.bufferByteSize = adaptiveChunk;
-        NSLog(@"[Deepgram] startRecording: adjusted chunkSize=%lu",
+        DGLogDebug(@"[Deepgram] startRecording: adjusted chunkSize=%lu",
               (unsigned long)self.chunkSizeBytes);
       }
     } else {
-      NSLog(@"[Deepgram] startRecording: failed to read stream description %d", (int)status);
+      DGLogError(@"[Deepgram] startRecording: failed to read stream description %d", (int)status);
     }
 
     for (int i = 0; i < DGNumberBuffers; i++) {
@@ -565,7 +579,7 @@ RCT_EXPORT_METHOD(startRecording
       if (status != noErr) {
         NSString *message = [NSString
             stringWithFormat:@"AudioQueueAllocateBuffer failed: %d", (int)status];
-        NSLog(@"[Deepgram] startRecording: %@", message);
+        DGLogError(@"[Deepgram] startRecording: %@", message);
         [self cleanupRecordingQueue];
         if (reject) reject(@"record_start_error", message, nil);
         return;
@@ -578,7 +592,7 @@ RCT_EXPORT_METHOD(startRecording
       if (status != noErr) {
         NSString *message = [NSString
             stringWithFormat:@"AudioQueueEnqueueBuffer failed: %d", (int)status];
-        NSLog(@"[Deepgram] startRecording: %@", message);
+        DGLogError(@"[Deepgram] startRecording: %@", message);
         [self cleanupRecordingQueue];
         if (reject) reject(@"record_start_error", message, nil);
         return;
@@ -589,17 +603,17 @@ RCT_EXPORT_METHOD(startRecording
     if (status != noErr) {
       NSString *message =
           [NSString stringWithFormat:@"AudioQueueStart failed: %d", (int)status];
-      NSLog(@"[Deepgram] startRecording: %@", message);
+      DGLogError(@"[Deepgram] startRecording: %@", message);
       [self cleanupRecordingQueue];
       if (reject) reject(@"record_start_error", message, nil);
       return;
     }
 
-    NSLog(@"[Deepgram] startRecording: success");
+    DGLogDebug(@"[Deepgram] startRecording: success");
     if (resolve) resolve(nil);
   }
   @catch (NSException *e) {
-    NSLog(@"[Deepgram] startRecording: exception %@", e);
+    DGLogError(@"[Deepgram] startRecording: exception %@", e);
     [self cleanupRecordingQueue];
     if (reject) reject(@"record_start_error", e.reason, nil);
   }
@@ -610,15 +624,15 @@ RCT_EXPORT_METHOD(stopRecording
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
   @try {
-    NSLog(@"[Deepgram] stopRecording: begin");
+    DGLogDebug(@"[Deepgram] stopRecording: begin");
     [self cleanupRecordingQueue];
     [self flushPendingPCM];
     self.pendingPCMBuffer = nil;
-    NSLog(@"[Deepgram] stopRecording: finished");
+    DGLogDebug(@"[Deepgram] stopRecording: finished");
     if (resolve) resolve(nil);
   }
   @catch (NSException *e) {
-    NSLog(@"[Deepgram] stopRecording: exception %@", e);
+    DGLogError(@"[Deepgram] stopRecording: exception %@", e);
     if (reject) reject(@"record_stop_error", e.reason, nil);
   }
 }
@@ -628,27 +642,27 @@ RCT_EXPORT_METHOD(startAudio
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
   @try {
-    NSLog(@"[Deepgram] startAudio: begin");
+    DGLogDebug(@"[Deepgram] startAudio: begin");
     NSError *sessionError = nil;
     if (![self activateAudioSession:&sessionError]) {
       NSString *message = sessionError.localizedDescription ?: @"Failed to activate audio session";
-      NSLog(@"[Deepgram] startAudio: activation failed %@", message);
+      DGLogError(@"[Deepgram] startAudio: activation failed %@", message);
       if (reject) reject(@"audio_start_error", message, sessionError);
       return;
     }
     if (!self.audioBuffer) {
       self.audioBuffer = [[NSMutableData alloc] init];
-      NSLog(@"[Deepgram] startAudio: created audioBuffer");
+      DGLogDebug(@"[Deepgram] startAudio: created audioBuffer");
     }
     if (self.currentSampleRate <= 0) {
       self.currentSampleRate = 16000;
-      NSLog(@"[Deepgram] startAudio: default sample rate applied %d", self.currentSampleRate);
+      DGLogDebug(@"[Deepgram] startAudio: default sample rate applied %d", self.currentSampleRate);
     }
-    NSLog(@"[Deepgram] startAudio: success");
+    DGLogDebug(@"[Deepgram] startAudio: success");
     if (resolve) resolve(nil);
   }
   @catch (NSException *e) {
-    NSLog(@"[Deepgram] startAudio: exception %@", e);
+    DGLogError(@"[Deepgram] startAudio: exception %@", e);
     if (reject) reject(@"audio_start_error", e.reason, nil);
   }
 }
@@ -658,13 +672,13 @@ RCT_EXPORT_METHOD(stopAudio
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
   @try {
-    NSLog(@"[Deepgram] stopAudio: begin");
+    DGLogDebug(@"[Deepgram] stopAudio: begin");
     [self stopPlayer:nil rejecter:nil];
-    NSLog(@"[Deepgram] stopAudio: success");
+    DGLogDebug(@"[Deepgram] stopAudio: success");
     if (resolve) resolve(nil);
   }
   @catch (NSException *e) {
-    NSLog(@"[Deepgram] stopAudio: exception %@", e);
+    DGLogError(@"[Deepgram] stopAudio: exception %@", e);
     if (reject) reject(@"audio_stop_error", e.reason, nil);
   }
 }
@@ -717,13 +731,13 @@ RCT_EXPORT_METHOD(startPlayer
                   :(nonnull NSNumber *)sampleRate
                   channels:(nonnull NSNumber *)channels)
 {
-  NSLog(@"[Deepgram] startPlayer: begin sampleRate=%@ channels=%@",
+  DGLogDebug(@"[Deepgram] startPlayer: begin sampleRate=%@ channels=%@",
         sampleRate,
         channels);
   [self stopPlayer:nil rejecter:nil];
   NSError *sessionError = nil;
   if (![self activateAudioSession:&sessionError]) {
-    NSLog(@"[Deepgram] Unable to activate audio session for playback: %@",
+    DGLogWarn(@"[Deepgram] Unable to activate audio session for playback: %@",
           sessionError.localizedDescription ?: sessionError);
     return;
   }
@@ -731,7 +745,7 @@ RCT_EXPORT_METHOD(startPlayer
   self.audioBuffer = [[NSMutableData alloc] init];
   self.isPlaying = NO;
   self.currentSampleRate = sampleRate.intValue;
-  NSLog(@"[Deepgram] startPlayer: initialized buffer sampleRate=%d",
+  DGLogDebug(@"[Deepgram] startPlayer: initialized buffer sampleRate=%d",
         self.currentSampleRate);
 }
 
@@ -740,27 +754,27 @@ RCT_EXPORT_METHOD(startPlayer
  */
 RCT_EXPORT_METHOD(feedAudio:(NSString *)b64)
 {
-  NSLog(@"[Deepgram] feedAudio: begin length=%lu", (unsigned long)b64.length);
+  DGLogDebug(@"[Deepgram] feedAudio: begin length=%lu", (unsigned long)b64.length);
   if (!self.audioBuffer) {
     // Use default sample rate if not set
     int defaultSampleRate = self.currentSampleRate > 0 ? self.currentSampleRate : 16000;
-    NSLog(@"[Deepgram] feedAudio: auto startPlayer defaultSampleRate=%d", defaultSampleRate);
+    DGLogDebug(@"[Deepgram] feedAudio: auto startPlayer defaultSampleRate=%d", defaultSampleRate);
     [self startPlayer:@(defaultSampleRate) channels:@1];
   }
 
   NSData *pcmData = [[NSData alloc] initWithBase64EncodedString:b64 options:0];
   if (!pcmData || pcmData.length == 0) {
-    NSLog(@"[Deepgram] feedAudio: decoded data empty");
+    DGLogDebug(@"[Deepgram] feedAudio: decoded data empty");
     return;
   }
 
   [self.audioBuffer appendData:pcmData];
-  NSLog(@"[Deepgram] feedAudio: appended %lu bytes (buffer=%lu)",
+  DGLogDebug(@"[Deepgram] feedAudio: appended %lu bytes (buffer=%lu)",
         (unsigned long)pcmData.length,
         (unsigned long)self.audioBuffer.length);
 
   if (!self.isPlaying && self.audioBuffer.length > 1000) {
-    NSLog(@"[Deepgram] feedAudio: triggering playback");
+    DGLogDebug(@"[Deepgram] feedAudio: triggering playback");
     [self playAccumulatedAudio];
   }
 }
@@ -770,7 +784,7 @@ RCT_EXPORT_METHOD(feedAudio:(NSString *)b64)
  */
 - (void)playAccumulatedAudio {
   if (!self.audioBuffer || self.audioBuffer.length == 0) {
-    NSLog(@"[Deepgram] playAccumulatedAudio: no buffered audio");
+    DGLogDebug(@"[Deepgram] playAccumulatedAudio: no buffered audio");
     return;
   }
 
@@ -780,7 +794,7 @@ RCT_EXPORT_METHOD(feedAudio:(NSString *)b64)
   AVAudioPlayer *player = [[AVAudioPlayer alloc] initWithData:wavData error:&error];
 
   if (error) {
-    NSLog(@"[Deepgram] playAccumulatedAudio: player error=%@", error);
+    DGLogError(@"[Deepgram] playAccumulatedAudio: player error=%@", error);
     return;
   }
 
@@ -792,10 +806,10 @@ RCT_EXPORT_METHOD(feedAudio:(NSString *)b64)
   BOOL success = [player play];
 
   if (success) {
-    NSLog(@"[Deepgram] playAccumulatedAudio: playback started, clearing buffer");
+    DGLogDebug(@"[Deepgram] playAccumulatedAudio: playback started, clearing buffer");
     [self.audioBuffer setLength:0];
   } else {
-    NSLog(@"[Deepgram] playAccumulatedAudio: failed to start playback");
+    DGLogError(@"[Deepgram] playAccumulatedAudio: failed to start playback");
     self.isPlaying = NO;
   }
 }
@@ -804,20 +818,20 @@ RCT_EXPORT_METHOD(feedAudio:(NSString *)b64)
  * Play PCM data immediately using AVAudioPlayer.
  */
 - (void)playPCMData:(NSData *)pcmData {
-  NSLog(@"[Deepgram] playPCMData: begin length=%lu", (unsigned long)pcmData.length);
+  DGLogDebug(@"[Deepgram] playPCMData: begin length=%lu", (unsigned long)pcmData.length);
   NSData *wavData = [self createWAVHeaderForPCMData:pcmData sampleRate:self.currentSampleRate];
 
   NSError *error = nil;
   AVAudioPlayer *player = [[AVAudioPlayer alloc] initWithData:wavData error:&error];
 
   if (error) {
-    NSLog(@"[Deepgram] playPCMData: player error=%@", error);
+    DGLogError(@"[Deepgram] playPCMData: player error=%@", error);
     return;
   }
 
   self.audioPlayer = player;
   [player prepareToPlay];
-  NSLog(@"[Deepgram] playPCMData: playing");
+  DGLogDebug(@"[Deepgram] playPCMData: playing");
   [player play];
 }
 
@@ -829,10 +843,10 @@ RCT_EXPORT_METHOD(stopPlayer
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
   @try {
-    NSLog(@"[Deepgram] stopPlayer: begin");
+    DGLogDebug(@"[Deepgram] stopPlayer: begin");
     if (self.audioPlayer) {
       [self.audioPlayer stop];
-      NSLog(@"[Deepgram] stopPlayer: stopped audioPlayer");
+      DGLogDebug(@"[Deepgram] stopPlayer: stopped audioPlayer");
       self.audioPlayer = nil;
     }
 
@@ -841,12 +855,12 @@ RCT_EXPORT_METHOD(stopPlayer
 
     [self maybeDeactivateAudioSession];
 
-    NSLog(@"[Deepgram] stopPlayer: success");
+    DGLogDebug(@"[Deepgram] stopPlayer: success");
     if (resolve) resolve(nil);
   }
   @catch (NSException *e) {
-    NSLog(@"[Deepgram] Error stopping player: %@", e.reason);
-    NSLog(@"[Deepgram] stopPlayer: exception %@", e);
+    DGLogError(@"[Deepgram] Error stopping player: %@", e.reason);
+    DGLogError(@"[Deepgram] stopPlayer: exception %@", e);
     if (reject) reject(@"player_stop_error", e.reason, nil);
   }
 }
@@ -858,7 +872,7 @@ RCT_EXPORT_METHOD(setAudioConfig
                   :(nonnull NSNumber *)sampleRate
                   channels:(nonnull NSNumber *)channels)
 {
-  NSLog(@"[Deepgram] setAudioConfig: sampleRate=%@ channels=%@", sampleRate, channels);
+  DGLogDebug(@"[Deepgram] setAudioConfig: sampleRate=%@ channels=%@", sampleRate, channels);
   [self startPlayer:sampleRate channels:channels];
 }
 
@@ -871,21 +885,21 @@ RCT_EXPORT_METHOD(playAudioChunk
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
   @try {
-    NSLog(@"[Deepgram] playAudioChunk: begin");
+    DGLogDebug(@"[Deepgram] playAudioChunk: begin");
     NSData *pcmData = [[NSData alloc] initWithBase64EncodedString:chunk options:0];
     if (!pcmData) {
-      NSLog(@"[Deepgram] playAudioChunk: failed to decode base64");
+      DGLogError(@"[Deepgram] playAudioChunk: failed to decode base64");
       if (reject) reject(@"invalid_data", @"Failed to decode audio data", nil);
       return;
     }
 
     [self playPCMData:pcmData];
 
-    NSLog(@"[Deepgram] playAudioChunk: success");
+    DGLogDebug(@"[Deepgram] playAudioChunk: success");
     if (resolve) resolve(nil);
   }
   @catch (NSException *e) {
-    NSLog(@"[Deepgram] playAudioChunk: exception %@", e);
+    DGLogError(@"[Deepgram] playAudioChunk: exception %@", e);
     if (reject) reject(@"playback_error", e.reason, nil);
   }
 }
@@ -895,17 +909,17 @@ RCT_EXPORT_METHOD(playAudioChunk
 /* ================================================================== */
 
 - (void)audioPlayerDidFinishPlaying:(AVAudioPlayer *)player successfully:(BOOL)flag {
-  NSLog(@"[Deepgram] audioPlayerDidFinishPlaying: success=%@", flag ? @"YES" : @"NO");
+  DGLogDebug(@"[Deepgram] audioPlayerDidFinishPlaying: success=%@", flag ? @"YES" : @"NO");
   self.isPlaying = NO;
 
   if (self.audioBuffer && self.audioBuffer.length > 0) {
-    NSLog(@"[Deepgram] audioPlayerDidFinishPlaying: playing remaining buffered audio");
+    DGLogDebug(@"[Deepgram] audioPlayerDidFinishPlaying: playing remaining buffered audio");
     [self playAccumulatedAudio];
   }
 }
 
 - (void)audioPlayerDecodeErrorDidOccur:(AVAudioPlayer *)player error:(NSError *)error {
-  NSLog(@"[Deepgram] audioPlayerDecodeErrorDidOccur: error=%@", error);
+  DGLogError(@"[Deepgram] audioPlayerDecodeErrorDidOccur: error=%@", error);
   self.isPlaying = NO;
 }
 

@@ -282,8 +282,6 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
       audioBuffer = ByteArray(0)
     }
     isPlaying = false
-    
-    Log.d(TAG, "Audio player initialized: ${sampleRate}Hz, ${channels} channels")
   }
 
   @ReactMethod
@@ -296,8 +294,6 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     try {
       val audioData = Base64.decode(base64Audio, Base64.DEFAULT)
       if (audioData.isEmpty()) return
-      
-      Log.d(TAG, "Feeding ${audioData.size} bytes of audio for streaming")
       
       // Add audio data to buffer
       synchronized(bufferLock) {
@@ -343,7 +339,6 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
           }
           
           if (dataToPlay.isNotEmpty()) {
-            Log.d(TAG, "Playing accumulated audio: ${dataToPlay.size} bytes")
             val written = audioTrack?.write(dataToPlay, 0, dataToPlay.size) ?: 0
             
             if (written < 0) {
@@ -360,7 +355,6 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
         Log.e(TAG, "Streaming playback error", e)
       } finally {
         isPlaying = false
-        Log.d(TAG, "Streaming playback finished")
       }
     }
     
@@ -385,7 +379,6 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
   fun stopPlayer(promise: Promise?) {
     try {
       stopStreamingPlayback()
-      Log.d(TAG, "Audio player stopped and cleaned up")
       promise?.resolve(null)
     } catch (e: Exception) {
       Log.e(TAG, "stopPlayer error", e)
@@ -400,7 +393,6 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
   @ReactMethod
   fun playAudioChunk(chunk: String, promise: Promise) {
     try {
-      Log.d(TAG, "Playing single audio chunk")
       
       val audioData = Base64.decode(chunk, Base64.DEFAULT)
       if (audioData.isEmpty()) {

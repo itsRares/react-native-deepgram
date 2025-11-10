@@ -6,6 +6,7 @@ import type {
   DeepgramLiveListenOptions,
   DeepgramPrerecordedOptions,
   DeepgramPrerecordedSource,
+  DeepgramTranscriptEvent,
   UseDeepgramSpeechToTextProps,
   UseDeepgramSpeechToTextReturn,
 } from './types';
@@ -65,6 +66,8 @@ export function useDeepgramSpeechToText({
   const nativeInputSampleRateRef = useRef(BASE_NATIVE_SAMPLE_RATE);
   const targetSampleRateRef = useRef(DEFAULT_SAMPLE_RATE);
   const downsampleFactorRef = useRef(1);
+  const lastPartialTranscriptRef = useRef('');
+  const lastFinalTranscriptRef = useRef('');
 
   const closeEverything = () => {
     audioSub.current?.remove();
@@ -72,6 +75,8 @@ export function useDeepgramSpeechToText({
     nativeInputSampleRateRef.current = BASE_NATIVE_SAMPLE_RATE;
     targetSampleRateRef.current = DEFAULT_SAMPLE_RATE;
     downsampleFactorRef.current = 1;
+    lastPartialTranscriptRef.current = '';
+    lastFinalTranscriptRef.current = '';
     if (
       apiVersionRef.current === 'v2' &&
       ws.current?.readyState === WebSocket.OPEN
@@ -87,10 +92,50 @@ export function useDeepgramSpeechToText({
     apiVersionRef.current = 'v1';
   };
 
+  const emitTranscript = useCallback(
+    (transcript: unknown, isFinal: boolean, raw: unknown) => {
+      if (typeof onTranscript !== 'function') {
+        return;
+      }
+
+      if (typeof transcript !== 'string') {
+        return;
+      }
+
+      const normalized = transcript.trim();
+      if (!normalized) {
+        return;
+      }
+
+      if (isFinal) {
+        if (lastFinalTranscriptRef.current === normalized) {
+          return;
+        }
+        lastFinalTranscriptRef.current = normalized;
+        lastPartialTranscriptRef.current = '';
+      } else {
+        if (lastPartialTranscriptRef.current === normalized) {
+          return;
+        }
+        lastPartialTranscriptRef.current = normalized;
+      }
+
+      const event: DeepgramTranscriptEvent = { isFinal, raw };
+      onTranscript(normalized, event);
+
+      if (isFinal) {
+        lastPartialTranscriptRef.current = '';
+      }
+    },
+    [onTranscript]
+  );
+
   const startListening = useCallback(
     async (overrideOptions: DeepgramLiveListenOptions = {}) => {
       try {
         onBeforeStart();
+        lastPartialTranscriptRef.current = '';
+        lastFinalTranscriptRef.current = '';
 
         const granted = await askMicPermission();
         if (!granted) throw new Error('Microphone permission denied');
@@ -259,13 +304,29 @@ export function useDeepgramSpeechToText({
 
                 const transcript = msg.transcript;
                 if (typeof transcript === 'string' && transcript.length > 0) {
-                  onTranscript(transcript);
+                  const type =
+                    typeof msg.type === 'string'
+                      ? msg.type.toLowerCase()
+                      : undefined;
+                  const isFinal =
+                    msg.is_final === true ||
+                    msg.speech_final === true ||
+                    msg.finished === true ||
+                    type === 'utteranceend' ||
+                    type === 'speechfinal' ||
+                    type === 'speech.end' ||
+                    (typeof type === 'string' && type.includes('final'));
+                  emitTranscript(transcript, Boolean(isFinal), msg);
                 }
                 return;
               }
 
               const transcript = msg.channel?.alternatives?.[0]?.transcript;
-              if (transcript) onTranscript(transcript);
+              if (typeof transcript === 'string') {
+                const isFinal =
+                  msg.is_final === true || msg.speech_final === true;
+                emitTranscript(transcript, Boolean(isFinal), msg);
+              }
             } catch {
               // non-JSON or unexpected format
             }
@@ -282,7 +343,7 @@ export function useDeepgramSpeechToText({
         closeEverything();
       }
     },
-    [onBeforeStart, onStart, onTranscript, onError, onEnd, live]
+    [emitTranscript, onBeforeStart, onStart, onError, onEnd, live]
   );
 
   const stopListening = useCallback(() => {

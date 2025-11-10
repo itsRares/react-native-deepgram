@@ -17,6 +17,7 @@ export default function SpeechToText() {
     'idle'
   );
   const [liveError, setLiveError] = useState<string | null>(null);
+  const [liveInterimTranscript, setLiveInterimTranscript] = useState('');
 
   // file transcription state
   const [fileTranscript, setFileTranscript] = useState('');
@@ -30,20 +31,31 @@ export default function SpeechToText() {
       onBeforeStart: () => {
         setLiveStatus('listening');
         setLiveTranscript('');
+        setLiveInterimTranscript('');
         setLiveError(null);
       },
       onStart: () => {
         // WebSocket opened
       },
-      onTranscript: (text) => {
-        setLiveTranscript((prev) => prev + ' ' + text);
+      onTranscript: (text, info) => {
+        if (info?.isFinal) {
+          setLiveTranscript((prev) => {
+            const next = prev ? `${prev} ${text}` : text;
+            return next.trim();
+          });
+          setLiveInterimTranscript('');
+        } else {
+          setLiveInterimTranscript(text);
+        }
       },
       onError: (err) => {
         setLiveStatus('error');
         setLiveError(err instanceof Error ? err.message : String(err));
+        setLiveInterimTranscript('');
       },
       onEnd: () => {
         setLiveStatus('idle');
+        setLiveInterimTranscript('');
       },
       // file callbacks
       onBeforeTranscribe: () => {
@@ -95,6 +107,10 @@ export default function SpeechToText() {
     }
   };
 
+  const combinedLiveTranscript = [liveTranscript, liveInterimTranscript]
+    .filter(Boolean)
+    .join(' ');
+
   return (
     <View style={styles.container}>
       {/* Live mic controls */}
@@ -116,7 +132,7 @@ export default function SpeechToText() {
       {liveError && <Text style={styles.error}>Error: {liveError}</Text>}
       <ScrollView style={styles.outputContainer}>
         <Text style={styles.transcript}>
-          🎤 Live: {liveTranscript || 'No live transcript yet.'}
+          🎤 Live: {combinedLiveTranscript || 'No live transcript yet.'}
         </Text>
       </ScrollView>
 

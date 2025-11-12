@@ -255,13 +255,20 @@ export type DeepgramPrerecordedSource =
   | { url: string }
   | string;
 
+export type DeepgramTranscriptEvent = {
+  /** Indicates whether the transcript represents a finalized utterance. */
+  isFinal?: boolean;
+  /** Raw payload received from Deepgram for custom handling or inspection. */
+  raw?: unknown;
+};
+
 export type UseDeepgramSpeechToTextProps = {
   /** Called before any setup (e.g. before permission prompt) */
   onBeforeStart?: () => void;
   /** Called once the WebSocket is open */
   onStart?: () => void;
   /** Called on every transcript update */
-  onTranscript?: (transcript: string) => void;
+  onTranscript?: (transcript: string, event?: DeepgramTranscriptEvent) => void;
   /** Called on any error */
   onError?: (error: unknown) => void;
   /** Called when the session ends or WebSocket closes */

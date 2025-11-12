@@ -1,6 +1,6 @@
 {
   "name": "react-native-deepgram",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "React Native SDK for Deepgram's AI-powered speech-to-text, real-time transcription, and text intelligence APIs. Supports live audio streaming, file transcription, sentiment analysis, and topic detection for iOS and Android.",
   "source": "./src/index.tsx",
   "main": "./lib/commonjs/index.js",
@@ -49,9 +49,12 @@
     "release": "release-it --only-version",
     "build": "npx react-native-builder-bob build",
     "build:plugin": "npx tsc --build plugin",
+    "start": "yarn workspace react-native-deepgram-example start",
+    "build:pod": "cd example && cd ios && npx pod-install && cd ..",
     "example": "yarn workspace react-native-deepgram-example start",
     "example:ios": "yarn workspace react-native-deepgram-example ios",
-    "example:android": "yarn workspace react-native-deepgram-example android"
+    "example:android": "yarn workspace react-native-deepgram-example android",
+    "build:all": "yarn install && yarn build && yarn build:plugin && yarn build:pod"
   },
   "keywords": [
     "react-native",

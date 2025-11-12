@@ -102,16 +102,33 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     }
   }
 
+  private fun stopRecordingInternal(throwOnError: Boolean = true) {
+    isRecording = false
+    recordingThread?.interrupt()
+    recordingThread = null
+
+    try {
+      audioRecord?.stop()
+    } catch (e: Exception) {
+      Log.w(TAG, "stopRecordingInternal: error stopping AudioRecord", e)
+      if (throwOnError) throw e
+    }
+
+    try {
+      audioRecord?.release()
+    } catch (e: Exception) {
+      Log.w(TAG, "stopRecordingInternal: error releasing AudioRecord", e)
+      if (throwOnError) throw e
+    }
+
+    audioRecord = null
+    releaseAudioEffects()
+  }
+
   @ReactMethod
   fun stopRecording(promise: Promise) {
     try {
-      isRecording = false
-      recordingThread?.interrupt()
-      recordingThread = null
-      audioRecord?.stop()
-      audioRecord?.release()
-      audioRecord = null
-      releaseAudioEffects()
+      stopRecordingInternal()
       promise.resolve(null)
     } catch (e: Exception) {
       Log.e(TAG, "stopRecording error", e)
@@ -254,12 +271,28 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     }
   }
 
+  private fun stopAudioInternal(throwOnError: Boolean = true) {
+    try {
+      audioTrack?.stop()
+    } catch (e: Exception) {
+      Log.w(TAG, "stopAudioInternal: error stopping AudioTrack", e)
+      if (throwOnError) throw e
+    }
+
+    try {
+      audioTrack?.release()
+    } catch (e: Exception) {
+      Log.w(TAG, "stopAudioInternal: error releasing AudioTrack", e)
+      if (throwOnError) throw e
+    }
+
+    audioTrack = null
+  }
+
   @ReactMethod
   fun stopAudio(promise: Promise) {
     try {
-      audioTrack?.stop()
-      audioTrack?.release()
-      audioTrack = null
+      stopAudioInternal()
       promise.resolve(null)
     } catch (e: Exception) {
       Log.e(TAG, "stopAudio error", e)
@@ -282,8 +315,6 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
       audioBuffer = ByteArray(0)
     }
     isPlaying = false
-    
-    Log.d(TAG, "Audio player initialized: ${sampleRate}Hz, ${channels} channels")
   }
 
   @ReactMethod
@@ -296,8 +327,6 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     try {
       val audioData = Base64.decode(base64Audio, Base64.DEFAULT)
       if (audioData.isEmpty()) return
-      
-      Log.d(TAG, "Feeding ${audioData.size} bytes of audio for streaming")
       
       // Add audio data to buffer
       synchronized(bufferLock) {
@@ -343,7 +372,6 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
           }
           
           if (dataToPlay.isNotEmpty()) {
-            Log.d(TAG, "Playing accumulated audio: ${dataToPlay.size} bytes")
             val written = audioTrack?.write(dataToPlay, 0, dataToPlay.size) ?: 0
             
             if (written < 0) {
@@ -360,24 +388,25 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
         Log.e(TAG, "Streaming playback error", e)
       } finally {
         isPlaying = false
-        Log.d(TAG, "Streaming playback finished")
       }
     }
     
     playbackThread?.start()
   }
 
-  private fun stopStreamingPlayback() {
+  private fun stopStreamingPlayback(throwOnError: Boolean = true) {
     isPlaying = false
     playbackThread?.interrupt()
     playbackThread = null
-    
-    audioTrack?.stop()
-    audioTrack?.release()
-    audioTrack = null
-    
-    synchronized(bufferLock) {
-      audioBuffer = ByteArray(0)
+
+    try {
+      stopAudioInternal(throwOnError)
+    } catch (e: Exception) {
+      if (throwOnError) throw e else Log.w(TAG, "stopStreamingPlayback: error stopping audio", e)
+    } finally {
+      synchronized(bufferLock) {
+        audioBuffer = ByteArray(0)
+      }
     }
   }
 
@@ -385,12 +414,26 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
   fun stopPlayer(promise: Promise?) {
     try {
       stopStreamingPlayback()
-      Log.d(TAG, "Audio player stopped and cleaned up")
       promise?.resolve(null)
     } catch (e: Exception) {
       Log.e(TAG, "stopPlayer error", e)
       promise?.reject("stop_player_error", e)
     }
+  }
+
+  override fun onCatalystInstanceDestroy() {
+    try {
+      stopRecordingInternal(false)
+    } catch (e: Exception) {
+      Log.w(TAG, "Error stopping recording on catalyst destroy", e)
+    }
+
+    try {
+      stopStreamingPlayback(false)
+    } catch (e: Exception) {
+      Log.w(TAG, "Error stopping playback on catalyst destroy", e)
+    }
+    super.onCatalystInstanceDestroy()
   }
 
   // -------------------------------------------------------------------
@@ -400,7 +443,6 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
   @ReactMethod
   fun playAudioChunk(chunk: String, promise: Promise) {
     try {
-      Log.d(TAG, "Playing single audio chunk")
       
       val audioData = Base64.decode(chunk, Base64.DEFAULT)
       if (audioData.isEmpty()) {

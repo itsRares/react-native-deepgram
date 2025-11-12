@@ -6,6 +6,7 @@ import type {
   DeepgramLiveListenOptions,
   DeepgramPrerecordedOptions,
   DeepgramPrerecordedSource,
+  DeepgramTranscriptEvent,
   UseDeepgramSpeechToTextProps,
   UseDeepgramSpeechToTextReturn,
 } from './types';
@@ -15,6 +16,35 @@ import {
   DEEPGRAM_V2_BASEWSS,
 } from './constants';
 import { buildParams } from './helpers';
+
+const DEFAULT_SAMPLE_RATE = 16_000;
+const BASE_NATIVE_SAMPLE_RATE = 16_000;
+
+const computeDownsampleFactor = (
+  target: number | undefined,
+  base: number = BASE_NATIVE_SAMPLE_RATE
+) => {
+  if (!target || target >= base || base <= 0) {
+    return 1;
+  }
+  const ratio = Math.round(base / target);
+  return ratio > 0 ? ratio : 1;
+};
+
+const downsampleInt16 = (
+  data: Int16Array<ArrayBufferLike>,
+  factor: number
+): Int16Array<ArrayBufferLike> => {
+  if (factor <= 1 || data.length < factor) {
+    return data;
+  }
+
+  const downsampled = new Int16Array(Math.floor(data.length / factor));
+  for (let i = 0; i < downsampled.length; i++) {
+    downsampled[i] = data[i * factor];
+  }
+  return downsampled as Int16Array<ArrayBufferLike>;
+};
 
 export function useDeepgramSpeechToText({
   onBeforeStart = () => {},
@@ -33,10 +63,23 @@ export function useDeepgramSpeechToText({
     null
   );
   const apiVersionRef = useRef<'v1' | 'v2'>('v1');
+  const nativeInputSampleRateRef = useRef(BASE_NATIVE_SAMPLE_RATE);
+  const targetSampleRateRef = useRef(DEFAULT_SAMPLE_RATE);
+  const downsampleFactorRef = useRef(1);
+  const lastPartialTranscriptRef = useRef('');
+  const lastFinalTranscriptRef = useRef('');
 
   const closeEverything = () => {
-    audioSub.current?.remove();
+    if (audioSub.current) {
+      audioSub.current.remove();
+      audioSub.current = null;
+    }
     Deepgram.stopRecording().catch(() => {});
+    nativeInputSampleRateRef.current = BASE_NATIVE_SAMPLE_RATE;
+    targetSampleRateRef.current = DEFAULT_SAMPLE_RATE;
+    downsampleFactorRef.current = 1;
+    lastPartialTranscriptRef.current = '';
+    lastFinalTranscriptRef.current = '';
     if (
       apiVersionRef.current === 'v2' &&
       ws.current?.readyState === WebSocket.OPEN
@@ -52,10 +95,50 @@ export function useDeepgramSpeechToText({
     apiVersionRef.current = 'v1';
   };
 
+  const emitTranscript = useCallback(
+    (transcript: unknown, isFinal: boolean, raw: unknown) => {
+      if (typeof onTranscript !== 'function') {
+        return;
+      }
+
+      if (typeof transcript !== 'string') {
+        return;
+      }
+
+      const normalized = transcript.trim();
+      if (!normalized) {
+        return;
+      }
+
+      if (isFinal) {
+        if (lastFinalTranscriptRef.current === normalized) {
+          return;
+        }
+        lastFinalTranscriptRef.current = normalized;
+        lastPartialTranscriptRef.current = '';
+      } else {
+        if (lastPartialTranscriptRef.current === normalized) {
+          return;
+        }
+        lastPartialTranscriptRef.current = normalized;
+      }
+
+      const event: DeepgramTranscriptEvent = { isFinal, raw };
+      onTranscript(normalized, event);
+
+      if (isFinal) {
+        lastPartialTranscriptRef.current = '';
+      }
+    },
+    [onTranscript]
+  );
+
   const startListening = useCallback(
     async (overrideOptions: DeepgramLiveListenOptions = {}) => {
       try {
         onBeforeStart();
+        lastPartialTranscriptRef.current = '';
+        lastFinalTranscriptRef.current = '';
 
         const granted = await askMicPermission();
         if (!granted) throw new Error('Microphone permission denied');
@@ -67,12 +150,21 @@ export function useDeepgramSpeechToText({
 
         const merged: DeepgramLiveListenOptions = {
           encoding: 'linear16',
-          sampleRate: 16000,
+          sampleRate: DEFAULT_SAMPLE_RATE,
           model: 'nova-2',
           apiVersion: 'v1',
           ...live,
           ...overrideOptions,
         };
+
+        targetSampleRateRef.current =
+          typeof merged.sampleRate === 'number' && merged.sampleRate > 0
+            ? merged.sampleRate
+            : DEFAULT_SAMPLE_RATE;
+        downsampleFactorRef.current = computeDownsampleFactor(
+          targetSampleRateRef.current,
+          nativeInputSampleRateRef.current
+        );
 
         if (merged.apiVersion === 'v2' && !merged.model) {
           merged.model = 'flux-general-en';
@@ -155,18 +247,26 @@ export function useDeepgramSpeechToText({
             android: 'AudioChunk',
           }) as string,
           (ev: any) => {
-            let chunk: ArrayBuffer | undefined;
+            if (typeof ev?.sampleRate === 'number' && ev.sampleRate > 0) {
+              if (ev.sampleRate !== nativeInputSampleRateRef.current) {
+                nativeInputSampleRateRef.current = ev.sampleRate;
+                downsampleFactorRef.current = computeDownsampleFactor(
+                  targetSampleRateRef.current,
+                  nativeInputSampleRateRef.current
+                );
+              }
+            }
+
+            const factor = downsampleFactorRef.current;
+            let chunk: ArrayBufferLike | undefined;
             if (typeof ev?.b64 === 'string') {
-              const floatBytes = Uint8Array.from(atob(ev.b64), (c) =>
+              const bytes = Uint8Array.from(atob(ev.b64), (c) =>
                 c.charCodeAt(0)
               );
-              const float32 = new Float32Array(floatBytes.buffer);
-              const downsampled = float32.filter((_, i) => i % 3 === 0);
-              const int16 = new Int16Array(downsampled.length);
-              for (let i = 0; i < downsampled.length; i++) {
-                const s = Math.max(-1, Math.min(1, downsampled[i]));
-                int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-              }
+              let int16: Int16Array<ArrayBufferLike> = new Int16Array(
+                bytes.buffer
+              );
+              int16 = downsampleInt16(int16, factor);
               chunk = int16.buffer;
             } else if (Array.isArray(ev?.data)) {
               const bytes = new Uint8Array(ev.data.length);
@@ -179,7 +279,11 @@ export function useDeepgramSpeechToText({
               for (let i = 0; i < int16.length; i++) {
                 int16[i] = view.getInt16(i * 2, true);
               }
-              chunk = int16.buffer;
+              const downsampled = downsampleInt16(
+                int16 as Int16Array<ArrayBufferLike>,
+                factor
+              );
+              chunk = downsampled.buffer;
             }
 
             if (chunk && ws.current?.readyState === WebSocket.OPEN) {
@@ -203,13 +307,29 @@ export function useDeepgramSpeechToText({
 
                 const transcript = msg.transcript;
                 if (typeof transcript === 'string' && transcript.length > 0) {
-                  onTranscript(transcript);
+                  const type =
+                    typeof msg.type === 'string'
+                      ? msg.type.toLowerCase()
+                      : undefined;
+                  const isFinal =
+                    msg.is_final === true ||
+                    msg.speech_final === true ||
+                    msg.finished === true ||
+                    type === 'utteranceend' ||
+                    type === 'speechfinal' ||
+                    type === 'speech.end' ||
+                    (typeof type === 'string' && type.includes('final'));
+                  emitTranscript(transcript, Boolean(isFinal), msg);
                 }
                 return;
               }
 
               const transcript = msg.channel?.alternatives?.[0]?.transcript;
-              if (transcript) onTranscript(transcript);
+              if (typeof transcript === 'string') {
+                const isFinal =
+                  msg.is_final === true || msg.speech_final === true;
+                emitTranscript(transcript, Boolean(isFinal), msg);
+              }
             } catch {
               // non-JSON or unexpected format
             }
@@ -226,7 +346,7 @@ export function useDeepgramSpeechToText({
         closeEverything();
       }
     },
-    [onBeforeStart, onStart, onTranscript, onError, onEnd, live]
+    [emitTranscript, onBeforeStart, onStart, onError, onEnd, live]
   );
 
   const stopListening = useCallback(() => {

@@ -11,17 +11,18 @@
 
 1. [Features](#features)
 2. [Installation](#installation)
-3. [Configuration](#configuration)
-4. [Usage overview](#usage-overview)
-5. [Voice Agent](#voice-agent-usedeepgramvoiceagent)
-6. [Speech-to-Text](#speech-to-text-usedeepgramspeechtotext)
-7. [Text-to-Speech](#text-to-speech-usedeepgramtexttospeech)
-8. [Text Intelligence](#text-intelligence-usedeepgramtextintelligence)
-9. [Management API](#management-api-usedeepgrammanagement)
-10. [Example app](#example-app)
-11. [Roadmap](#roadmap)
-12. [Contributing](#contributing)
-13. [License](#license)
+3. [Expo config plugin](#expo-config-plugin)
+4. [Configuration](#configuration)
+5. [Usage overview](#usage-overview)
+6. [Voice Agent](#voice-agent-usedeepgramvoiceagent)
+7. [Speech-to-Text](#speech-to-text-usedeepgramspeechtotext)
+8. [Text-to-Speech](#text-to-speech-usedeepgramtexttospeech)
+9. [Text Intelligence](#text-intelligence-usedeepgramtextintelligence)
+10. [Management API](#management-api-usedeepgrammanagement)
+11. [Example app](#example-app)
+12. [Roadmap](#roadmap)
+13. [Contributing](#contributing)
+14. [License](#license)
 
 ---
 
@@ -74,6 +75,40 @@ module.exports = {
 npx expo prebuild
 npx expo run:ios   # or expo run:android
 ```
+
+---
+
+## Expo config plugin
+
+The package ships with an Expo config plugin (exported from `app.plugin.js`) that keeps microphone permissions in sync for both
+platforms:
+
+- **Android** – automatically adds `android.permission.RECORD_AUDIO` to your manifest if it is missing.
+- **iOS** – sets `NSMicrophoneUsageDescription` with the message you provide (or a sensible fallback).
+
+### Options
+
+You can customise the iOS prompt via the `microphonePermission` option:
+
+```js
+// app.config.js
+module.exports = {
+  expo: {
+    plugins: [
+      [
+        'react-native-deepgram',
+        {
+          microphonePermission:
+            'Allow $(PRODUCT_NAME) to capture audio for real-time transcription.',
+        },
+      ],
+    ],
+  },
+};
+```
+
+> 🧭 Need the plugin in a bare React Native project? Import it via
+> `require('react-native-deepgram/app.plugin.js')` in your config plugin pipeline.
 
 ---
 

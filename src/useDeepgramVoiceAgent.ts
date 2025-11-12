@@ -53,10 +53,73 @@ const ensureArrayBuffer = (data: any): ArrayBuffer | null => {
   return null;
 };
 
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const cloneValue = <T>(value: T): T => {
+  if (Array.isArray(value)) {
+    return value.map((item) => cloneValue(item)) as unknown as T;
+  }
+
+  if (isPlainObject(value)) {
+    const cloned: Record<string, unknown> = {};
+    Object.entries(value).forEach(([key, entryValue]) => {
+      cloned[key] = cloneValue(entryValue);
+    });
+    return cloned as T;
+  }
+
+  return value;
+};
+
+const mergePlainObjects = <T extends Record<string, unknown>>(
+  base?: T,
+  override?: T
+): T | undefined => {
+  if (!base && !override) {
+    return undefined;
+  }
+
+  if (!base) {
+    return override ? (cloneValue(override) as T) : undefined;
+  }
+
+  const result = cloneValue(base) as Record<string, unknown>;
+
+  if (!override) {
+    return result as T;
+  }
+
+  Object.entries(override).forEach(([key, overrideValue]) => {
+    if (overrideValue === undefined) {
+      result[key] = undefined;
+      return;
+    }
+
+    if (isPlainObject(overrideValue)) {
+      const existing = result[key];
+      result[key] = mergePlainObjects(
+        isPlainObject(existing)
+          ? (existing as Record<string, unknown>)
+          : undefined,
+        overrideValue
+      );
+      return;
+    }
+
+    if (Array.isArray(overrideValue)) {
+      result[key] = overrideValue.map((item) => cloneValue(item));
+      return;
+    }
+
+    result[key] = overrideValue;
+  });
+
+  return result as T;
+};
+
 const hasKeys = (value: unknown, keys: string[]) =>
-  typeof value === 'object' &&
-  value !== null &&
-  keys.every((key) => key in (value as Record<string, unknown>));
+  isPlainObject(value) && keys.every((key) => key in value);
 
 const computeDownsampleFactor = (
   target: number | undefined,
@@ -67,6 +130,28 @@ const computeDownsampleFactor = (
   }
   const ratio = Math.round(base / target);
   return ratio > 0 ? ratio : 1;
+};
+
+const resolveDownsampleFactor = (
+  overrideFactor: number | undefined,
+  targetSampleRate: number | undefined,
+  nativeSampleRate: number | undefined
+) => {
+  if (overrideFactor == null) {
+    return computeDownsampleFactor(targetSampleRate, nativeSampleRate);
+  }
+
+  const normalized = Math.max(1, Math.round(overrideFactor));
+
+  if (!nativeSampleRate || !targetSampleRate) {
+    return normalized;
+  }
+
+  if (nativeSampleRate <= targetSampleRate) {
+    return 1;
+  }
+
+  return normalized;
 };
 
 type WebSocketLike = Pick<
@@ -168,11 +253,11 @@ export function useDeepgramVoiceAgent({
   const nativeInputSampleRate = useRef(BASE_NATIVE_SAMPLE_RATE);
   const targetInputSampleRate = useRef(DEFAULT_INPUT_SAMPLE_RATE);
   const currentDownsample = useRef(
-    downsampleFactor ??
-      computeDownsampleFactor(
-        targetInputSampleRate.current,
-        nativeInputSampleRate.current
-      )
+    resolveDownsampleFactor(
+      downsampleFactor,
+      targetInputSampleRate.current,
+      nativeInputSampleRate.current
+    )
   );
   const microphoneActive = useRef(false);
   const defaultSettingsRef = useRef(defaultSettings);
@@ -211,11 +296,21 @@ export function useDeepgramVoiceAgent({
         sanitized.input = { ...audio.input };
       }
 
+      if (audio.output) {
+        sanitized.output = { ...audio.output };
+      }
+
       Object.entries(audio).forEach(([key, value]) => {
         if (key === 'input' || key === 'output') {
           return;
         }
-        (sanitized as any)[key] = value;
+        let clonedValue: unknown = value;
+        if (Array.isArray(value)) {
+          clonedValue = value.map((item) => cloneValue(item));
+        } else if (isPlainObject(value)) {
+          clonedValue = cloneValue(value);
+        }
+        (sanitized as any)[key] = clonedValue;
       });
 
       return Object.keys(sanitized).length > 0 ? sanitized : undefined;
@@ -235,8 +330,21 @@ export function useDeepgramVoiceAgent({
         if (key === 'speak') {
           return;
         }
-        (sanitized as any)[key] = value;
+        let clonedValue: unknown = value;
+        if (Array.isArray(value)) {
+          clonedValue = value.map((item) => cloneValue(item));
+        } else if (isPlainObject(value)) {
+          clonedValue = cloneValue(value);
+        }
+        (sanitized as any)[key] = clonedValue;
       });
+
+      if (agent.speak) {
+        sanitized.speak = { ...agent.speak };
+        if (agent.speak.provider) {
+          sanitized.speak.provider = { ...agent.speak.provider };
+        }
+      }
 
       return Object.keys(sanitized).length > 0 ? sanitized : undefined;
     },
@@ -273,9 +381,20 @@ export function useDeepgramVoiceAgent({
         (sanitized as any)[key] = value;
       });
 
-      return sanitized;
+      return Object.keys(sanitized).length > 0 ? sanitized : undefined;
     },
     [sanitizeAgentConfig, sanitizeAudioSettings]
+  );
+
+  const mergeSettings = useCallback(
+    (
+      base?: DeepgramVoiceAgentSettings,
+      override?: DeepgramVoiceAgentSettings
+    ): DeepgramVoiceAgentSettings | undefined =>
+      mergePlainObjects(base as any, override as any) as
+        | DeepgramVoiceAgentSettings
+        | undefined,
+    []
   );
 
   defaultSettingsRef.current = defaultSettings;
@@ -343,12 +462,11 @@ export function useDeepgramVoiceAgent({
       if (typeof ev?.sampleRate === 'number' && ev.sampleRate > 0) {
         if (ev.sampleRate !== nativeInputSampleRate.current) {
           nativeInputSampleRate.current = ev.sampleRate;
-          if (downsampleFactor == null) {
-            currentDownsample.current = computeDownsampleFactor(
-              targetInputSampleRate.current,
-              nativeInputSampleRate.current
-            );
-          }
+          currentDownsample.current = resolveDownsampleFactor(
+            downsampleFactor,
+            targetInputSampleRate.current,
+            nativeInputSampleRate.current
+          );
         }
       }
 
@@ -627,10 +745,11 @@ export function useDeepgramVoiceAgent({
       const sanitizedDefault = sanitizeSettings(defaultSettingsRef.current);
       const sanitizedOverride = sanitizeSettings(overrideSettings);
 
+      const merged = mergeSettings(sanitizedDefault, sanitizedOverride);
+
       const mergedSettings: DeepgramVoiceAgentSettingsMessage = {
         type: 'Settings',
-        ...(sanitizedDefault ?? {}),
-        ...(sanitizedOverride ?? {}),
+        ...(merged ?? {}),
       };
 
       const targetSampleRate =
@@ -638,12 +757,11 @@ export function useDeepgramVoiceAgent({
         defaultSettingsRef.current?.audio?.input?.sample_rate ??
         DEFAULT_INPUT_SAMPLE_RATE;
       targetInputSampleRate.current = targetSampleRate;
-      currentDownsample.current =
-        downsampleFactor ??
-        computeDownsampleFactor(
-          targetInputSampleRate.current,
-          nativeInputSampleRate.current
-        );
+      currentDownsample.current = resolveDownsampleFactor(
+        downsampleFactor,
+        targetInputSampleRate.current,
+        nativeInputSampleRate.current
+      );
 
       const socket = new (WebSocket as any)(endpointRef.current, undefined, {
         headers: { Authorization: `Token ${apiKey}` },
@@ -671,6 +789,7 @@ export function useDeepgramVoiceAgent({
       downsampleFactor,
       handleMicChunk,
       handleSocketMessage,
+      mergeSettings,
       sanitizeSettings,
       sendJsonMessage,
     ]

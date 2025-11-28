@@ -332,7 +332,10 @@ export function useDeepgramTextToSpeech({
 
         onSynthesizeError(err);
         if (trackState) {
-          setInternalState({ status: 'error', error: err instanceof Error ? err : new Error(String(err)) });
+          setInternalState({
+            status: 'error',
+            error: err instanceof Error ? err : new Error(String(err)),
+          });
         }
         throw err;
       }
@@ -342,13 +345,14 @@ export function useDeepgramTextToSpeech({
       onSynthesizeSuccess,
       onSynthesizeError,
       resolvedHttpOptions,
+      trackState,
     ]
   );
 
   /* ---------- WebSocket (streaming synth) ---------- */
   const ws = useRef<WebSocket | null>(null);
 
-  const closeStream = () => {
+  const closeStream = useCallback(() => {
     ws.current?.close(1000, 'cleanup');
     ws.current = null;
     if (autoPlayAudio) {
@@ -357,7 +361,7 @@ export function useDeepgramTextToSpeech({
     if (trackState) {
       setInternalState((prev) => ({ ...prev, status: 'idle' }));
     }
-  };
+  }, [autoPlayAudio, trackState]);
 
   const sendMessage = useCallback(
     (message: DeepgramTextToSpeechStreamInputMessage) => {
@@ -371,12 +375,15 @@ export function useDeepgramTextToSpeech({
       } catch (err) {
         onStreamError(err);
         if (trackState) {
-          setInternalState({ status: 'error', error: err instanceof Error ? err : new Error(String(err)) });
+          setInternalState({
+            status: 'error',
+            error: err instanceof Error ? err : new Error(String(err)),
+          });
         }
         return false;
       }
     },
-    [onStreamError]
+    [onStreamError, trackState]
   );
 
   const flushStream = useCallback(
@@ -466,7 +473,8 @@ export function useDeepgramTextToSpeech({
         ws.current.onopen = () => {
           if (autoPlayAudio) {
             Deepgram.startPlayer(
-              Number(resolvedStreamOptions.sampleRate) || DEFAULT_TTS_SAMPLE_RATE,
+              Number(resolvedStreamOptions.sampleRate) ||
+                DEFAULT_TTS_SAMPLE_RATE,
               1
             );
           }
@@ -548,7 +556,10 @@ export function useDeepgramTextToSpeech({
         ws.current.onerror = (err) => {
           onStreamError(err);
           if (trackState) {
-            setInternalState({ status: 'error', error: err instanceof Error ? err : new Error(String(err)) });
+            setInternalState({
+              status: 'error',
+              error: err instanceof Error ? err : new Error(String(err)),
+            });
           }
         };
         ws.current.onclose = () => {
@@ -558,7 +569,10 @@ export function useDeepgramTextToSpeech({
       } catch (err) {
         onStreamError(err);
         if (trackState) {
-          setInternalState({ status: 'error', error: err instanceof Error ? err : new Error(String(err)) });
+          setInternalState({
+            status: 'error',
+            error: err instanceof Error ? err : new Error(String(err)),
+          });
         }
         closeStream();
         throw err;
@@ -576,6 +590,9 @@ export function useDeepgramTextToSpeech({
       onStreamWarning,
       resolvedStreamOptions,
       sendText,
+      autoPlayAudio,
+      closeStream,
+      trackState,
     ]
   );
 
@@ -586,10 +603,13 @@ export function useDeepgramTextToSpeech({
     } catch (err) {
       onStreamError(err);
       if (trackState) {
-        setInternalState({ status: 'error', error: err instanceof Error ? err : new Error(String(err)) });
+        setInternalState({
+          status: 'error',
+          error: err instanceof Error ? err : new Error(String(err)),
+        });
       }
     }
-  }, [onStreamEnd, onStreamError]);
+  }, [onStreamEnd, onStreamError, closeStream, trackState]);
 
   /* ---------- cleanup on unmount ---------- */
   useEffect(
@@ -597,7 +617,7 @@ export function useDeepgramTextToSpeech({
       abortCtrl.current?.abort();
       closeStream();
     },
-    []
+    [closeStream]
   );
 
   return {

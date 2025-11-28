@@ -104,7 +104,10 @@ export function useDeepgramTextIntelligence({
         if (err.name === 'AbortError') return;
         onAnalyzeError(err);
         if (trackState) {
-          setInternalState({ status: 'error', error: err instanceof Error ? err : new Error(String(err)) });
+          setInternalState({
+            status: 'error',
+            error: err instanceof Error ? err : new Error(String(err)),
+          });
         }
       }
     },
@@ -123,6 +126,7 @@ export function useDeepgramTextIntelligence({
       language,
       callback,
       callbackMethod,
+      trackState,
     ]
   );
 
@@ -132,7 +136,7 @@ export function useDeepgramTextIntelligence({
     };
   }, []);
 
-  return { 
+  return {
     analyze,
     ...(trackState ? { state: internalState } : {}),
   };

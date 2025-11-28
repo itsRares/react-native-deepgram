@@ -51,10 +51,10 @@ const STREAM_ENCODING_OPTIONS: Option[] = [
   { label: 'A-law (alaw)', value: 'alaw' },
 ];
 
-const SAMPLE_RATE_OPTIONS: Option[] = [
-  '8000',
-  '16000',
-].map((value) => ({ label: `${value} Hz`, value }));
+const SAMPLE_RATE_OPTIONS: Option[] = ['8000', '16000'].map((value) => ({
+  label: `${value} Hz`,
+  value,
+}));
 
 const CONTAINER_OPTIONS: Option[] = [
   { label: 'None', value: 'none' },

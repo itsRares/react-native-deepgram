@@ -80,9 +80,10 @@ export function useDeepgramSpeechToText({
 
   // Transcript tracking state
   const [internalTranscript, setInternalTranscript] = useState('');
-  const [internalInterimTranscript, setInternalInterimTranscript] = useState('');
+  const [internalInterimTranscript, setInternalInterimTranscript] =
+    useState('');
 
-  const closeEverything = () => {
+  const closeEverything = useCallback(() => {
     if (audioSub.current) {
       audioSub.current.remove();
       audioSub.current = null;
@@ -113,7 +114,7 @@ export function useDeepgramSpeechToText({
       setInternalTranscript('');
       setInternalInterimTranscript('');
     }
-  };
+  }, [trackState, trackTranscript]);
 
   const emitTranscript = useCallback(
     (transcript: unknown, isFinal: boolean, raw: unknown) => {
@@ -163,7 +164,7 @@ export function useDeepgramSpeechToText({
         lastPartialTranscriptRef.current = '';
       }
     },
-    [onTranscript]
+    [onTranscript, trackTranscript]
   );
 
   const startListening = useCallback(
@@ -343,7 +344,10 @@ export function useDeepgramSpeechToText({
                     msg.description || 'Deepgram stream error';
                   onError(new Error(description));
                   if (trackState) {
-                    setInternalState({ status: 'error', error: new Error(description) });
+                    setInternalState({
+                      status: 'error',
+                      error: new Error(description),
+                    });
                   }
                   closeEverything();
                   return;
@@ -383,7 +387,10 @@ export function useDeepgramSpeechToText({
         ws.current.onerror = (err) => {
           onError(err);
           if (trackState) {
-            setInternalState({ status: 'error', error: err instanceof Error ? err : new Error(String(err)) });
+            setInternalState({
+              status: 'error',
+              error: err instanceof Error ? err : new Error(String(err)),
+            });
           }
         };
         ws.current.onclose = () => {
@@ -393,12 +400,24 @@ export function useDeepgramSpeechToText({
       } catch (err) {
         onError(err);
         if (trackState) {
-          setInternalState({ status: 'error', error: err instanceof Error ? err : new Error(String(err)) });
+          setInternalState({
+            status: 'error',
+            error: err instanceof Error ? err : new Error(String(err)),
+          });
         }
         closeEverything();
       }
     },
-    [emitTranscript, onBeforeStart, onStart, onError, onEnd, live]
+    [
+      emitTranscript,
+      onBeforeStart,
+      onStart,
+      onError,
+      onEnd,
+      live,
+      closeEverything,
+      trackState,
+    ]
   );
 
   const stopListening = useCallback(() => {
@@ -408,10 +427,13 @@ export function useDeepgramSpeechToText({
     } catch (err) {
       onError(err);
       if (trackState) {
-        setInternalState({ status: 'error', error: err instanceof Error ? err : new Error(String(err)) });
+        setInternalState({
+          status: 'error',
+          error: err instanceof Error ? err : new Error(String(err)),
+        });
       }
     }
-  }, [onEnd, onError]);
+  }, [onEnd, onError, closeEverything, trackState]);
 
   const transcribeFile = useCallback(
     async (
@@ -559,21 +581,32 @@ export function useDeepgramSpeechToText({
       } catch (err) {
         onTranscribeError(err);
         if (trackState) {
-          setInternalState({ status: 'error', error: err instanceof Error ? err : new Error(String(err)) });
+          setInternalState({
+            status: 'error',
+            error: err instanceof Error ? err : new Error(String(err)),
+          });
         }
       }
     },
-    [onBeforeTranscribe, onTranscribeSuccess, onTranscribeError, prerecorded]
+    [
+      onBeforeTranscribe,
+      onTranscribeSuccess,
+      onTranscribeError,
+      prerecorded,
+      trackState,
+    ]
   );
 
-  return { 
-    startListening, 
-    stopListening, 
+  return {
+    startListening,
+    stopListening,
     transcribeFile,
     ...(trackState ? { state: internalState } : {}),
-    ...(trackTranscript ? { 
-      transcript: internalTranscript,
-      interimTranscript: internalInterimTranscript 
-    } : {}),
+    ...(trackTranscript
+      ? {
+          transcript: internalTranscript,
+          interimTranscript: internalInterimTranscript,
+        }
+      : {}),
   };
 }

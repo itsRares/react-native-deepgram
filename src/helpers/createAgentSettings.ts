@@ -1,15 +1,17 @@
 import type { DeepgramVoiceAgentSettings } from '../types';
 
-export function createAgentSettings(opts: {
-  language?: string;
-  greeting?: string;
-  listenModel?: string;
-  thinkModel?: string;
-  prompt?: string;
-  temperature?: number | string;
-  tags?: string | string[];
-  sampleRate?: number | string;
-} = {}): DeepgramVoiceAgentSettings {
+export function createAgentSettings(
+  opts: {
+    language?: string;
+    greeting?: string;
+    listenModel?: string;
+    thinkModel?: string;
+    prompt?: string;
+    temperature?: number | string;
+    tags?: string | string[];
+    sampleRate?: number | string;
+  } = {}
+): DeepgramVoiceAgentSettings {
   const temperature = (() => {
     if (typeof opts.temperature === 'string') {
       const parsed = parseFloat(opts.temperature);
@@ -33,7 +35,7 @@ export function createAgentSettings(opts: {
 
   const sampleRate = (() => {
     if (typeof opts.sampleRate === 'string') {
-      const parsed = parseInt(opts.sampleRate);
+      const parsed = parseInt(opts.sampleRate, 10);
       return Number.isFinite(parsed) && parsed > 0 ? parsed : 16000;
     }
     if (typeof opts.sampleRate === 'number' && opts.sampleRate > 0) {
@@ -45,7 +47,11 @@ export function createAgentSettings(opts: {
   const settings: DeepgramVoiceAgentSettings = {
     audio: {
       input: { encoding: 'linear16', sample_rate: sampleRate },
-      output: { encoding: 'linear16', sample_rate: sampleRate, container: 'none' },
+      output: {
+        encoding: 'linear16',
+        sample_rate: sampleRate,
+        container: 'none',
+      },
     },
     agent: {
       language: opts.language?.trim() || 'en',

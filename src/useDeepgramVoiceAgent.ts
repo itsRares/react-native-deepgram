@@ -589,36 +589,39 @@ export function useDeepgramVoiceAgent({
               break;
             case 'ConversationText':
               if (hasKeys(message, ['role', 'content'])) {
-                const convMsg = message as DeepgramVoiceAgentConversationTextMessage;
-                
+                const convMsg =
+                  message as DeepgramVoiceAgentConversationTextMessage;
+
                 if (trackConversation) {
                   setInternalConversation((prev) => [
                     ...prev,
                     { role: convMsg.role, content: convMsg.content },
                   ]);
                 }
-                
+
                 onConversationTextRef.current?.(convMsg);
               }
               break;
             case 'AgentThinking':
               if (hasKeys(message, ['content'])) {
-                const thinkMsg = message as DeepgramVoiceAgentAgentThinkingMessage;
-                
+                const thinkMsg =
+                  message as DeepgramVoiceAgentAgentThinkingMessage;
+
                 if (trackAgentStatus) {
                   setInternalAgentStatus((prev) => ({
                     ...prev,
                     thinking: thinkMsg.content,
                   }));
                 }
-                
+
                 onAgentThinkingRef.current?.(thinkMsg);
               }
               break;
             case 'AgentStartedSpeaking':
               {
-                const speakMsg = message as DeepgramVoiceAgentAgentStartedSpeakingMessage;
-                
+                const speakMsg =
+                  message as DeepgramVoiceAgentAgentStartedSpeakingMessage;
+
                 if (trackAgentStatus) {
                   setInternalAgentStatus((prev) => ({
                     ...prev,
@@ -629,21 +632,22 @@ export function useDeepgramVoiceAgent({
                     },
                   }));
                 }
-                
+
                 onAgentStartedSpeakingRef.current?.(speakMsg);
               }
               break;
             case 'AgentAudioDone':
               {
-                const doneMsg = message as DeepgramVoiceAgentAgentAudioDoneMessage;
-                
+                const doneMsg =
+                  message as DeepgramVoiceAgentAgentAudioDoneMessage;
+
                 if (trackAgentStatus) {
                   setInternalAgentStatus({
                     thinking: null,
                     latency: null,
                   });
                 }
-                
+
                 onAgentAudioDoneRef.current?.(doneMsg);
               }
               break;
@@ -681,14 +685,16 @@ export function useDeepgramVoiceAgent({
               break;
             case 'AudioConfig':
               if (hasKeys(message, ['sample_rate'])) {
-                const configMsg = message as DeepgramVoiceAgentAudioConfigMessage;
-                
+                const configMsg =
+                  message as DeepgramVoiceAgentAudioConfigMessage;
+
                 if (autoPlayAudio) {
-                  const sampleRate = configMsg.sample_rate || DEFAULT_INPUT_SAMPLE_RATE;
+                  const sampleRate =
+                    configMsg.sample_rate || DEFAULT_INPUT_SAMPLE_RATE;
                   const channels = configMsg.channels || 1;
                   Deepgram.startPlayer?.(sampleRate, channels);
                 }
-                
+
                 onAudioConfigRef.current?.(configMsg);
               }
               break;
@@ -702,14 +708,14 @@ export function useDeepgramVoiceAgent({
             case 'Warning':
               if (hasKeys(message, ['description'])) {
                 const warnMsg = message as DeepgramVoiceAgentWarningMessage;
-                
+
                 if (trackState) {
                   setInternalState((prev) => ({
                     ...prev,
                     warning: warnMsg.description,
                   }));
                 }
-                
+
                 onWarningRef.current?.(warnMsg);
               }
               break;
@@ -725,7 +731,7 @@ export function useDeepgramVoiceAgent({
                     : undefined;
 
                 const errorMsg = description ?? code ?? 'Voice agent error';
-                
+
                 if (trackState) {
                   setInternalState((prev) => ({
                     ...prev,
@@ -763,7 +769,7 @@ export function useDeepgramVoiceAgent({
             console.warn('[VoiceAgent] Auto-feed audio error:', err);
           }
         }
-        
+
         onAudioRef.current?.(buffer);
       }
     },
@@ -783,6 +789,10 @@ export function useDeepgramVoiceAgent({
       onSpeakUpdatedRef,
       onUserStartedSpeakingRef,
       onWarningRef,
+      autoPlayAudio,
+      trackAgentStatus,
+      trackConversation,
+      trackState,
     ]
   );
 
@@ -849,7 +859,7 @@ export function useDeepgramVoiceAgent({
   const connect = useCallback(
     async (overrideSettings?: DeepgramVoiceAgentSettings) => {
       cleanup();
-      
+
       if (trackState) {
         setInternalState({
           connectionState: 'connecting',
@@ -857,14 +867,14 @@ export function useDeepgramVoiceAgent({
           warning: null,
         });
       }
-      
+
       if (trackConversation) {
         setInternalConversation([]);
       }
       if (trackAgentStatus) {
         setInternalAgentStatus({ thinking: null, latency: null });
       }
-      
+
       onBeforeConnectRef.current?.();
 
       const apiKey = (globalThis as any).__DEEPGRAM_API_KEY__;
@@ -919,22 +929,21 @@ export function useDeepgramVoiceAgent({
 
       socket.onopen = () => {
         sendJsonMessage(mergedSettings);
-        
+
         if (trackState) {
           setInternalState((prev) => ({
             ...prev,
             connectionState: 'connected',
           }));
         }
-        
+
         if (autoPlayAudio) {
           const sampleRate =
-            merged?.audio?.output?.sample_rate ??
-            DEFAULT_INPUT_SAMPLE_RATE;
+            merged?.audio?.output?.sample_rate ?? DEFAULT_INPUT_SAMPLE_RATE;
           const channels = 1;
           Deepgram.startPlayer?.(sampleRate, channels);
         }
-        
+
         onConnectRef.current?.();
       };
 
@@ -949,7 +958,7 @@ export function useDeepgramVoiceAgent({
             connectionState: 'disconnected',
           }));
         }
-        
+
         cleanup();
         onCloseRef.current?.(event);
       };
@@ -962,6 +971,10 @@ export function useDeepgramVoiceAgent({
       mergeSettings,
       sanitizeSettings,
       sendJsonMessage,
+      autoPlayAudio,
+      trackAgentStatus,
+      trackConversation,
+      trackState,
     ]
   );
 
@@ -1037,7 +1050,9 @@ export function useDeepgramVoiceAgent({
     sendMedia: sendBinary,
     isConnected,
     ...(trackState ? { state: internalState } : {}),
-    ...(trackConversation ? { conversation: internalConversation, clearConversation } : {}),
+    ...(trackConversation
+      ? { conversation: internalConversation, clearConversation }
+      : {}),
     ...(trackAgentStatus ? { agentStatus: internalAgentStatus } : {}),
   };
 }

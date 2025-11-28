@@ -334,7 +334,7 @@ export type UseDeepgramTextToSpeechReturn = {
   closeStreamGracefully: () => boolean;
   /** Forcefully close the WebSocket stream and release resources. */
   stopStreaming: () => void;
-  
+
   /** Current state of the TTS session (if trackState is enabled) */
   state?: {
     status: 'idle' | 'loading' | 'connecting' | 'connected' | 'error';

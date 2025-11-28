@@ -17,7 +17,8 @@ export function createAudioPlayerController() {
 
     feed: async (audio: ArrayBuffer | string) => {
       const { Deepgram } = await import('../NativeDeepgram');
-      const b64 = typeof audio === 'string' ? audio : arrayBufferToBase64(audio);
+      const b64 =
+        typeof audio === 'string' ? audio : arrayBufferToBase64(audio);
       await Deepgram.feedAudio?.(b64);
     },
 

@@ -1,3 +1,6 @@
+/**
+ * Message in the conversation history.
+ */
 export interface DeepgramVoiceAgentContextMessage {
   type: string;
   role?: 'user' | 'assistant' | 'system';
@@ -94,6 +97,21 @@ export interface DeepgramVoiceAgentAgentConfig {
   [key: string]: unknown;
 }
 
+/**
+ * Configuration for the Voice Agent.
+ * @example
+ * ```typescript
+ * const settings: DeepgramVoiceAgentSettings = {
+ *   agent: {
+ *     think: {
+ *       provider: { type: 'open_ai' },
+ *       model: 'gpt-4o'
+ *     }
+ *   }
+ * };
+ * ```
+ * @see https://developers.deepgram.com/docs/voice-agent
+ */
 export interface DeepgramVoiceAgentSettings {
   tags?: string[];
   experimental?: boolean;
@@ -147,6 +165,9 @@ export interface DeepgramVoiceAgentUpdatePromptMessage {
   [key: string]: unknown;
 }
 
+/**
+ * Union of all messages that can be sent from the Client to the Voice Agent.
+ */
 export type DeepgramVoiceAgentClientMessage =
   | DeepgramVoiceAgentSettingsMessage
   | DeepgramVoiceAgentUpdateSpeakMessage
@@ -243,6 +264,23 @@ export interface DeepgramVoiceAgentWarningMessage {
   [key: string]: unknown;
 }
 
+export interface DeepgramVoiceAgentAudioConfigMessage {
+  type: 'AudioConfig';
+  sample_rate?: number;
+  channels?: number;
+  encoding?: string;
+  [key: string]: unknown;
+}
+
+export interface DeepgramVoiceAgentAudioMessage {
+  type: 'Audio';
+  // Binary audio data will be in the WebSocket message payload
+  [key: string]: unknown;
+}
+
+/**
+ * Union of all messages that can be received from the Voice Agent Server.
+ */
 export type DeepgramVoiceAgentServerMessage =
   | DeepgramVoiceAgentWelcomeMessage
   | DeepgramVoiceAgentSettingsAppliedMessage
@@ -258,6 +296,8 @@ export type DeepgramVoiceAgentServerMessage =
   | DeepgramVoiceAgentInjectionRefusedMessage
   | DeepgramVoiceAgentErrorMessage
   | DeepgramVoiceAgentWarningMessage
+  | DeepgramVoiceAgentAudioConfigMessage
+  | DeepgramVoiceAgentAudioMessage
   | DeepgramVoiceAgentSettingsMessage
   | DeepgramVoiceAgentUpdateSpeakMessage
   | DeepgramVoiceAgentInjectUserMessage

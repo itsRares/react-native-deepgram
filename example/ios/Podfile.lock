@@ -1,6 +1,6 @@
 PODS:
   - boost (1.84.0)
-  - Deepgram (1.0.5):
+  - Deepgram (2.0.0):
     - DoubleConversion
     - glog
     - hermes-engine
@@ -1799,7 +1799,7 @@ EXTERNAL SOURCES:
 
 SPEC CHECKSUMS:
   boost: 1dca942403ed9342f98334bf4c3621f011aa7946
-  Deepgram: 234b0f4e42380dc2129dbc9d10533eb4019b5df0
+  Deepgram: 43333e852b373355fe2bec14eeaa43ba1e72f9ab
   DoubleConversion: f16ae600a246532c4020132d54af21d0ddb2a385
   EXConstants: fcfc75800824ac2d5c592b5bc74130bad17b146b
   Expo: 1687edb10c76b0c0f135306d6ae245379f50ed54

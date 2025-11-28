@@ -1,4 +1,8 @@
 /* ---------- models ---------- */
+
+/**
+ * Represents a Deepgram Speech-to-Text model.
+ */
 export interface DeepgramSttModel {
   name: string;
   canonical_name: string;
@@ -11,6 +15,9 @@ export interface DeepgramSttModel {
   formatted_output: boolean;
 }
 
+/**
+ * Represents a Deepgram Text-to-Speech model.
+ */
 export interface DeepgramTtsModel {
   name: string;
   canonical_name: string;
@@ -29,11 +36,17 @@ export interface DeepgramTtsModel {
   };
 }
 
+/**
+ * Response from listing available models.
+ */
 export interface DeepgramListModelsResponse {
   stt: DeepgramSttModel[] | null;
   tts: DeepgramTtsModel[] | null;
 }
 
+/**
+ * Represents a Deepgram Project.
+ */
 export interface DeepgramProject {
   project_id: string;
   name: string;
@@ -41,6 +54,9 @@ export interface DeepgramProject {
   balance?: number;
 }
 
+/**
+ * Represents a Deepgram API Key.
+ */
 export interface DeepgramKey {
   key_id: string;
   project_id: string;
@@ -49,6 +65,9 @@ export interface DeepgramKey {
   created?: string;
 }
 
+/**
+ * Represents a member of a Deepgram Project.
+ */
 export interface DeepgramMember {
   member_id: string;
   email: string;
@@ -58,6 +77,9 @@ export interface DeepgramMember {
 
 export type DeepgramScope = string;
 
+/**
+ * Represents an invitation to join a Deepgram Project.
+ */
 export interface DeepgramInvitation {
   invitation_id: string;
   project_id: string;
@@ -66,6 +88,9 @@ export interface DeepgramInvitation {
   created?: string;
 }
 
+/**
+ * Represents a usage request log.
+ */
 export interface DeepgramRequest {
   request_id: string;
   project_id: string;
@@ -78,11 +103,17 @@ export interface DeepgramUsageField {
   description?: string;
 }
 
+/**
+ * Breakdown of usage statistics.
+ */
 export interface DeepgramUsageBreakdown {
   total: number;
   breakdown: Record<string, number>;
 }
 
+/**
+ * Represents a purchase or balance credit.
+ */
 export interface DeepgramPurchase {
   purchase_id: string;
   project_id: string;
@@ -90,6 +121,9 @@ export interface DeepgramPurchase {
   created?: string;
 }
 
+/**
+ * Represents the current balance of a project.
+ */
 export interface DeepgramBalance {
   balance_id: string;
   project_id: string;
@@ -97,6 +131,10 @@ export interface DeepgramBalance {
   currency?: string;
 }
 
+/**
+ * Return value of the `useDeepgramManagement` hook.
+ * Provides access to various management APIs grouped by resource.
+ */
 export interface UseDeepgramManagementReturn {
   models: {
     list(includeOutdated?: boolean): Promise<DeepgramListModelsResponse>;

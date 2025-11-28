@@ -1,4 +1,4 @@
-import { useRef, useCallback, useEffect } from 'react';
+import { useRef, useCallback, useEffect, useState } from 'react';
 import type {
   UseDeepgramTextIntelligenceProps,
   UseDeepgramTextIntelligenceReturn,
@@ -12,7 +12,15 @@ export function useDeepgramTextIntelligence({
   onAnalyzeSuccess = () => {},
   onAnalyzeError = () => {},
   options = {},
+  trackState = false,
 }: UseDeepgramTextIntelligenceProps = {}): UseDeepgramTextIntelligenceReturn {
+  const [internalState, setInternalState] = useState<{
+    status: 'idle' | 'loading' | 'analyzing' | 'error';
+    error: Error | null;
+  }>({
+    status: 'idle',
+    error: null,
+  });
   const abortCtrl = useRef<AbortController | null>(null);
 
   const {
@@ -32,6 +40,10 @@ export function useDeepgramTextIntelligence({
   const analyze = useCallback(
     async (input: DeepgramTextIntelligenceInput) => {
       onBeforeAnalyze();
+
+      if (trackState) {
+        setInternalState({ status: 'analyzing', error: null });
+      }
 
       try {
         const apiKey = (globalThis as any).__DEEPGRAM_API_KEY__;
@@ -85,9 +97,18 @@ export function useDeepgramTextIntelligence({
 
         const json = await res.json();
         onAnalyzeSuccess(json);
+        if (trackState) {
+          setInternalState({ status: 'idle', error: null });
+        }
       } catch (err: any) {
         if (err.name === 'AbortError') return;
         onAnalyzeError(err);
+        if (trackState) {
+          setInternalState({
+            status: 'error',
+            error: err instanceof Error ? err : new Error(String(err)),
+          });
+        }
       }
     },
     [
@@ -105,6 +126,7 @@ export function useDeepgramTextIntelligence({
       language,
       callback,
       callbackMethod,
+      trackState,
     ]
   );
 
@@ -114,5 +136,8 @@ export function useDeepgramTextIntelligence({
     };
   }, []);
 
-  return { analyze };
+  return {
+    analyze,
+    ...(trackState ? { state: internalState } : {}),
+  };
 }

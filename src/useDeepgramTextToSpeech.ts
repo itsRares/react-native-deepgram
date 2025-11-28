@@ -1,6 +1,6 @@
 import { Buffer } from 'buffer';
 if (!globalThis.Buffer) globalThis.Buffer = Buffer;
-import { useRef, useCallback, useEffect, useMemo } from 'react';
+import { useRef, useCallback, useEffect, useMemo, useState } from 'react';
 import { NativeModules } from 'react-native';
 import type {
   UseDeepgramTextToSpeechProps,
@@ -159,7 +159,16 @@ export function useDeepgramTextToSpeech({
   onStreamCleared = () => {},
   onStreamWarning = () => {},
   options = {},
+  autoPlayAudio = true,
+  trackState = false,
 }: UseDeepgramTextToSpeechProps = {}): UseDeepgramTextToSpeechReturn {
+  const [internalState, setInternalState] = useState<{
+    status: 'idle' | 'loading' | 'connecting' | 'connected' | 'error';
+    error: Error | null;
+  }>({
+    status: 'idle',
+    error: null,
+  });
   const resolvedHttpOptions = useMemo(() => {
     const encoding =
       options.http?.encoding ?? options.encoding ?? DEFAULT_TTS_HTTP_ENCODING;
@@ -246,6 +255,9 @@ export function useDeepgramTextToSpeech({
   const synthesize = useCallback(
     async (text: string) => {
       onBeforeSynthesize();
+      if (trackState) {
+        setInternalState({ status: 'loading', error: null });
+      }
       try {
         const apiKey = (globalThis as any).__DEEPGRAM_API_KEY__;
         if (!apiKey) throw new Error('Deepgram API key missing');
@@ -309,6 +321,9 @@ export function useDeepgramTextToSpeech({
         await Deepgram.playAudioChunk(audio);
 
         onSynthesizeSuccess(audio);
+        if (trackState) {
+          setInternalState({ status: 'idle', error: null });
+        }
         return audio;
       } catch (err: any) {
         if (err?.name === 'AbortError') {
@@ -316,6 +331,12 @@ export function useDeepgramTextToSpeech({
         }
 
         onSynthesizeError(err);
+        if (trackState) {
+          setInternalState({
+            status: 'error',
+            error: err instanceof Error ? err : new Error(String(err)),
+          });
+        }
         throw err;
       }
     },
@@ -324,17 +345,23 @@ export function useDeepgramTextToSpeech({
       onSynthesizeSuccess,
       onSynthesizeError,
       resolvedHttpOptions,
+      trackState,
     ]
   );
 
   /* ---------- WebSocket (streaming synth) ---------- */
   const ws = useRef<WebSocket | null>(null);
 
-  const closeStream = () => {
+  const closeStream = useCallback(() => {
     ws.current?.close(1000, 'cleanup');
     ws.current = null;
-    Deepgram.stopPlayer();
-  };
+    if (autoPlayAudio) {
+      Deepgram.stopPlayer();
+    }
+    if (trackState) {
+      setInternalState((prev) => ({ ...prev, status: 'idle' }));
+    }
+  }, [autoPlayAudio, trackState]);
 
   const sendMessage = useCallback(
     (message: DeepgramTextToSpeechStreamInputMessage) => {
@@ -347,10 +374,16 @@ export function useDeepgramTextToSpeech({
         return true;
       } catch (err) {
         onStreamError(err);
+        if (trackState) {
+          setInternalState({
+            status: 'error',
+            error: err instanceof Error ? err : new Error(String(err)),
+          });
+        }
         return false;
       }
     },
-    [onStreamError]
+    [onStreamError, trackState]
   );
 
   const flushStream = useCallback(
@@ -401,6 +434,9 @@ export function useDeepgramTextToSpeech({
   const startStreaming = useCallback(
     async (text: string) => {
       onBeforeStream();
+      if (trackState) {
+        setInternalState({ status: 'connecting', error: null });
+      }
       try {
         const apiKey = (globalThis as any).__DEEPGRAM_API_KEY__;
         if (!apiKey) throw new Error('Deepgram API key missing');
@@ -435,21 +471,31 @@ export function useDeepgramTextToSpeech({
         ws.current.binaryType = 'arraybuffer';
 
         ws.current.onopen = () => {
-          Deepgram.startPlayer(
-            Number(resolvedStreamOptions.sampleRate) || DEFAULT_TTS_SAMPLE_RATE,
-            1
-          );
+          if (autoPlayAudio) {
+            Deepgram.startPlayer(
+              Number(resolvedStreamOptions.sampleRate) ||
+                DEFAULT_TTS_SAMPLE_RATE,
+              1
+            );
+          }
           sendText(text);
           onStreamStart();
+          if (trackState) {
+            setInternalState({ status: 'connected', error: null });
+          }
         };
 
         ws.current.onmessage = (ev) => {
           if (ev.data instanceof ArrayBuffer) {
-            Deepgram.feedAudio(ev.data);
+            if (autoPlayAudio) {
+              Deepgram.feedAudio(ev.data);
+            }
             onAudioChunk(ev.data);
           } else if (ev.data instanceof Blob) {
             ev.data.arrayBuffer().then((buffer) => {
-              Deepgram.feedAudio(buffer);
+              if (autoPlayAudio) {
+                Deepgram.feedAudio(buffer);
+              }
               onAudioChunk(buffer);
             });
           } else if (typeof ev.data === 'string') {
@@ -489,6 +535,12 @@ export function useDeepgramTextToSpeech({
                     err && typeof err.code === 'string' ? err.code : undefined;
 
                   onStreamError(new Error(description ?? code ?? 'TTS error'));
+                  if (trackState) {
+                    setInternalState({
+                      status: 'error',
+                      error: new Error(description ?? code ?? 'TTS error'),
+                    });
+                  }
                   break;
                 }
                 default:
@@ -501,13 +553,27 @@ export function useDeepgramTextToSpeech({
           }
         };
 
-        ws.current.onerror = onStreamError;
+        ws.current.onerror = (err) => {
+          onStreamError(err);
+          if (trackState) {
+            setInternalState({
+              status: 'error',
+              error: err instanceof Error ? err : new Error(String(err)),
+            });
+          }
+        };
         ws.current.onclose = () => {
           onStreamEnd();
           closeStream();
         };
       } catch (err) {
         onStreamError(err);
+        if (trackState) {
+          setInternalState({
+            status: 'error',
+            error: err instanceof Error ? err : new Error(String(err)),
+          });
+        }
         closeStream();
         throw err;
       }
@@ -524,6 +590,9 @@ export function useDeepgramTextToSpeech({
       onStreamWarning,
       resolvedStreamOptions,
       sendText,
+      autoPlayAudio,
+      closeStream,
+      trackState,
     ]
   );
 
@@ -533,8 +602,14 @@ export function useDeepgramTextToSpeech({
       onStreamEnd();
     } catch (err) {
       onStreamError(err);
+      if (trackState) {
+        setInternalState({
+          status: 'error',
+          error: err instanceof Error ? err : new Error(String(err)),
+        });
+      }
     }
-  }, [onStreamEnd, onStreamError]);
+  }, [onStreamEnd, onStreamError, closeStream, trackState]);
 
   /* ---------- cleanup on unmount ---------- */
   useEffect(
@@ -542,7 +617,7 @@ export function useDeepgramTextToSpeech({
       abortCtrl.current?.abort();
       closeStream();
     },
-    []
+    [closeStream]
   );
 
   return {
@@ -554,5 +629,6 @@ export function useDeepgramTextToSpeech({
     clearStream,
     closeStreamGracefully,
     stopStreaming,
+    ...(trackState ? { state: internalState } : {}),
   };
 }

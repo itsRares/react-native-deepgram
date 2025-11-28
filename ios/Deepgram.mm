@@ -9,6 +9,7 @@
 #endif
 #include <math.h>
 #include <string.h>
+#include <atomic>
 
 #define DGNumberBuffers 3
 
@@ -40,6 +41,7 @@ typedef struct {
 @interface Deepgram : RCTEventEmitter
 {
   DGRecordState _recordState;
+  std::atomic<int> _scheduledBufferCount;
 }
 
 // Recording
@@ -53,7 +55,6 @@ typedef struct {
 @property (nonatomic, strong) AVAudioEngine      *audioEngine;
 @property (nonatomic, strong) AVAudioPlayerNode  *playerNode;
 @property (nonatomic, strong) AVAudioFormat      *playbackFormat;
-@property (nonatomic, strong) NSMutableData      *audioBuffer;
 @property (nonatomic, assign) BOOL                isPlaying;
 @property (nonatomic, assign) int                 currentSampleRate;
 @property (nonatomic, assign) BOOL                audioSessionConfigured;
@@ -138,6 +139,7 @@ RCT_EXPORT_MODULE();
     _emitterQueue = dispatch_queue_create("com.deepgram.liveaudiostream",
                                           DISPATCH_QUEUE_SERIAL);
     memset(&_recordState, 0, sizeof(DGRecordState));
+    _scheduledBufferCount = 0;
     _appIsActive = YES;
 #if TARGET_OS_IOS
     [[NSNotificationCenter defaultCenter]
@@ -183,10 +185,8 @@ RCT_EXPORT_MODULE();
   __block BOOL success = YES;
   __block NSError *activationError = nil;
 
-  RCTUnsafeExecuteOnMainQueueSync(^{
-    DGLogDebug(@"[Deepgram] activateAudioSession: configuring on main queue");
-    success = [self configureAudioSessionIfNeeded:&activationError];
-  });
+  DGLogDebug(@"[Deepgram] activateAudioSession: configuring on current queue");
+  success = [self configureAudioSessionIfNeeded:&activationError];
 
   if (!success && activationError) {
     DGLogError(@"[Deepgram] Failed to activate audio session: %@",
@@ -205,13 +205,11 @@ RCT_EXPORT_MODULE();
 - (void)deactivateAudioSession
 {
   DGLogDebug(@"[Deepgram] deactivateAudioSession: begin");
-  RCTUnsafeExecuteOnMainQueueSync(^{
-    NSError *error = nil;
-    if (![[AVAudioSession sharedInstance] setActive:NO error:&error] && error) {
-      DGLogError(@"[Deepgram] Failed to deactivate audio session: %@",
-            error.localizedDescription ?: error);
-    }
-  });
+  NSError *error = nil;
+  if (![[AVAudioSession sharedInstance] setActive:NO error:&error] && error) {
+    DGLogError(@"[Deepgram] Failed to deactivate audio session: %@",
+          error.localizedDescription ?: error);
+  }
   self.audioSessionConfigured = NO;
 }
 
@@ -707,10 +705,6 @@ RCT_EXPORT_METHOD(startAudio
       if (reject) reject(@"audio_start_error", message, sessionError);
       return;
     }
-    if (!self.audioBuffer) {
-      self.audioBuffer = [[NSMutableData alloc] init];
-      DGLogDebug(@"[Deepgram] startAudio: created audioBuffer");
-    }
     if (self.currentSampleRate <= 0) {
       self.currentSampleRate = 16000;
       DGLogDebug(@"[Deepgram] startAudio: default sample rate applied %d", self.currentSampleRate);
@@ -855,7 +849,6 @@ RCT_EXPORT_METHOD(startPlayer:(nonnull NSNumber *)sampleRate
     return;
   }
 
-  self.audioBuffer = [[NSMutableData alloc] init];
   self.isPlaying = NO;
   self.currentSampleRate = sampleRate.intValue;
 }
@@ -870,6 +863,17 @@ RCT_EXPORT_METHOD(feedAudio:(NSString *)b64)
     if (!self.playerNode || !self.audioEngine || !self.audioEngine.isRunning) {
       return;
     }
+
+    // Safety: prevent unbounded memory growth if JS sends faster than playback
+    // 500 chunks * 200ms approx = 100 seconds of buffered audio.
+    // If we exceed this, we are likely leaking or hopelessly behind.
+    if (_scheduledBufferCount > 500) {
+      static dispatch_once_t onceToken;
+      dispatch_once(&onceToken, ^{
+        DGLogWarn(@"[Deepgram] feedAudio: dropping audio chunks (buffer full > 500). App might be receiving audio faster than playback.");
+      });
+      return;
+    }
     
     NSData *pcmData = [[NSData alloc] initWithBase64EncodedString:b64 options:0];
     if (!pcmData || pcmData.length == 0) {
@@ -882,7 +886,14 @@ RCT_EXPORT_METHOD(feedAudio:(NSString *)b64)
       return;
     }
     
-    [self.playerNode scheduleBuffer:buffer completionHandler:nil];
+    _scheduledBufferCount++;
+    __weak Deepgram *weakSelf = self;
+    [self.playerNode scheduleBuffer:buffer completionHandler:^{
+      Deepgram *strongSelf = weakSelf;
+      if (strongSelf) {
+        strongSelf->_scheduledBufferCount--;
+      }
+    }];
     
     if (!self.playerNode.isPlaying) {
       [self.playerNode play];
@@ -905,19 +916,25 @@ RCT_EXPORT_METHOD(stopPlayer
     // Stop player node
     if (self.playerNode) {
       [self.playerNode stop];
+      if (self.audioEngine) {
+        [self.audioEngine detachNode:self.playerNode];
+      }
     }
     
     // Stop and cleanup audio engine
-    if (self.audioEngine && self.audioEngine.isRunning) {
-      [self.audioEngine stop];
+    if (self.audioEngine) {
+      if (self.audioEngine.isRunning) {
+        [self.audioEngine stop];
+      }
+      [self.audioEngine reset];
     }
     
     // Clear properties
     self.playerNode = nil;
     self.audioEngine = nil;
     self.playbackFormat = nil;
-    self.audioBuffer = nil;
     self.isPlaying = NO;
+    _scheduledBufferCount = 0;
 
     [self maybeDeactivateAudioSession];
 
@@ -1039,7 +1056,6 @@ RCT_EXPORT_METHOD(playAudioChunk:(NSString *)b64
   self.audioEngine = nil;
   self.playbackFormat = nil;
 
-  self.audioBuffer = nil;
   self.isPlaying = NO;
   self.hasListeners = NO;
   self.appIsActive = NO;

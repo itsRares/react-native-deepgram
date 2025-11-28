@@ -111,14 +111,7 @@ const parseNumber = (value: string): number | undefined => {
 export default function TextToSpeech() {
   const [text, setText] = useState('');
   const [streamText, setStreamText] = useState('');
-  const [httpStatus, setHttpStatus] = useState<'idle' | 'working' | 'error'>(
-    'idle'
-  );
-  const [httpError, setHttpError] = useState<string | null>(null);
-  const [streamStatus, setStreamStatus] = useState<
-    'idle' | 'streaming' | 'error'
-  >('idle');
-  const [streamError, setStreamError] = useState<string | null>(null);
+  // Removed manual status/error states in favor of trackState
   const [lastMetadata, setLastMetadata] =
     useState<DeepgramTextToSpeechStreamMetadataMessage | null>(null);
   const [lastFlushedSequence, setLastFlushedSequence] = useState<number | null>(
@@ -179,46 +172,8 @@ export default function TextToSpeech() {
     | DeepgramTextToSpeechSampleRate
     | undefined;
 
-  const {
-    synthesize,
-    startStreaming,
-    sendText,
-    flushStream,
-    clearStream,
-    closeStreamGracefully,
-    stopStreaming,
-  } = useDeepgramTextToSpeech({
-    onBeforeSynthesize: () => {
-      setHttpStatus('working');
-      setHttpError(null);
-    },
-    onSynthesizeSuccess: () => {
-      setHttpStatus('idle');
-    },
-    onSynthesizeError: (err) => {
-      setHttpStatus('error');
-      setHttpError(err instanceof Error ? err.message : String(err));
-    },
-    onBeforeStream: () => {
-      setStreamStatus('streaming');
-      setStreamError(null);
-      setLastMetadata(null);
-      setWarnings([]);
-      setLastFlushedSequence(null);
-      setLastClearedSequence(null);
-    },
-    onStreamError: (err) => {
-      setStreamStatus('error');
-      setStreamError(err instanceof Error ? err.message : String(err));
-    },
-    onStreamEnd: () => {
-      setStreamStatus('idle');
-    },
-    onStreamMetadata: setLastMetadata,
-    onStreamFlushed: (event) => setLastFlushedSequence(event.sequence_id),
-    onStreamCleared: (event) => setLastClearedSequence(event.sequence_id),
-    onStreamWarning: (warning) =>
-      setWarnings((prev) => [warning, ...prev].slice(0, 3)),
+  const { synthesize, state: httpState } = useDeepgramTextToSpeech({
+    trackState: true,
     options: {
       http: {
         model: httpModelValue,
@@ -230,6 +185,31 @@ export default function TextToSpeech() {
         callbackMethod: httpCallbackMethodValue,
         mipOptOut: httpMipOptOut,
       },
+    },
+  });
+
+  const {
+    startStreaming,
+    sendText,
+    flushStream,
+    clearStream,
+    closeStreamGracefully,
+    stopStreaming,
+    state: streamState,
+  } = useDeepgramTextToSpeech({
+    trackState: true,
+    onBeforeStream: () => {
+      setLastMetadata(null);
+      setWarnings([]);
+      setLastFlushedSequence(null);
+      setLastClearedSequence(null);
+    },
+    onStreamMetadata: setLastMetadata,
+    onStreamFlushed: (event) => setLastFlushedSequence(event.sequence_id),
+    onStreamCleared: (event) => setLastClearedSequence(event.sequence_id),
+    onStreamWarning: (warning) =>
+      setWarnings((prev) => [warning, ...prev].slice(0, 3)),
+    options: {
       stream: {
         model: streamModelValue,
         encoding: streamEncodingValue,
@@ -399,36 +379,40 @@ export default function TextToSpeech() {
           <Button
             title="Synthesize (HTTP)"
             onPress={handleSynthesize}
-            disabled={httpStatus === 'working' || !text.trim()}
+            disabled={httpState?.status === 'loading' || !text.trim()}
           />
         </View>
-        {httpStatus === 'working' && (
+        {httpState?.status === 'loading' && (
           <Text style={styles.status}>Synthesizing…</Text>
         )}
-        {httpError && <Text style={styles.error}>Error: {httpError}</Text>}
+        {httpState?.error && (
+          <Text style={styles.error}>Error: {httpState.error.message}</Text>
+        )}
 
         {/* streaming */}
         <View style={[styles.buttonRow, styles.streamingSection]}>
           <Button
             title="Start Stream"
             onPress={handleStream}
-            disabled={streamStatus === 'streaming' || !text.trim()}
+            disabled={streamState?.status === 'connected' || !text.trim()}
           />
           <Button
             title="Stop Stream"
             onPress={stopStreaming}
-            disabled={streamStatus !== 'streaming'}
+            disabled={streamState?.status !== 'connected'}
           />
         </View>
-        {streamStatus === 'streaming' && (
+        {streamState?.status === 'connected' && (
           <Text style={styles.status}>Streaming…</Text>
         )}
-        {streamError && (
-          <Text style={styles.error}>Stream error: {streamError}</Text>
+        {streamState?.error && (
+          <Text style={styles.error}>
+            Stream error: {streamState.error.message}
+          </Text>
         )}
 
         {/* Continuous streaming - send additional text to active stream */}
-        {streamStatus === 'streaming' && (
+        {streamState?.status === 'connected' && (
           <View style={[styles.continuousSection, styles.continuousMargin]}>
             <Text style={styles.sectionTitle}>Continuous Streaming</Text>
             <TextInput

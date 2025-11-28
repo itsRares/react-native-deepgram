@@ -11,76 +11,48 @@ import * as DocumentPicker from 'expo-document-picker';
 import { useDeepgramSpeechToText } from 'react-native-deepgram';
 
 export default function SpeechToText() {
-  // live stream state
   const [liveTranscript, setLiveTranscript] = useState('');
-  const [liveStatus, setLiveStatus] = useState<'idle' | 'listening' | 'error'>(
-    'idle'
-  );
-  const [liveError, setLiveError] = useState<string | null>(null);
   const [liveInterimTranscript, setLiveInterimTranscript] = useState('');
-
-  // file transcription state
   const [fileTranscript, setFileTranscript] = useState('');
-  const [fileStatus, setFileStatus] = useState<
-    'idle' | 'transcribing' | 'error'
-  >('idle');
-  const [fileError, setFileError] = useState<string | null>(null);
 
-  const { startListening, stopListening, transcribeFile } =
-    useDeepgramSpeechToText({
-      onBeforeStart: () => {
-        setLiveStatus('listening');
-        setLiveTranscript('');
+  const {
+    startListening,
+    stopListening,
+    state: liveState,
+  } = useDeepgramSpeechToText({
+    trackState: true,
+    onBeforeStart: () => {
+      setLiveTranscript('');
+      setLiveInterimTranscript('');
+    },
+    onTranscript: (text, info) => {
+      if (info?.isFinal) {
+        setLiveTranscript((prev) => {
+          const next = prev ? `${prev} ${text}` : text;
+          return next.trim();
+        });
         setLiveInterimTranscript('');
-        setLiveError(null);
-      },
-      onStart: () => {
-        // WebSocket opened
-      },
-      onTranscript: (text, info) => {
-        if (info?.isFinal) {
-          setLiveTranscript((prev) => {
-            const next = prev ? `${prev} ${text}` : text;
-            return next.trim();
-          });
-          setLiveInterimTranscript('');
-        } else {
-          setLiveInterimTranscript(text);
-        }
-      },
-      onError: (err) => {
-        setLiveStatus('error');
-        setLiveError(err instanceof Error ? err.message : String(err));
-        setLiveInterimTranscript('');
-      },
-      onEnd: () => {
-        setLiveStatus('idle');
-        setLiveInterimTranscript('');
-      },
-      // file callbacks
-      onBeforeTranscribe: () => {
-        setFileStatus('transcribing');
-        setFileTranscript('');
-        setFileError(null);
-      },
-      onTranscribeSuccess: (text) => {
-        setFileStatus('idle');
-        setFileTranscript(text);
-      },
-      onTranscribeError: (err) => {
-        setFileStatus('error');
-        setFileError(err instanceof Error ? err.message : String(err));
-      },
-      live: {
-        model: 'nova-2',
-        interimResults: true,
-        punctuate: true,
-      },
-      prerecorded: {
-        punctuate: true,
-        summarize: 'v2',
-      },
-    });
+      } else {
+        setLiveInterimTranscript(text);
+      }
+    },
+    onEnd: () => setLiveInterimTranscript(''),
+    live: {
+      model: 'nova-2',
+      interimResults: true,
+      punctuate: true,
+    },
+  });
+
+  const { transcribeFile, state: fileState } = useDeepgramSpeechToText({
+    trackState: true,
+    onBeforeTranscribe: () => setFileTranscript(''),
+    onTranscribeSuccess: setFileTranscript,
+    prerecorded: {
+      punctuate: true,
+      summarize: 'v2',
+    },
+  });
 
   const pickAndTranscribe = async () => {
     try {
@@ -118,18 +90,20 @@ export default function SpeechToText() {
         <Button
           title="Start Listening"
           onPress={() => startListening({ keywords: ['Deepgram'] })}
-          disabled={liveStatus === 'listening'}
+          disabled={liveState?.status === 'listening'}
         />
         <Button
           title="Stop Listening"
           onPress={stopListening}
-          disabled={liveStatus !== 'listening'}
+          disabled={liveState?.status !== 'listening'}
         />
       </View>
-      {liveStatus === 'listening' && (
+      {liveState?.status === 'listening' && (
         <Text style={styles.status}>Listening…</Text>
       )}
-      {liveError && <Text style={styles.error}>Error: {liveError}</Text>}
+      {liveState?.error && (
+        <Text style={styles.error}>Error: {liveState.error.message}</Text>
+      )}
       <ScrollView style={styles.outputContainer}>
         <Text style={styles.transcript}>
           🎤 Live: {combinedLiveTranscript || 'No live transcript yet.'}
@@ -141,13 +115,15 @@ export default function SpeechToText() {
         <Button
           title="Pick & Transcribe File"
           onPress={pickAndTranscribe}
-          disabled={fileStatus === 'transcribing'}
+          disabled={fileState?.status === 'transcribing'}
         />
       </View>
-      {fileStatus === 'transcribing' && (
+      {fileState?.status === 'transcribing' && (
         <Text style={styles.status}>Transcribing file…</Text>
       )}
-      {fileError && <Text style={styles.error}>File error: {fileError}</Text>}
+      {fileState?.error && (
+        <Text style={styles.error}>File error: {fileState.error.message}</Text>
+      )}
       <ScrollView style={styles.outputContainer}>
         <Text style={styles.transcript}>
           📄 File: {fileTranscript || 'No file transcript yet.'}

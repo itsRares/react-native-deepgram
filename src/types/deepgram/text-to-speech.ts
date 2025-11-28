@@ -1,5 +1,9 @@
 import type { DeepgramCallbackMethod } from './shared';
 
+/**
+ * Deepgram Aura text-to-speech models.
+ * @see https://developers.deepgram.com/docs/tts-models
+ */
 export type DeepgramTextToSpeechModel =
   | 'aura-asteria-en'
   | 'aura-luna-en'
@@ -105,6 +109,16 @@ export type DeepgramTextToSpeechContainer =
 
 export type DeepgramTextToSpeechBitRate = 32000 | 48000 | (number & {});
 
+/**
+ * Options for HTTP (REST) text-to-speech requests.
+ * @example
+ * ```typescript
+ * const options: DeepgramTextToSpeechHttpOptions = {
+ *   model: 'aura-asteria-en',
+ *   encoding: 'mp3'
+ * };
+ * ```
+ */
 export interface DeepgramTextToSpeechHttpOptions {
   model?: DeepgramTextToSpeechModel | (string & {});
   encoding?: DeepgramTextToSpeechHttpEncoding;
@@ -119,6 +133,17 @@ export interface DeepgramTextToSpeechHttpOptions {
   queryParams?: Record<string, string | number | boolean>;
 }
 
+/**
+ * Options for WebSocket streaming text-to-speech.
+ * @example
+ * ```typescript
+ * const options: DeepgramTextToSpeechStreamOptions = {
+ *   model: 'aura-asteria-en',
+ *   encoding: 'linear16',
+ *   sampleRate: 48000
+ * };
+ * ```
+ */
 export interface DeepgramTextToSpeechStreamOptions {
   model?: DeepgramTextToSpeechModel | (string & {});
   encoding?: DeepgramTextToSpeechStreamEncoding;
@@ -130,6 +155,10 @@ export interface DeepgramTextToSpeechStreamOptions {
   autoFlush?: boolean;
 }
 
+/**
+ * Configuration for the `useDeepgramTextToSpeech` hook.
+ * Supports both HTTP and WebSocket streaming configurations.
+ */
 export interface UseDeepgramTextToSpeechOptions {
   /** @deprecated Use `http.model` / `stream.model` for granular control. */
   model?: DeepgramTextToSpeechModel | (string & {});
@@ -157,6 +186,9 @@ export interface UseDeepgramTextToSpeechOptions {
   stream?: DeepgramTextToSpeechStreamOptions;
 }
 
+/**
+ * Message sent to the TTS WebSocket stream.
+ */
 export type DeepgramTextToSpeechStreamTextMessage = {
   type: 'Text';
   text: string;
@@ -176,6 +208,9 @@ export type DeepgramTextToSpeechStreamCloseMessage = {
   type: 'Close';
 };
 
+/**
+ * Union of all possible messages sent to the TTS WebSocket.
+ */
 export type DeepgramTextToSpeechStreamInputMessage =
   | DeepgramTextToSpeechStreamTextMessage
   | DeepgramTextToSpeechStreamFlushMessage
@@ -216,6 +251,9 @@ export interface DeepgramTextToSpeechStreamErrorMessage {
   code?: string;
 }
 
+/**
+ * Union of all possible messages received from the TTS WebSocket.
+ */
 export type DeepgramTextToSpeechStreamResponseMessage =
   | DeepgramTextToSpeechStreamMetadataMessage
   | DeepgramTextToSpeechStreamFlushedMessage
@@ -224,6 +262,9 @@ export type DeepgramTextToSpeechStreamResponseMessage =
   | DeepgramTextToSpeechStreamErrorMessage
   | ({ type: string } & Record<string, unknown>);
 
+/**
+ * Props for the `useDeepgramTextToSpeech` hook.
+ */
 export type UseDeepgramTextToSpeechProps = {
   /* ---------- Synchronous HTTP (`synthesize`) ---------- */
 
@@ -259,8 +300,17 @@ export type UseDeepgramTextToSpeechProps = {
 
   /** Shared options that apply to both HTTP and WebSocket flows. */
   options?: UseDeepgramTextToSpeechOptions;
+
+  /** Automatically handle audio playback (speaker output). @default true */
+  autoPlayAudio?: boolean;
+
+  /** Enable internal state tracking. @default false */
+  trackState?: boolean;
 };
 
+/**
+ * Return value of the `useDeepgramTextToSpeech` hook.
+ */
 export type UseDeepgramTextToSpeechReturn = {
   /** One-shot HTTP request that resolves when the full audio is ready. */
   synthesize: (text: string) => Promise<ArrayBuffer>;
@@ -284,4 +334,10 @@ export type UseDeepgramTextToSpeechReturn = {
   closeStreamGracefully: () => boolean;
   /** Forcefully close the WebSocket stream and release resources. */
   stopStreaming: () => void;
+  
+  /** Current state of the TTS session (if trackState is enabled) */
+  state?: {
+    status: 'idle' | 'loading' | 'connecting' | 'connected' | 'error';
+    error: Error | null;
+  };
 };

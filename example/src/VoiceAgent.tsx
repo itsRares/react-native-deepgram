@@ -8,23 +8,11 @@ import {
   TextInput,
   Switch,
 } from 'react-native';
-import { useDeepgramVoiceAgent, Deepgram } from 'react-native-deepgram';
+import {
+  useDeepgramVoiceAgent,
+  createAgentSettings,
+} from 'react-native-deepgram';
 import OptionSelect from './components/OptionSelect';
-
-declare const Buffer: {
-  from(data: Uint8Array | string, encoding?: string): { toString(encoding: string): string };
-};
-
-type ConversationEntry = {
-  role: string;
-  content: string;
-};
-
-type AgentLatency = {
-  total?: number;
-  tts?: number;
-  ttt?: number;
-};
 
 const LANGUAGE_OPTIONS = [
   { label: 'English (US)', value: 'en' },
@@ -50,14 +38,6 @@ const SAMPLE_RATE_OPTIONS = [
 ];
 
 export default function VoiceAgent() {
-  const [status, setStatus] = useState<
-    'idle' | 'connecting' | 'connected' | 'error'
-  >('idle');
-  const [conversation, setConversation] = useState<ConversationEntry[]>([]);
-  const [thinking, setThinking] = useState<string | null>(null);
-  const [latency, setLatency] = useState<AgentLatency | null>(null);
-  const [warning, setWarning] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [language, setLanguage] = useState('en');
   const [listenModel, setListenModel] = useState('nova-3');
   const [thinkModel, setThinkModel] = useState('gpt-4o');
@@ -72,44 +52,16 @@ export default function VoiceAgent() {
   const [customMessage, setCustomMessage] = useState('');
 
   const agentSettings = useMemo(() => {
-    const tags = tagsInput
-      .split(',')
-      .map((tag) => tag.trim())
-      .filter(Boolean);
-    const resolvedListenModel = listenModel.trim() || 'nova-3';
-    const resolvedThinkModel = thinkModel.trim() || 'gpt-4o';
-    const inputRate = Number(inputSampleRate) || 16_000;
-    const parsedTemperature = parseFloat(temperature);
-    const boundedTemperature = Number.isFinite(parsedTemperature)
-      ? Math.max(0, Math.min(2, parsedTemperature))
-      : 0.7;
-
-    return {
-      audio: {
-        input: { encoding: 'linear16', sample_rate: inputRate },
-        output: { encoding: 'linear16', sample_rate: inputRate, container: 'none' },
-      },
-      agent: {
-        language: language.trim() || 'en',
-        greeting: greeting.trim() || 'Hello! How can I help you today?',
-        listen: {
-          provider: {
-            type: 'deepgram',
-            model: resolvedListenModel,
-            smart_format: true,
-          },
-        },
-        think: {
-          provider: {
-            type: 'open_ai',
-            model: resolvedThinkModel,
-            temperature: boundedTemperature,
-          },
-          prompt: prompt.trim(),
-        },
-      },
-      ...(tags.length ? { tags } : {}),
-    };
+    return createAgentSettings({
+      language,
+      greeting,
+      listenModel,
+      thinkModel,
+      prompt,
+      temperature,
+      tags: tagsInput,
+      sampleRate: inputSampleRate,
+    });
   }, [
     greeting,
     inputSampleRate,
@@ -129,74 +81,24 @@ export default function VoiceAgent() {
     updatePrompt,
     sendKeepAlive,
     isConnected,
+    state,
+    conversation,
+    agentStatus,
   } = useDeepgramVoiceAgent({
     defaultSettings: agentSettings,
     autoStartMicrophone: autoStartMic,
-    onBeforeConnect: () => {
-      setStatus('connecting');
-      setError(null);
-      setWarning(null);
-      setConversation([]);
-    },
-    onConnect: () => {
-      setStatus('connected');
-      Deepgram.startPlayer?.(16000, 1);
-    },
-    onClose: () => {
-      setStatus('idle');
-      setThinking(null);
-      setLatency(null);
-      Deepgram.stopPlayer?.();
-    },
-    onError: (err) => {
-      setStatus('error');
-      setError(err instanceof Error ? err.message : String(err));
-    },
-    onConversationText: (message) => {
-      setConversation((prev) => [
-        ...prev,
-        { role: message.role, content: message.content },
-      ]);
-    },
-    onAgentThinking: (message) => setThinking(message.content),
-    onAgentStartedSpeaking: (message) =>
-      setLatency({
-        total: message.total_latency,
-        tts: message.tts_latency,
-        ttt: message.ttt_latency,
-      }),
-    onAgentAudioDone: () => {
-      setThinking(null);
-      setLatency(null);
-    },
-    onUserStartedSpeaking: () => setThinking('User is speaking…'),
-    onWarning: (message) => setWarning(message.description),
-    onServerError: (message) => {
-      setStatus('error');
-      setError(message.description || message.code || 'Voice agent error');
-    },
-    onAudioConfig: (message: { sample_rate?: number; channels?: number }) => {
-      const sampleRate = message.sample_rate || 16000;
-      const channels = message.channels || 1;
-      Deepgram.startPlayer?.(sampleRate, channels);
-    },
-    onAudio: async (audioData: ArrayBuffer) => {
-      try {
-        const bytes = new Uint8Array(audioData);
-        const b64 = Buffer.from(bytes).toString('base64');
-        await Deepgram.feedAudio?.(b64);
-      } catch (err) {
-        console.error('[VoiceAgentDemo] onAudio error:', err);
-      }
-    },
+    autoPlayAudio: true,
+    trackState: true,
+    trackConversation: true,
+    trackAgentStatus: true,
   });
 
   const startAgent = async () => {
     try {
       await connect();
     } catch (err) {
-      setStatus('error');
-      setError(err instanceof Error ? err.message : String(err));
+      // Error handled by hook state
+      console.error('Start agent failed', err);
     }
   };
 
@@ -243,9 +145,13 @@ export default function VoiceAgent() {
       >
         <View style={styles.buttonRow}>
           <Button
-            title={status === 'connected' ? 'Connected' : 'Start Agent'}
+            title={
+              state?.connectionState === 'connected'
+                ? 'Connected'
+                : 'Start Agent'
+            }
             onPress={startAgent}
-            disabled={status === 'connecting' || isConnected()}
+            disabled={state?.connectionState === 'connecting' || isConnected()}
           />
           <Button title="Stop" onPress={stopAgent} disabled={!isConnected()} />
         </View>
@@ -381,34 +287,39 @@ export default function VoiceAgent() {
           />
         </View>
 
-        {status === 'connecting' && (
+        {state?.connectionState === 'connecting' && (
           <Text style={styles.status}>Connecting to Deepgram…</Text>
         )}
-        {thinking && <Text style={styles.status}>🤔 {thinking}</Text>}
-        {latency && (
+        {agentStatus?.thinking && (
+          <Text style={styles.status}>🤔 {agentStatus.thinking}</Text>
+        )}
+        {agentStatus?.latency && (
           <Text style={styles.status}>
-            Latency: total {latency.total?.toFixed(2) ?? '–'}s · TTS{' '}
-            {latency.tts?.toFixed(2) ?? '–'}s · TTT{' '}
-            {latency.ttt?.toFixed(2) ?? '–'}s
+            Latency: total {agentStatus.latency.total?.toFixed(2) ?? '–'}s · TTS{' '}
+            {agentStatus.latency.tts?.toFixed(2) ?? '–'}s · TTT{' '}
+            {agentStatus.latency.ttt?.toFixed(2) ?? '–'}s
           </Text>
         )}
-        {warning && <Text style={styles.warning}>Warning: {warning}</Text>}
-        {error && <Text style={styles.error}>Error: {error}</Text>}
+        {state?.warning && (
+          <Text style={styles.warning}>Warning: {state.warning}</Text>
+        )}
+        {state?.error && <Text style={styles.error}>Error: {state.error}</Text>}
 
         <Text style={styles.sectionTitle}>Conversation</Text>
         <View style={styles.infoBox}>
           <Text style={styles.infoText}>
-            💬 Text transcripts of the conversation appear here alongside audio playback.
+            💬 Text transcripts of the conversation appear here alongside audio
+            playback.
           </Text>
         </View>
         <View style={styles.conversation}>
-          {conversation.map((entry, index) => (
+          {conversation?.map((entry, index) => (
             <View key={`${entry.role}-${index}`} style={styles.messageRow}>
               <Text style={styles.messageRole}>{entry.role}:</Text>
               <Text style={styles.messageContent}>{entry.content}</Text>
             </View>
           ))}
-          {conversation.length === 0 && (
+          {(conversation?.length ?? 0) === 0 && (
             <Text style={styles.placeholder}>
               Conversation will appear here once the agent responds.
             </Text>

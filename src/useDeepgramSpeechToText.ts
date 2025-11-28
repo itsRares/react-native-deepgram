@@ -1,4 +1,4 @@
-import { useRef, useCallback } from 'react';
+import { useRef, useCallback, useState } from 'react';
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 import { Deepgram } from './NativeDeepgram';
 import { askMicPermission } from './helpers/askMicPermission';
@@ -57,7 +57,16 @@ export function useDeepgramSpeechToText({
   onTranscribeError = () => {},
   live = {},
   prerecorded = {},
+  trackState = false,
+  trackTranscript = false,
 }: UseDeepgramSpeechToTextProps = {}): UseDeepgramSpeechToTextReturn {
+  const [internalState, setInternalState] = useState<{
+    status: 'idle' | 'loading' | 'listening' | 'transcribing' | 'error';
+    error: Error | null;
+  }>({
+    status: 'idle',
+    error: null,
+  });
   const ws = useRef<WebSocket | null>(null);
   const audioSub = useRef<ReturnType<NativeEventEmitter['addListener']> | null>(
     null
@@ -68,6 +77,10 @@ export function useDeepgramSpeechToText({
   const downsampleFactorRef = useRef(1);
   const lastPartialTranscriptRef = useRef('');
   const lastFinalTranscriptRef = useRef('');
+
+  // Transcript tracking state
+  const [internalTranscript, setInternalTranscript] = useState('');
+  const [internalInterimTranscript, setInternalInterimTranscript] = useState('');
 
   const closeEverything = () => {
     if (audioSub.current) {
@@ -93,6 +106,13 @@ export function useDeepgramSpeechToText({
     ws.current?.close(1000, 'cleanup');
     ws.current = null;
     apiVersionRef.current = 'v1';
+    if (trackState) {
+      setInternalState((prev) => ({ ...prev, status: 'idle' }));
+    }
+    if (trackTranscript) {
+      setInternalTranscript('');
+      setInternalInterimTranscript('');
+    }
   };
 
   const emitTranscript = useCallback(
@@ -123,8 +143,21 @@ export function useDeepgramSpeechToText({
         lastPartialTranscriptRef.current = normalized;
       }
 
-      const event: DeepgramTranscriptEvent = { isFinal, raw };
-      onTranscript(normalized, event);
+      const info: DeepgramTranscriptEvent = { isFinal: !!isFinal, raw };
+
+      if (trackTranscript) {
+        if (isFinal) {
+          setInternalTranscript((prev) => {
+            const next = prev ? `${prev} ${normalized}` : normalized;
+            return next.trim();
+          });
+          setInternalInterimTranscript('');
+        } else {
+          setInternalInterimTranscript(normalized);
+        }
+      }
+
+      onTranscript(normalized, info);
 
       if (isFinal) {
         lastPartialTranscriptRef.current = '';
@@ -137,6 +170,9 @@ export function useDeepgramSpeechToText({
     async (overrideOptions: DeepgramLiveListenOptions = {}) => {
       try {
         onBeforeStart();
+        if (trackState) {
+          setInternalState({ status: 'loading', error: null });
+        }
         lastPartialTranscriptRef.current = '';
         lastFinalTranscriptRef.current = '';
 
@@ -238,7 +274,12 @@ export function useDeepgramSpeechToText({
           headers: { Authorization: `Token ${apiKey}` },
         });
 
-        ws.current.onopen = () => onStart();
+        ws.current.onopen = () => {
+          onStart();
+          if (trackState) {
+            setInternalState({ status: 'listening', error: null });
+          }
+        };
 
         const emitter = new NativeEventEmitter(NativeModules.Deepgram);
         audioSub.current = emitter.addListener(
@@ -301,6 +342,9 @@ export function useDeepgramSpeechToText({
                   const description =
                     msg.description || 'Deepgram stream error';
                   onError(new Error(description));
+                  if (trackState) {
+                    setInternalState({ status: 'error', error: new Error(description) });
+                  }
                   closeEverything();
                   return;
                 }
@@ -336,13 +380,21 @@ export function useDeepgramSpeechToText({
           }
         };
 
-        ws.current.onerror = onError;
+        ws.current.onerror = (err) => {
+          onError(err);
+          if (trackState) {
+            setInternalState({ status: 'error', error: err instanceof Error ? err : new Error(String(err)) });
+          }
+        };
         ws.current.onclose = () => {
           onEnd();
           closeEverything();
         };
       } catch (err) {
         onError(err);
+        if (trackState) {
+          setInternalState({ status: 'error', error: err instanceof Error ? err : new Error(String(err)) });
+        }
         closeEverything();
       }
     },
@@ -355,6 +407,9 @@ export function useDeepgramSpeechToText({
       onEnd();
     } catch (err) {
       onError(err);
+      if (trackState) {
+        setInternalState({ status: 'error', error: err instanceof Error ? err : new Error(String(err)) });
+      }
     }
   }, [onEnd, onError]);
 
@@ -364,6 +419,9 @@ export function useDeepgramSpeechToText({
       overrideOptions: DeepgramPrerecordedOptions = {}
     ) => {
       onBeforeTranscribe();
+      if (trackState) {
+        setInternalState({ status: 'transcribing', error: null });
+      }
       try {
         const apiKey = (globalThis as any).__DEEPGRAM_API_KEY__;
         if (!apiKey) throw new Error('Deepgram API key missing');
@@ -492,15 +550,30 @@ export function useDeepgramSpeechToText({
           json.results?.channels?.[0]?.alternatives?.[0]?.transcript;
         if (transcript) {
           onTranscribeSuccess(transcript);
+          if (trackState) {
+            setInternalState({ status: 'idle', error: null });
+          }
         } else {
           throw new Error('No transcript present in Deepgram response');
         }
       } catch (err) {
         onTranscribeError(err);
+        if (trackState) {
+          setInternalState({ status: 'error', error: err instanceof Error ? err : new Error(String(err)) });
+        }
       }
     },
     [onBeforeTranscribe, onTranscribeSuccess, onTranscribeError, prerecorded]
   );
 
-  return { startListening, stopListening, transcribeFile };
+  return { 
+    startListening, 
+    stopListening, 
+    transcribeFile,
+    ...(trackState ? { state: internalState } : {}),
+    ...(trackTranscript ? { 
+      transcript: internalTranscript,
+      interimTranscript: internalInterimTranscript 
+    } : {}),
+  };
 }

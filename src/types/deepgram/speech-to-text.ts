@@ -1,5 +1,9 @@
 import type { DeepgramCallbackMethod, DeepgramCustomMode } from './shared';
 
+/**
+ * Audio encoding formats supported by Deepgram's Live Listen API.
+ * @see https://developers.deepgram.com/docs/encoding
+ */
 export type DeepgramLiveListenEncoding =
   | 'linear16'
   | 'linear32'
@@ -14,6 +18,11 @@ export type DeepgramLiveListenEncoding =
   | 'g729'
   | (string & {});
 
+/**
+ * Deepgram speech-to-text models for live streaming.
+ * Includes Nova (fast, accurate), Enhanced (better accuracy), and Base models.
+ * @see https://developers.deepgram.com/docs/models-overview
+ */
 export type DeepgramLiveListenModel =
   | 'nova-3'
   | 'nova-3-general'
@@ -48,6 +57,9 @@ export type DeepgramLiveListenModel =
   | 'flux-general-en'
   | (string & {});
 
+/**
+ * Types of sensitive information that can be redacted from transcripts.
+ */
 export type DeepgramLiveListenRedaction =
   | 'pci'
   | 'numbers'
@@ -63,6 +75,18 @@ export type DeepgramLiveListenCallbackMethod =
   | 'PUT'
   | 'DELETE';
 
+/**
+ * Configuration options for Deepgram Live Listen (Streaming) sessions.
+ * @example
+ * ```typescript
+ * const options: DeepgramLiveListenOptions = {
+ *   model: 'nova-2',
+ *   smartFormat: true,
+ *   interimResults: true,
+ *   language: 'en-US'
+ * };
+ * ```
+ */
 export type DeepgramLiveListenOptions = {
   /** Deepgram real-time API version to use. Defaults to v1. */
   apiVersion?: 'v1' | 'v2';
@@ -142,6 +166,9 @@ export type DeepgramLiveListenOptions = {
 
 export type DeepgramPrerecordedCallbackMethod = DeepgramCallbackMethod;
 
+/**
+ * Audio encoding formats supported by Deepgram's Pre-recorded API.
+ */
 export type DeepgramPrerecordedEncoding =
   | 'linear16'
   | 'flac'
@@ -176,6 +203,18 @@ export type DeepgramPrerecordedExtra =
   | string[]
   | Record<string, string | number | boolean>;
 
+/**
+ * Configuration options for Deepgram Pre-recorded (File) Transcription.
+ * @example
+ * ```typescript
+ * const options: DeepgramPrerecordedOptions = {
+ *   model: 'nova-2',
+ *   smartFormat: true,
+ *   diarize: true,
+ *   summarize: 'v2'
+ * };
+ * ```
+ */
 export type DeepgramPrerecordedOptions = {
   /** URL to receive a webhook callback with the completed transcription. */
   callback?: string;
@@ -249,19 +288,31 @@ export type DeepgramPrerecordedOptions = {
   version?: DeepgramPrerecordedVersion;
 };
 
+/**
+ * Source input for pre-recorded transcription.
+ * Can be a File/Blob, a local file URI, or a remote URL.
+ */
 export type DeepgramPrerecordedSource =
   | Blob
   | { uri: string; name?: string; type?: string }
   | { url: string }
   | string;
 
+/**
+ * Event data accompanying a transcript update.
+ */
 export type DeepgramTranscriptEvent = {
   /** Indicates whether the transcript represents a finalized utterance. */
   isFinal?: boolean;
   /** Raw payload received from Deepgram for custom handling or inspection. */
   raw?: unknown;
+  /** Metadata about the transcript (e.g. confidence, timing). */
+  metadata?: Record<string, unknown>;
 };
 
+/**
+ * Props for the `useDeepgramSpeechToText` hook.
+ */
 export type UseDeepgramSpeechToTextProps = {
   /** Called before any setup (e.g. before permission prompt) */
   onBeforeStart?: () => void;
@@ -283,8 +334,17 @@ export type UseDeepgramSpeechToTextProps = {
   live?: DeepgramLiveListenOptions;
   /** Default options for pre-recorded transcription requests. */
   prerecorded?: DeepgramPrerecordedOptions;
+
+  /** Enable internal state tracking. @default false */
+  trackState?: boolean;
+
+  /** Automatically accumulate transcript results. @default false */
+  trackTranscript?: boolean;
 };
 
+/**
+ * Return value of the `useDeepgramSpeechToText` hook.
+ */
 export type UseDeepgramSpeechToTextReturn = {
   /** Begin capturing mic audio and streaming to Deepgram STT */
   startListening: (options?: DeepgramLiveListenOptions) => Promise<void>;
@@ -295,4 +355,15 @@ export type UseDeepgramSpeechToTextReturn = {
     file: DeepgramPrerecordedSource,
     options?: DeepgramPrerecordedOptions
   ) => Promise<void>;
+
+  /** Current state of the transcription session (if trackState is enabled) */
+  state?: {
+    status: 'idle' | 'loading' | 'listening' | 'transcribing' | 'error';
+    error: Error | null;
+  };
+
+  /** Final accumulated transcript (only returned when trackTranscript is enabled) */
+  transcript?: string;
+  /** Interim/partial transcript (only returned when trackTranscript is enabled for live) */
+  interimTranscript?: string;
 };

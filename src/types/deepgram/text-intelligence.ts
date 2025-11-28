@@ -4,6 +4,10 @@ export type DeepgramTextIntelligenceCallbackMethod = DeepgramCallbackMethod;
 
 export type DeepgramTextIntelligenceCustomMode = DeepgramCustomMode;
 
+/**
+ * Supported languages for text intelligence analysis.
+ * @see https://developers.deepgram.com/docs/language-support
+ */
 export type DeepgramTextIntelligenceLanguage =
   | 'bg'
   | 'ca'
@@ -63,10 +67,26 @@ export type DeepgramTextIntelligenceLanguage =
   | 'vi'
   | (string & {});
 
+/**
+ * Input for text intelligence analysis.
+ * Can be raw text or a URL to a text resource.
+ */
 export type DeepgramTextIntelligenceInput =
   | { text: string; url?: string }
   | { text?: string; url: string };
 
+/**
+ * Configuration options for text intelligence analysis.
+ * @example
+ * ```typescript
+ * const options: UseDeepgramTextIntelligenceOptions = {
+ *   summarize: true,
+ *   topics: true,
+ *   sentiment: true,
+ *   language: 'en'
+ * };
+ * ```
+ */
 export interface UseDeepgramTextIntelligenceOptions {
   /** Whether to run summarization on the input */
   summarize?: boolean;
@@ -92,6 +112,9 @@ export interface UseDeepgramTextIntelligenceOptions {
   callbackMethod?: DeepgramTextIntelligenceCallbackMethod;
 }
 
+/**
+ * Props for the `useDeepgramTextIntelligence` hook.
+ */
 export interface UseDeepgramTextIntelligenceProps {
   /** Called before analysis begins (e.g. show spinner) */
   onBeforeAnalyze?: () => void;
@@ -101,12 +124,24 @@ export interface UseDeepgramTextIntelligenceProps {
   onAnalyzeError?: (error: Error) => void;
   /** Configuration for which analyses to run */
   options?: UseDeepgramTextIntelligenceOptions;
+  /** Whether to track the internal state of the analysis */
+  trackState?: boolean;
 }
 
+/**
+ * Return value of the `useDeepgramTextIntelligence` hook.
+ */
 export interface UseDeepgramTextIntelligenceReturn {
   /**
    * Analyze the provided input.
    * Pass an object with either `text` (raw string) or `url` (link to text resource).
    */
   analyze: (input: DeepgramTextIntelligenceInput) => Promise<void>;
+  /**
+   * Current state of the analysis (only if trackState is true).
+   */
+  state?: {
+    status: 'idle' | 'loading' | 'analyzing' | 'error';
+    error: Error | null;
+  };
 }

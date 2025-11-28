@@ -12,10 +12,9 @@ import { useDeepgramTextIntelligence } from 'react-native-deepgram';
 export default function TextIntelligence() {
   const [input, setInput] = useState<string>('');
   const [result, setResult] = useState<any>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState<boolean>(false);
 
-  const { analyze } = useDeepgramTextIntelligence({
+  const { analyze, state } = useDeepgramTextIntelligence({
+    trackState: true,
     options: {
       summarize: true,
       topics: true,
@@ -27,19 +26,8 @@ export default function TextIntelligence() {
       sentiment: true,
       language: 'en-US',
     },
-    onBeforeAnalyze: () => {
-      setLoading(true);
-      setError(null);
-      setResult(null);
-    },
-    onAnalyzeSuccess: (res) => {
-      setLoading(false);
-      setResult(res);
-    },
-    onAnalyzeError: (err) => {
-      setLoading(false);
-      setError(err.message);
-    },
+    onBeforeAnalyze: () => setResult(null),
+    onAnalyzeSuccess: setResult,
   });
 
   const handleAnalyze = () => {
@@ -58,8 +46,12 @@ export default function TextIntelligence() {
 
       <Button title="Analyze Text" onPress={handleAnalyze} />
 
-      {loading && <Text style={styles.status}>Analyzing...</Text>}
-      {error && <Text style={styles.error}>Error: {error}</Text>}
+      {state?.status === 'analyzing' && (
+        <Text style={styles.status}>Analyzing...</Text>
+      )}
+      {state?.error && (
+        <Text style={styles.error}>Error: {state.error.message}</Text>
+      )}
 
       {result && (
         <ScrollView style={styles.outputContainer}>

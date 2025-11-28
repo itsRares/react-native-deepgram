@@ -4,6 +4,12 @@ export { useDeepgramManagement } from './useDeepgramManagement';
 export { useDeepgramTextToSpeech } from './useDeepgramTextToSpeech';
 export { useDeepgramVoiceAgent } from './useDeepgramVoiceAgent';
 export { Deepgram } from './NativeDeepgram';
+export {
+  arrayBufferToBase64,
+  createAudioPlayerController,
+  useAsyncCall,
+  createAgentSettings,
+} from './helpers';
 export type {
   DeepgramTextToSpeechModel,
   DeepgramTextToSpeechEncoding,

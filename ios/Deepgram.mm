@@ -887,6 +887,8 @@ RCT_EXPORT_METHOD(feedAudio:(NSString *)b64)
   @catch (NSException *e) {
     DGLogError(@"[Deepgram] feedAudio: exception %@", e);
   }
+}
+
 /**
  * Stop audio playback and cleanup AVAudioEngine.
  */
@@ -932,6 +934,82 @@ RCT_EXPORT_METHOD(setAudioConfig
 {
   DGLogDebug(@"[Deepgram] setAudioConfig: sampleRate=%@ channels=%@", sampleRate, channels);
   [self startPlayer:sampleRate channels:channels];
+}
+
+/**
+ * Play a single audio chunk (base64-encoded PCM).
+ * This is used for one-shot TTS playback (HTTP mode).
+ */
+RCT_EXPORT_METHOD(playAudioChunk:(NSString *)b64
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+{
+  @try {
+    if (!b64 || b64.length == 0) {
+      if (reject) reject(@"audio_chunk_error", @"Empty audio chunk", nil);
+      return;
+    }
+    
+    NSData *pcmData = [[NSData alloc] initWithBase64EncodedString:b64 options:0];
+    if (!pcmData || pcmData.length == 0) {
+      if (reject) reject(@"audio_chunk_error", @"Failed to decode audio chunk", nil);
+      return;
+    }
+    
+    // Activate audio session
+    NSError *sessionError = nil;
+    if (![self activateAudioSession:&sessionError]) {
+      NSString *message = sessionError.localizedDescription ?: @"Failed to activate audio session";
+      DGLogError(@"[Deepgram] playAudioChunk: activation failed %@", message);
+      if (reject) reject(@"audio_chunk_error", message, sessionError);
+      return;
+    }
+    
+    // Determine sample rate and channels from the audio data
+    // For linear16 PCM, assume 24kHz mono (2 bytes per sample)
+    int sampleRate = self.currentSampleRate > 0 ? self.currentSampleRate : 24000;
+    int channels = 1;
+    
+    // Setup audio engine if needed
+    if (!self.audioEngine || !self.audioEngine.isRunning) {
+      NSError *engineError = nil;
+      if (![self setupAudioEngineWithSampleRate:sampleRate
+                                       channels:channels
+                                          error:&engineError]) {
+        DGLogError(@"[Deepgram] playAudioChunk: failed to setup audio engine: %@", engineError);
+        if (reject) reject(@"audio_chunk_error", @"Failed to setup audio engine", engineError);
+        return;
+      }
+    }
+    
+    // Create PCM buffer and schedule for playback
+    AVAudioPCMBuffer *buffer = [self createPCMBufferFromData:pcmData];
+    if (!buffer) {
+      DGLogError(@"[Deepgram] playAudioChunk: failed to create PCM buffer");
+      if (reject) reject(@"audio_chunk_error", @"Failed to create PCM buffer", nil);
+      return;
+    }
+    
+    self.isPlaying = YES;
+    
+    // Schedule buffer with completion handler to resolve promise
+    [self.playerNode scheduleBuffer:buffer completionHandler:^{
+      self.isPlaying = NO;
+      [self maybeDeactivateAudioSession];
+      if (resolve) resolve(nil);
+    }];
+    
+    // Start playing if not already playing
+    if (!self.playerNode.isPlaying) {
+      [self.playerNode play];
+    }
+    
+    DGLogDebug(@"[Deepgram] playAudioChunk: scheduled %lu bytes for playback", (unsigned long)pcmData.length);
+  }
+  @catch (NSException *e) {
+    DGLogError(@"[Deepgram] playAudioChunk: exception %@", e);
+    if (reject) reject(@"audio_chunk_error", e.reason, nil);
+  }
 }
 
 - (void)invalidate

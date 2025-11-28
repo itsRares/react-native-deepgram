@@ -135,11 +135,15 @@ configure({ apiKey: 'YOUR_DEEPGRAM_API_KEY' });
 | `useDeepgramTextIntelligence` | Text analysis (summaries, topics, intents, sentiment) |
 | `useDeepgramManagement`       | Typed wrapper around the Management REST API         |
 
+> 💡 **Pro tip**: All hooks now export a `state` object (and other reactive values) so you can easily track connection status, errors, and transcripts without maintaining your own state.
+
 ---
 
 ## Voice Agent (`useDeepgramVoiceAgent`)
 
 `useDeepgramVoiceAgent` connects to `wss://agent.deepgram.com/v1/agent/converse`, captures microphone audio, and optionally auto-plays the agent's streamed responses. It wraps the full Voice Agent messaging surface so you can react to conversation updates, function calls, warnings, and raw PCM audio.
+
+> 🔊 **Audio Handling**: This hook uses `AVAudioEngine` on iOS for hardware-accelerated echo cancellation, ensuring the agent doesn't hear itself speak. It also manages the audio session automatically.
 
 ### Quick start
 
@@ -147,10 +151,17 @@ configure({ apiKey: 'YOUR_DEEPGRAM_API_KEY' });
 const {
   connect,
   disconnect,
+  state, // { connectionState, error, warning }
+  agentStatus, // { thinking, latency }
+  conversation, // Array<{ role, content }>
   injectUserMessage,
   sendFunctionCallResponse,
   updatePrompt,
 } = useDeepgramVoiceAgent({
+  trackState: true, // Enable reactive state tracking
+  trackConversation: true, // Enable conversation history tracking
+  trackAgentStatus: true, // Enable agent status tracking
+  autoPlayAudio: true, // Automatically play agent audio
   defaultSettings: {
     audio: {
       input: { encoding: 'linear16', sample_rate: 24_000 },
@@ -207,6 +218,7 @@ const rePrompt = () => {
 
 return (
   <>
+    <Text>Status: {state.connectionState}</Text>
     <Button title="Start agent" onPress={begin} />
     <Button title="Ask" onPress={askQuestion} />
     <Button title="Send tool output" onPress={provideTooling} />
@@ -227,6 +239,10 @@ return (
 | `endpoint` | `string` | WebSocket endpoint used for the agent conversation (defaults to `wss://agent.deepgram.com/v1/agent/converse`). |
 | `defaultSettings` | `DeepgramVoiceAgentSettings` | Base `Settings` payload sent on connect; merge per-call overrides via `connect(override)`. |
 | `autoStartMicrophone` | `boolean` | Automatically requests mic access and starts streaming PCM when `true` (default). |
+| `autoPlayAudio` | `boolean` | Automatically plays received audio using the native player (default: `true`). |
+| `trackState` | `boolean` | Enable reactive state tracking (connection, errors, warnings) via the `state` return value (default: `false`). |
+| `trackConversation` | `boolean` | Enable conversation history tracking via the `conversation` return value (default: `false`). |
+| `trackAgentStatus` | `boolean` | Enable agent status tracking (thinking, latency) via the `agentStatus` return value (default: `false`). |
 | `downsampleFactor` | `number` | Manually override the downsample ratio applied to captured audio (defaults to a heuristic based on the requested sample rate). |
 
 #### Callbacks
@@ -268,6 +284,10 @@ return (
 | `updatePrompt` | `(prompt: string) => boolean` | Replaces the active system prompt. |
 | `sendMedia` | `(chunk: ArrayBuffer \| Uint8Array \| number[]) => boolean` | Streams additional PCM audio to the agent (e.g., pre-recorded buffers). |
 | `isConnected` | `() => boolean` | Returns `true` when the socket is open. |
+| `clearConversation` | `() => void` | Clears the internal conversation history. |
+| `state` | `DeepgramVoiceAgentState` | Reactive state object (requires `trackState: true`). |
+| `conversation` | `DeepgramVoiceAgentConversationMessage[]` | Reactive conversation history (requires `trackConversation: true`). |
+| `agentStatus` | `DeepgramVoiceAgentStatus` | Reactive agent status (requires `trackAgentStatus: true`). |
 
 #### Settings payload (`DeepgramVoiceAgentSettings`)
 
@@ -301,7 +321,14 @@ The speech hook streams microphone audio using WebSockets and can also transcrib
 ### Live streaming quick start
 
 ```tsx
-const { startListening, stopListening } = useDeepgramSpeechToText({
+const {
+  startListening,
+  stopListening,
+  state, // { status, error }
+  transcript, // "Hello world..."
+} = useDeepgramSpeechToText({
+  trackState: true,
+  trackTranscript: true,
   onTranscript: console.log,
   live: {
     apiVersion: 'v2',
@@ -311,6 +338,7 @@ const { startListening, stopListening } = useDeepgramSpeechToText({
   },
 });
 
+<Text>Transcript: {transcript}</Text>
 <Button
   title="Start"
   onPress={() => startListening({ keywords: ['Deepgram'] })}
@@ -355,6 +383,8 @@ const pickFile = async () => {
 | `onTranscribeError`    | `(error: unknown) => void`     | Fired if prerecorded transcription fails.                       |
 | `live`                 | `DeepgramLiveListenOptions`    | Default options merged into every live stream.                  |
 | `prerecorded`          | `DeepgramPrerecordedOptions`   | Default options merged into every file transcription.           |
+| `trackState`           | `boolean`                      | Enable reactive state tracking via the `state` return value (default: `false`). |
+| `trackTranscript`      | `boolean`                      | Enable reactive transcript tracking via the `transcript` return value (default: `false`). |
 
 #### Returned methods
 
@@ -363,6 +393,9 @@ const pickFile = async () => {
 | `startListening`   | `(options?: DeepgramLiveListenOptions) => Promise<void>`                         | Requests mic access, starts recording, and streams audio to Deepgram.       |
 | `stopListening`    | `() => void`                                                                     | Stops recording and closes the active WebSocket.                            |
 | `transcribeFile`   | `(file: DeepgramPrerecordedSource, options?: DeepgramPrerecordedOptions) => Promise<void>` | Uploads a file/URI/URL and resolves via the success/error callbacks. |
+| `state`            | `DeepgramSpeechToTextState`                                                      | Reactive state object (requires `trackState: true`).                        |
+| `transcript`       | `string`                                                                         | Reactive final transcript (requires `trackTranscript: true`).               |
+| `interimTranscript`| `string`                                                                         | Reactive interim transcript (requires `trackTranscript: true`).             |
 
 #### Live transcription options (`DeepgramLiveListenOptions`)
 
@@ -487,7 +520,10 @@ const {
   clearStream,
   closeStreamGracefully,
   stopStreaming,
+  state, // { status, error }
 } = useDeepgramTextToSpeech({
+  trackState: true,
+  autoPlayAudio: true, // Automatically play received audio
   options: {
     stream: {
       model: 'aura-2-asteria-en',
@@ -525,6 +561,8 @@ closeStreamGracefully();
 | `onStreamError`      | `(error: unknown) => void`                                            | Fired when the WebSocket errors.                                            |
 | `onStreamEnd`        | `() => void`                                                          | Fired when the stream closes (gracefully or otherwise).                     |
 | `options`            | `UseDeepgramTextToSpeechOptions`                                     | Default configuration merged into HTTP and streaming requests.              |
+| `autoPlayAudio`      | `boolean`                                                             | Automatically plays received audio using the native player (default: `true`). |
+| `trackState`         | `boolean`                                                             | Enable reactive state tracking via the `state` return value (default: `false`). |
 
 #### Returned methods
 
@@ -538,6 +576,7 @@ closeStreamGracefully();
 | `clearStream`         | `() => boolean`                                                           | Clears buffered text/audio without closing the socket.                                         |
 | `closeStreamGracefully` | `() => boolean`                                                         | Asks Deepgram to finish outstanding audio then close the stream.                               |
 | `stopStreaming`       | `() => void`                                                              | Force-closes the socket and releases resources.                                                |
+| `state`               | `DeepgramTextToSpeechState`                                               | Reactive state object (requires `trackState: true`).                                            |
 
 #### Configuration (`UseDeepgramTextToSpeechOptions`)
 
@@ -604,7 +643,8 @@ closeStreamGracefully();
 Run summarisation, topic detection, intent detection, sentiment analysis, and more over plain text or URLs.
 
 ```tsx
-const { analyze } = useDeepgramTextIntelligence({
+const { analyze, state } = useDeepgramTextIntelligence({
+  trackState: true,
   onAnalyzeSuccess: (result) => console.log(result.summary),
   options: {
     summarize: true,
@@ -632,6 +672,7 @@ await analyze({ text: 'Deepgram makes voice data useful.' });
 | `language`         | `DeepgramTextIntelligenceLanguage`          | BCP-47 language hint (defaults to `'en'`).                                   |
 | `callback`         | `string`                                    | Webhook URL invoked after processing completes.                              |
 | `callbackMethod`   | `'POST' \| 'PUT' \| (string & {})`          | HTTP method used for the callback.                                           |
+| `trackState`       | `boolean`                                    | Enable reactive state tracking via the `state` return value (default: `false`). |
 
 ---
 

@@ -54,11 +54,6 @@ const STREAM_ENCODING_OPTIONS: Option[] = [
 const SAMPLE_RATE_OPTIONS: Option[] = [
   '8000',
   '16000',
-  '22050',
-  '24000',
-  '32000',
-  '44100',
-  '48000',
 ].map((value) => ({ label: `${value} Hz`, value }));
 
 const CONTAINER_OPTIONS: Option[] = [
@@ -127,7 +122,7 @@ export default function TextToSpeech() {
 
   const [httpModel, setHttpModel] = useState('aura-2-asteria-en');
   const [httpEncoding, setHttpEncoding] = useState('linear16');
-  const [httpSampleRate, setHttpSampleRate] = useState('24000');
+  const [httpSampleRate, setHttpSampleRate] = useState('16000');
   const [httpContainer, setHttpContainer] = useState('none');
   const [httpBitRate, setHttpBitRate] = useState('48000');
   const [httpCallbackUrl, setHttpCallbackUrl] = useState('');
@@ -136,7 +131,7 @@ export default function TextToSpeech() {
 
   const [streamModel, setStreamModel] = useState('aura-2-asteria-en');
   const [streamEncoding, setStreamEncoding] = useState('linear16');
-  const [streamSampleRate, setStreamSampleRate] = useState('24000');
+  const [streamSampleRate, setStreamSampleRate] = useState('16000');
   const [streamMipOptOut, setStreamMipOptOut] = useState(false);
   const modelOptions = useModelOptions();
 

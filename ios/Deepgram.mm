@@ -787,6 +787,10 @@ RCT_EXPORT_METHOD(stopAudio
   } @catch (NSException *exception) {
     // Continue - voice processing not critical for basic playback
   }
+
+#if TARGET_IPHONE_SIMULATOR
+  DGLogWarn(@"[Deepgram] NOTE: Voice Processing I/O (Echo Cancellation) is NOT supported on the iOS Simulator. Audio output may be picked up by the microphone. Please test on a physical device for proper AEC behavior.");
+#endif
   
   [self.audioEngine prepare];
   NSError *startError = nil;

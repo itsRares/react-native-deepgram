@@ -8,8 +8,12 @@ import {
   TextInput,
   Switch,
 } from 'react-native';
-import { useDeepgramVoiceAgent } from 'react-native-deepgram';
+import { useDeepgramVoiceAgent, Deepgram } from 'react-native-deepgram';
 import OptionSelect from './components/OptionSelect';
+
+declare const Buffer: {
+  from(data: Uint8Array | string, encoding?: string): { toString(encoding: string): string };
+};
 
 type ConversationEntry = {
   role: string;
@@ -41,9 +45,8 @@ const THINK_MODEL_OPTIONS = [
 ];
 
 const SAMPLE_RATE_OPTIONS = [
-  { label: '48 kHz', value: '48000' },
-  { label: '24 kHz', value: '24000' },
-  { label: '16 kHz', value: '16000' },
+  { label: '16 kHz (recommended)', value: '16000' },
+  { label: '8 kHz (lower quality)', value: '8000' },
 ];
 
 export default function VoiceAgent() {
@@ -64,7 +67,7 @@ export default function VoiceAgent() {
   );
   const [tagsInput, setTagsInput] = useState('demo');
   const [autoStartMic, setAutoStartMic] = useState(true);
-  const [inputSampleRate, setInputSampleRate] = useState('24000');
+  const [inputSampleRate, setInputSampleRate] = useState('16000');
   const [temperature, setTemperature] = useState('0.7');
   const [customMessage, setCustomMessage] = useState('');
 
@@ -75,7 +78,7 @@ export default function VoiceAgent() {
       .filter(Boolean);
     const resolvedListenModel = listenModel.trim() || 'nova-3';
     const resolvedThinkModel = thinkModel.trim() || 'gpt-4o';
-    const inputRate = Number(inputSampleRate) || 24_000;
+    const inputRate = Number(inputSampleRate) || 16_000;
     const parsedTemperature = parseFloat(temperature);
     const boundedTemperature = Number.isFinite(parsedTemperature)
       ? Math.max(0, Math.min(2, parsedTemperature))
@@ -84,6 +87,7 @@ export default function VoiceAgent() {
     return {
       audio: {
         input: { encoding: 'linear16', sample_rate: inputRate },
+        output: { encoding: 'linear16', sample_rate: inputRate, container: 'none' },
       },
       agent: {
         language: language.trim() || 'en',
@@ -117,11 +121,6 @@ export default function VoiceAgent() {
     thinkModel,
   ]);
 
-  const downsampleFactor = useMemo(() => {
-    const rate = Number(inputSampleRate) || 24_000;
-    return Math.max(1, Math.round(48_000 / rate));
-  }, [inputSampleRate]);
-
   const {
     connect,
     disconnect,
@@ -133,18 +132,21 @@ export default function VoiceAgent() {
   } = useDeepgramVoiceAgent({
     defaultSettings: agentSettings,
     autoStartMicrophone: autoStartMic,
-    downsampleFactor,
     onBeforeConnect: () => {
       setStatus('connecting');
       setError(null);
       setWarning(null);
       setConversation([]);
     },
-    onConnect: () => setStatus('connected'),
+    onConnect: () => {
+      setStatus('connected');
+      Deepgram.startPlayer?.(16000, 1);
+    },
     onClose: () => {
       setStatus('idle');
       setThinking(null);
       setLatency(null);
+      Deepgram.stopPlayer?.();
     },
     onError: (err) => {
       setStatus('error');
@@ -172,6 +174,20 @@ export default function VoiceAgent() {
     onServerError: (message) => {
       setStatus('error');
       setError(message.description || message.code || 'Voice agent error');
+    },
+    onAudioConfig: (message: { sample_rate?: number; channels?: number }) => {
+      const sampleRate = message.sample_rate || 16000;
+      const channels = message.channels || 1;
+      Deepgram.startPlayer?.(sampleRate, channels);
+    },
+    onAudio: async (audioData: ArrayBuffer) => {
+      try {
+        const bytes = new Uint8Array(audioData);
+        const b64 = Buffer.from(bytes).toString('base64');
+        await Deepgram.feedAudio?.(b64);
+      } catch (err) {
+        console.error('[VoiceAgentDemo] onAudio error:', err);
+      }
     },
   });
 
@@ -319,8 +335,7 @@ export default function VoiceAgent() {
 
           <View style={styles.infoBox}>
             <Text style={styles.infoText}>
-              🎧 Agent replies are delivered as text only. Speak into the
-              microphone and read the responses below.
+              🎧 The agent will respond with voice. Make sure your volume is up!
             </Text>
           </View>
 
@@ -380,11 +395,10 @@ export default function VoiceAgent() {
         {warning && <Text style={styles.warning}>Warning: {warning}</Text>}
         {error && <Text style={styles.error}>Error: {error}</Text>}
 
-        <Text style={styles.sectionTitle}>Conversation (Text Only)</Text>
+        <Text style={styles.sectionTitle}>Conversation</Text>
         <View style={styles.infoBox}>
           <Text style={styles.infoText}>
-            💬 The agent responds with text transcripts so playback can't echo
-            back into the microphone.
+            💬 Text transcripts of the conversation appear here alongside audio playback.
           </Text>
         </View>
         <View style={styles.conversation}>

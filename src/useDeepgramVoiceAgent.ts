@@ -22,6 +22,7 @@ import type {
   DeepgramVoiceAgentInjectionRefusedMessage,
   DeepgramVoiceAgentWarningMessage,
   DeepgramVoiceAgentErrorMessage,
+  DeepgramVoiceAgentAudioConfigMessage,
 } from './types';
 
 const DEFAULT_AGENT_ENDPOINT = 'wss://agent.deepgram.com/v1/agent/converse';
@@ -203,6 +204,8 @@ export interface UseDeepgramVoiceAgentProps {
   ) => void;
   onWarning?: (message: DeepgramVoiceAgentWarningMessage) => void;
   onServerError?: (message: DeepgramVoiceAgentErrorMessage) => void;
+  onAudioConfig?: (message: DeepgramVoiceAgentAudioConfigMessage) => void;
+  onAudio?: (audioData: ArrayBuffer) => void;
 }
 
 export interface UseDeepgramVoiceAgentReturn {
@@ -245,6 +248,8 @@ export function useDeepgramVoiceAgent({
   onInjectionRefused,
   onWarning,
   onServerError,
+  onAudioConfig,
+  onAudio,
 }: UseDeepgramVoiceAgentProps = {}): UseDeepgramVoiceAgentReturn {
   const ws = useRef<WebSocketLike | null>(null);
   const audioSub = useRef<ReturnType<NativeEventEmitter['addListener']> | null>(
@@ -282,6 +287,8 @@ export function useDeepgramVoiceAgent({
   const onInjectionRefusedRef = useRef(onInjectionRefused);
   const onWarningRef = useRef(onWarning);
   const onServerErrorRef = useRef(onServerError);
+  const onAudioConfigRef = useRef(onAudioConfig);
+  const onAudioRef = useRef(onAudio);
   const autoStartMicRef = useRef(autoStartMicrophone);
 
   const sanitizeAudioSettings = useCallback(
@@ -418,6 +425,8 @@ export function useDeepgramVoiceAgent({
   onInjectionRefusedRef.current = onInjectionRefused;
   onWarningRef.current = onWarning;
   onServerErrorRef.current = onServerError;
+  onAudioConfigRef.current = onAudioConfig;
+  onAudioRef.current = onAudio;
   autoStartMicRef.current = autoStartMicrophone;
   if (downsampleFactor != null) {
     currentDownsample.current = downsampleFactor;
@@ -431,6 +440,9 @@ export function useDeepgramVoiceAgent({
       Deepgram.stopRecording().catch(() => {});
       microphoneActive.current = false;
     }
+
+    // Cleanup audio session for playback
+    Deepgram.stopAudio().catch(() => {});
 
     const socket = ws.current;
     if (socket) {
@@ -587,8 +599,14 @@ export function useDeepgramVoiceAgent({
               );
               break;
             case 'Audio':
+              // Audio binary data will be handled by onmessage binary path
+              break;
             case 'AudioConfig':
-              // Audio responses are ignored in text-only mode.
+              if (hasKeys(message, ['sample_rate'])) {
+                onAudioConfigRef.current?.(
+                  message as DeepgramVoiceAgentAudioConfigMessage
+                );
+              }
               break;
             case 'InjectionRefused':
               if (hasKeys(message, ['message'])) {
@@ -637,7 +655,8 @@ export function useDeepgramVoiceAgent({
 
       const buffer = ensureArrayBuffer(ev.data);
       if (buffer) {
-        // Binary audio responses are ignored in text-only mode.
+        // Binary audio from server
+        onAudioRef.current?.(buffer);
       }
     },
     [
@@ -740,6 +759,10 @@ export function useDeepgramVoiceAgent({
         if (eventName) {
           audioSub.current = emitter.addListener(eventName, handleMicChunk);
         }
+      } else {
+        // Only initialize audio session for playback if not recording
+        // (startRecording already activates the audio session)
+        await Deepgram.startAudio();
       }
 
       const sanitizedDefault = sanitizeSettings(defaultSettingsRef.current);

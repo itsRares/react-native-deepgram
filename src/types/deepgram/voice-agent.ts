@@ -243,6 +243,20 @@ export interface DeepgramVoiceAgentWarningMessage {
   [key: string]: unknown;
 }
 
+export interface DeepgramVoiceAgentAudioConfigMessage {
+  type: 'AudioConfig';
+  sample_rate?: number;
+  channels?: number;
+  encoding?: string;
+  [key: string]: unknown;
+}
+
+export interface DeepgramVoiceAgentAudioMessage {
+  type: 'Audio';
+  // Binary audio data will be in the WebSocket message payload
+  [key: string]: unknown;
+}
+
 export type DeepgramVoiceAgentServerMessage =
   | DeepgramVoiceAgentWelcomeMessage
   | DeepgramVoiceAgentSettingsAppliedMessage
@@ -258,6 +272,8 @@ export type DeepgramVoiceAgentServerMessage =
   | DeepgramVoiceAgentInjectionRefusedMessage
   | DeepgramVoiceAgentErrorMessage
   | DeepgramVoiceAgentWarningMessage
+  | DeepgramVoiceAgentAudioConfigMessage
+  | DeepgramVoiceAgentAudioMessage
   | DeepgramVoiceAgentSettingsMessage
   | DeepgramVoiceAgentUpdateSpeakMessage
   | DeepgramVoiceAgentInjectUserMessage

@@ -37,7 +37,7 @@ typedef struct {
   bool isRunning;
 } DGRecordState;
 
-@interface Deepgram : RCTEventEmitter <AVAudioPlayerDelegate>
+@interface Deepgram : RCTEventEmitter
 {
   DGRecordState _recordState;
 }
@@ -49,8 +49,10 @@ typedef struct {
 @property (atomic, assign) BOOL                    hasListeners;
 @property (atomic, assign) BOOL                    appIsActive;
 
-// Playback / TTS
-@property (nonatomic, strong) AVAudioPlayer      *audioPlayer;
+// Playback / TTS (AVAudioEngine-based with echo cancellation)
+@property (nonatomic, strong) AVAudioEngine      *audioEngine;
+@property (nonatomic, strong) AVAudioPlayerNode  *playerNode;
+@property (nonatomic, strong) AVAudioFormat      *playbackFormat;
 @property (nonatomic, strong) NSMutableData      *audioBuffer;
 @property (nonatomic, assign) BOOL                isPlaying;
 @property (nonatomic, assign) int                 currentSampleRate;
@@ -157,6 +159,12 @@ RCT_EXPORT_MODULE();
                 name:AVAudioSessionRouteChangeNotification
               object:nil];
     DGLogDebug(@"[Deepgram] init: registered for AVAudioSessionRouteChangeNotification");
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self
+           selector:@selector(handleAudioInterruption:)
+                name:AVAudioSessionInterruptionNotification
+              object:nil];
+    DGLogDebug(@"[Deepgram] init: registered for AVAudioSessionInterruptionNotification");
   }
   return self;
 }
@@ -351,6 +359,42 @@ RCT_EXPORT_MODULE();
 
   DGLogDebug(@"[Deepgram] handleAudioRouteChange: reactivating session");
   [self activateAudioSession:NULL];
+}
+
+- (void)handleAudioInterruption:(NSNotification *)note
+{
+  DGLogDebug(@"[Deepgram] handleAudioInterruption: %@", note.userInfo);
+  NSNumber *typeValue = note.userInfo[AVAudioSessionInterruptionTypeKey];
+  AVAudioSessionInterruptionType type = (AVAudioSessionInterruptionType)typeValue.unsignedIntegerValue;
+
+  if (type == AVAudioSessionInterruptionTypeBegan) {
+    DGLogDebug(@"[Deepgram] handleAudioInterruption: interruption began");
+    if (_recordState.isRunning && _recordState.queue) {
+      DGLogDebug(@"[Deepgram] handleAudioInterruption: pausing recording queue");
+      AudioQueuePause(_recordState.queue);
+    }
+    if (self.isPlaying && self.playerNode) {
+      DGLogDebug(@"[Deepgram] handleAudioInterruption: pausing player node");
+      [self.playerNode pause];
+    }
+  } else if (type == AVAudioSessionInterruptionTypeEnded) {
+    DGLogDebug(@"[Deepgram] handleAudioInterruption: interruption ended");
+    NSNumber *optionValue = note.userInfo[AVAudioSessionInterruptionOptionKey];
+    AVAudioSessionInterruptionOptions options = (AVAudioSessionInterruptionOptions)optionValue.unsignedIntegerValue;
+    if (options & AVAudioSessionInterruptionOptionShouldResume) {
+      DGLogDebug(@"[Deepgram] handleAudioInterruption: should resume");
+      [self activateAudioSession:nil];
+      
+      if (_recordState.isRunning && _recordState.queue) {
+        DGLogDebug(@"[Deepgram] handleAudioInterruption: resuming recording queue");
+        AudioQueueStart(_recordState.queue, NULL);
+      }
+      if (self.isPlaying && self.playerNode) {
+        DGLogDebug(@"[Deepgram] handleAudioInterruption: resuming player node");
+        [self.playerNode play];
+      }
+    }
+  }
 }
 
 #if TARGET_OS_IOS
@@ -697,182 +741,183 @@ RCT_EXPORT_METHOD(stopAudio
 }
 
 /* ================================================================== */
-/*  2.  SIMPLE AUDIO PLAYBACK (USING AVAUDIOPLAYER)                   */
+/*  2.  AVAUDIOENGINE PLAYBACK WITH VOICE PROCESSING (ECHO CANCEL)    */
 /* ================================================================== */
 
 /**
- * Create a WAV header for PCM data.
- * This allows us to use AVAudioPlayer with raw PCM data.
+ * Setup AVAudioEngine with Voice Processing I/O for echo cancellation.
+ * This enables hardware-level echo cancellation during simultaneous recording + playback.
  */
-- (NSData *)createWAVHeaderForPCMData:(NSData *)pcmData sampleRate:(int)sampleRate {
-  uint32_t dataSize = (uint32_t)pcmData.length;
-  uint32_t fileSize = 36 + dataSize;
-  uint16_t channels = 1;
-  uint16_t bitsPerSample = 16;
-  uint32_t byteRate = sampleRate * channels * (bitsPerSample / 8);
-  uint16_t blockAlign = channels * (bitsPerSample / 8);
+- (BOOL)setupAudioEngineWithSampleRate:(int)sampleRate
+                              channels:(int)channels
+                                 error:(NSError **)outError {
+  if (self.audioEngine && self.audioEngine.isRunning) {
+    [self.audioEngine stop];
+  }
   
-  NSMutableData *wavData = [NSMutableData data];
+  self.audioEngine = [[AVAudioEngine alloc] init];
+  self.playerNode = [[AVAudioPlayerNode alloc] init];
   
-  // RIFF header
-  [wavData appendBytes:"RIFF" length:4];
-  [wavData appendBytes:&fileSize length:4];
-  [wavData appendBytes:"WAVE" length:4];
+  self.playbackFormat = [[AVAudioFormat alloc]
+                         initWithCommonFormat:AVAudioPCMFormatInt16
+                         sampleRate:sampleRate
+                         channels:channels
+                         interleaved:YES];
   
-  // fmt chunk
-  [wavData appendBytes:"fmt " length:4];
-  uint32_t fmtSize = 16;
-  [wavData appendBytes:&fmtSize length:4];
-  uint16_t audioFormat = 1; // PCM
-  [wavData appendBytes:&audioFormat length:2];
-  [wavData appendBytes:&channels length:2];
-  uint32_t sampleRateValue = sampleRate;
-  [wavData appendBytes:&sampleRateValue length:4];
-  [wavData appendBytes:&byteRate length:4];
-  [wavData appendBytes:&blockAlign length:2];
-  [wavData appendBytes:&bitsPerSample length:2];
+  if (!self.playbackFormat) {
+    if (outError) {
+      *outError = [NSError errorWithDomain:@"DeepgramAudioEngine"
+                                      code:-1
+                                  userInfo:@{NSLocalizedDescriptionKey: @"Failed to create audio format"}];
+    }
+    return NO;
+  }
   
-  // data chunk
-  [wavData appendBytes:"data" length:4];
-  [wavData appendBytes:&dataSize length:4];
-  [wavData appendData:pcmData];
+  [self.audioEngine attachNode:self.playerNode];
+  [self.audioEngine connect:self.playerNode
+                         to:self.audioEngine.mainMixerNode
+                     format:self.playbackFormat];
   
-  return wavData;
+  @try {
+    AVAudioInputNode *inputNode = self.audioEngine.inputNode;
+    if (inputNode) {
+      NSError *voiceProcessingError = nil;
+      [inputNode setVoiceProcessingEnabled:YES error:&voiceProcessingError];
+    }
+  } @catch (NSException *exception) {
+    // Continue - voice processing not critical for basic playback
+  }
+  
+  [self.audioEngine prepare];
+  NSError *startError = nil;
+  BOOL started = [self.audioEngine startAndReturnError:&startError];
+  
+  if (!started) {
+    DGLogError(@"[Deepgram] Failed to start audio engine: %@", startError.localizedDescription);
+    if (outError) {
+      *outError = startError;
+    }
+    return NO;
+  }
+  
+  return YES;
 }
 
-RCT_EXPORT_METHOD(startPlayer
-                  :(nonnull NSNumber *)sampleRate
+/**
+ * Create AVAudioPCMBuffer from raw PCM data.
+ */
+- (AVAudioPCMBuffer *)createPCMBufferFromData:(NSData *)data {
+  if (!data || data.length == 0 || !self.playbackFormat) {
+    return nil;
+  }
+  
+  // Calculate frame count (data length / bytes per frame)
+  const AudioStreamBasicDescription *asbd = self.playbackFormat.streamDescription;
+  int bytesPerFrame = asbd->mBytesPerFrame;
+  AVAudioFrameCount frameCount = (AVAudioFrameCount)(data.length / bytesPerFrame);
+  
+  if (frameCount == 0) {
+    return nil;
+  }
+  
+  AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc]
+                             initWithPCMFormat:self.playbackFormat
+                             frameCapacity:frameCount];
+  
+  buffer.frameLength = frameCount;
+  
+  // Copy audio data to buffer
+  memcpy(buffer.int16ChannelData[0], data.bytes, data.length);
+  
+  return buffer;
+}
+
+RCT_EXPORT_METHOD(startPlayer:(nonnull NSNumber *)sampleRate
                   channels:(nonnull NSNumber *)channels)
 {
-  DGLogDebug(@"[Deepgram] startPlayer: begin sampleRate=%@ channels=%@",
-        sampleRate,
-        channels);
   [self stopPlayer:nil rejecter:nil];
+  
   NSError *sessionError = nil;
   if (![self activateAudioSession:&sessionError]) {
-    DGLogWarn(@"[Deepgram] Unable to activate audio session for playback: %@",
-          sessionError.localizedDescription ?: sessionError);
+    DGLogWarn(@"[Deepgram] Unable to activate audio session: %@", sessionError);
+    return;
+  }
+
+  NSError *engineError = nil;
+  if (![self setupAudioEngineWithSampleRate:sampleRate.intValue
+                                   channels:channels.intValue
+                                      error:&engineError]) {
+    DGLogError(@"[Deepgram] Failed to setup audio engine: %@", engineError);
     return;
   }
 
   self.audioBuffer = [[NSMutableData alloc] init];
   self.isPlaying = NO;
   self.currentSampleRate = sampleRate.intValue;
-  DGLogDebug(@"[Deepgram] startPlayer: initialized buffer sampleRate=%d",
-        self.currentSampleRate);
 }
 
 /**
- * Add audio data to the buffer for streaming playback.
+ * Feed base64-encoded PCM audio data for playback using AVAudioEngine.
+ * Uses real-time PCM buffer streaming instead of WAV files.
  */
 RCT_EXPORT_METHOD(feedAudio:(NSString *)b64)
 {
-  DGLogDebug(@"[Deepgram] feedAudio: begin length=%lu", (unsigned long)b64.length);
-  if (!self.audioBuffer) {
-    // Use default sample rate if not set
-    int defaultSampleRate = self.currentSampleRate > 0 ? self.currentSampleRate : 16000;
-    DGLogDebug(@"[Deepgram] feedAudio: auto startPlayer defaultSampleRate=%d", defaultSampleRate);
-    [self startPlayer:@(defaultSampleRate) channels:@1];
+  @try {
+    if (!self.playerNode || !self.audioEngine || !self.audioEngine.isRunning) {
+      return;
+    }
+    
+    NSData *pcmData = [[NSData alloc] initWithBase64EncodedString:b64 options:0];
+    if (!pcmData || pcmData.length == 0) {
+      return;
+    }
+    
+    AVAudioPCMBuffer *buffer = [self createPCMBufferFromData:pcmData];
+    if (!buffer) {
+      DGLogError(@"[Deepgram] feedAudio: failed to create PCM buffer");
+      return;
+    }
+    
+    [self.playerNode scheduleBuffer:buffer completionHandler:nil];
+    
+    if (!self.playerNode.isPlaying) {
+      [self.playerNode play];
+    }
   }
-
-  NSData *pcmData = [[NSData alloc] initWithBase64EncodedString:b64 options:0];
-  if (!pcmData || pcmData.length == 0) {
-    DGLogDebug(@"[Deepgram] feedAudio: decoded data empty");
-    return;
+  @catch (NSException *e) {
+    DGLogError(@"[Deepgram] feedAudio: exception %@", e);
   }
-
-  [self.audioBuffer appendData:pcmData];
-  DGLogDebug(@"[Deepgram] feedAudio: appended %lu bytes (buffer=%lu)",
-        (unsigned long)pcmData.length,
-        (unsigned long)self.audioBuffer.length);
-
-  if (!self.isPlaying && self.audioBuffer.length > 1000) {
-    DGLogDebug(@"[Deepgram] feedAudio: triggering playback");
-    [self playAccumulatedAudio];
-  }
-}
-
 /**
- * Play accumulated audio buffer for streaming.
- */
-- (void)playAccumulatedAudio {
-  if (!self.audioBuffer || self.audioBuffer.length == 0) {
-    DGLogDebug(@"[Deepgram] playAccumulatedAudio: no buffered audio");
-    return;
-  }
-
-  NSData *wavData = [self createWAVHeaderForPCMData:self.audioBuffer sampleRate:self.currentSampleRate];
-
-  NSError *error = nil;
-  AVAudioPlayer *player = [[AVAudioPlayer alloc] initWithData:wavData error:&error];
-
-  if (error) {
-    DGLogError(@"[Deepgram] playAccumulatedAudio: player error=%@", error);
-    return;
-  }
-
-  self.audioPlayer = player;
-  self.audioPlayer.delegate = self;
-
-  self.isPlaying = YES;
-  [player prepareToPlay];
-  BOOL success = [player play];
-
-  if (success) {
-    DGLogDebug(@"[Deepgram] playAccumulatedAudio: playback started, clearing buffer");
-    [self.audioBuffer setLength:0];
-  } else {
-    DGLogError(@"[Deepgram] playAccumulatedAudio: failed to start playback");
-    self.isPlaying = NO;
-  }
-}
-
-/**
- * Play PCM data immediately using AVAudioPlayer.
- */
-- (void)playPCMData:(NSData *)pcmData {
-  DGLogDebug(@"[Deepgram] playPCMData: begin length=%lu", (unsigned long)pcmData.length);
-  NSData *wavData = [self createWAVHeaderForPCMData:pcmData sampleRate:self.currentSampleRate];
-
-  NSError *error = nil;
-  AVAudioPlayer *player = [[AVAudioPlayer alloc] initWithData:wavData error:&error];
-
-  if (error) {
-    DGLogError(@"[Deepgram] playPCMData: player error=%@", error);
-    return;
-  }
-
-  self.audioPlayer = player;
-  [player prepareToPlay];
-  DGLogDebug(@"[Deepgram] playPCMData: playing");
-  [player play];
-}
-
-/**
- * Stop and cleanup the audio player.
+ * Stop audio playback and cleanup AVAudioEngine.
  */
 RCT_EXPORT_METHOD(stopPlayer
                   :(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
   @try {
-    DGLogDebug(@"[Deepgram] stopPlayer: begin");
-    if (self.audioPlayer) {
-      [self.audioPlayer stop];
-      DGLogDebug(@"[Deepgram] stopPlayer: stopped audioPlayer");
-      self.audioPlayer = nil;
+    
+    // Stop player node
+    if (self.playerNode) {
+      [self.playerNode stop];
     }
-
+    
+    // Stop and cleanup audio engine
+    if (self.audioEngine && self.audioEngine.isRunning) {
+      [self.audioEngine stop];
+    }
+    
+    // Clear properties
+    self.playerNode = nil;
+    self.audioEngine = nil;
+    self.playbackFormat = nil;
     self.audioBuffer = nil;
     self.isPlaying = NO;
 
     [self maybeDeactivateAudioSession];
 
-    DGLogDebug(@"[Deepgram] stopPlayer: success");
     if (resolve) resolve(nil);
   }
   @catch (NSException *e) {
-    DGLogError(@"[Deepgram] Error stopping player: %@", e.reason);
     DGLogError(@"[Deepgram] stopPlayer: exception %@", e);
     if (reject) reject(@"player_stop_error", e.reason, nil);
   }
@@ -889,34 +934,6 @@ RCT_EXPORT_METHOD(setAudioConfig
   [self startPlayer:sampleRate channels:channels];
 }
 
-/**
- * Play a single audio chunk (one-shot playback).
- */
-RCT_EXPORT_METHOD(playAudioChunk
-                  :(NSString *)chunk
-                  resolver:(RCTPromiseResolveBlock)resolve
-                  rejecter:(RCTPromiseRejectBlock)reject)
-{
-  @try {
-    DGLogDebug(@"[Deepgram] playAudioChunk: begin");
-    NSData *pcmData = [[NSData alloc] initWithBase64EncodedString:chunk options:0];
-    if (!pcmData) {
-      DGLogError(@"[Deepgram] playAudioChunk: failed to decode base64");
-      if (reject) reject(@"invalid_data", @"Failed to decode audio data", nil);
-      return;
-    }
-
-    [self playPCMData:pcmData];
-
-    DGLogDebug(@"[Deepgram] playAudioChunk: success");
-    if (resolve) resolve(nil);
-  }
-  @catch (NSException *e) {
-    DGLogError(@"[Deepgram] playAudioChunk: exception %@", e);
-    if (reject) reject(@"playback_error", e.reason, nil);
-  }
-}
-
 - (void)invalidate
 {
   DGLogDebug(@"[Deepgram] invalidate: begin");
@@ -929,10 +946,16 @@ RCT_EXPORT_METHOD(playAudioChunk
 
   self.pendingPCMBuffer = nil;
 
-  if (self.audioPlayer) {
-    [self.audioPlayer stop];
-    self.audioPlayer = nil;
+  if (self.playerNode) {
+    [self.playerNode stop];
+    self.playerNode = nil;
   }
+  
+  if (self.audioEngine && self.audioEngine.isRunning) {
+    [self.audioEngine stop];
+  }
+  self.audioEngine = nil;
+  self.playbackFormat = nil;
 
   self.audioBuffer = nil;
   self.isPlaying = NO;
@@ -943,25 +966,6 @@ RCT_EXPORT_METHOD(playAudioChunk
 
   DGLogDebug(@"[Deepgram] invalidate: finished");
   [super invalidate];
-}
-
-/* ================================================================== */
-/*  3.  AVAUDIOPLAYER DELEGATE METHODS                                */
-/* ================================================================== */
-
-- (void)audioPlayerDidFinishPlaying:(AVAudioPlayer *)player successfully:(BOOL)flag {
-  DGLogDebug(@"[Deepgram] audioPlayerDidFinishPlaying: success=%@", flag ? @"YES" : @"NO");
-  self.isPlaying = NO;
-
-  if (self.audioBuffer && self.audioBuffer.length > 0) {
-    DGLogDebug(@"[Deepgram] audioPlayerDidFinishPlaying: playing remaining buffered audio");
-    [self playAccumulatedAudio];
-  }
-}
-
-- (void)audioPlayerDecodeErrorDidOccur:(AVAudioPlayer *)player error:(NSError *)error {
-  DGLogError(@"[Deepgram] audioPlayerDecodeErrorDidOccur: error=%@", error);
-  self.isPlaying = NO;
 }
 
 @end

@@ -1,4 +1,4 @@
-import { useRef, useCallback, useState } from 'react';
+import { useRef, useCallback, useState, useEffect } from 'react';
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 import { Deepgram } from './NativeDeepgram';
 import { askMicPermission } from './helpers/askMicPermission';
@@ -19,6 +19,19 @@ import { buildParams } from './helpers';
 
 const DEFAULT_SAMPLE_RATE = 16_000;
 const BASE_NATIVE_SAMPLE_RATE = 16_000;
+
+let cachedEmitter: NativeEventEmitter | null = null;
+const getEmitter = (): NativeEventEmitter => {
+  if (!cachedEmitter) {
+    cachedEmitter = new NativeEventEmitter(NativeModules.Deepgram);
+  }
+  return cachedEmitter;
+};
+const AUDIO_EVENT = Platform.select({
+  ios: 'DeepgramAudioPCM',
+  android: 'AudioChunk',
+  default: 'DeepgramAudioPCM',
+}) as string;
 
 const computeDownsampleFactor = (
   target: number | undefined,
@@ -41,7 +54,7 @@ const downsampleInt16 = (
 
   const downsampled = new Int16Array(Math.floor(data.length / factor));
   for (let i = 0; i < downsampled.length; i++) {
-    downsampled[i] = data[i * factor];
+    downsampled[i] = data[i * factor]!;
   }
   return downsampled as Int16Array<ArrayBufferLike>;
 };
@@ -78,12 +91,31 @@ export function useDeepgramSpeechToText({
   const lastPartialTranscriptRef = useRef('');
   const lastFinalTranscriptRef = useRef('');
 
-  // Transcript tracking state
+  const onTranscriptRef = useRef(onTranscript);
+  const onErrorRef = useRef(onError);
+  const onEndRef = useRef(onEnd);
+  const onStartRef = useRef(onStart);
+  const onBeforeStartRef = useRef(onBeforeStart);
+  const onBeforeTranscribeRef = useRef(onBeforeTranscribe);
+  const onTranscribeSuccessRef = useRef(onTranscribeSuccess);
+  const onTranscribeErrorRef = useRef(onTranscribeError);
+
+  onTranscriptRef.current = onTranscript;
+  onErrorRef.current = onError;
+  onEndRef.current = onEnd;
+  onStartRef.current = onStart;
+  onBeforeStartRef.current = onBeforeStart;
+  onBeforeTranscribeRef.current = onBeforeTranscribe;
+  onTranscribeSuccessRef.current = onTranscribeSuccess;
+  onTranscribeErrorRef.current = onTranscribeError;
+
   const [internalTranscript, setInternalTranscript] = useState('');
   const [internalInterimTranscript, setInternalInterimTranscript] =
     useState('');
 
-  const closeEverything = useCallback(() => {
+  const endFiredRef = useRef(false);
+
+  const closeResources = useCallback(() => {
     if (audioSub.current) {
       audioSub.current.remove();
       audioSub.current = null;
@@ -100,9 +132,7 @@ export function useDeepgramSpeechToText({
     ) {
       try {
         ws.current.send(JSON.stringify({ type: 'CloseStream' }));
-      } catch {
-        // ignore close errors
-      }
+      } catch {}
     }
     ws.current?.close(1000, 'cleanup');
     ws.current = null;
@@ -116,12 +146,14 @@ export function useDeepgramSpeechToText({
     }
   }, [trackState, trackTranscript]);
 
+  const fireEnd = useCallback(() => {
+    if (endFiredRef.current) return;
+    endFiredRef.current = true;
+    onEndRef.current();
+  }, []);
+
   const emitTranscript = useCallback(
     (transcript: unknown, isFinal: boolean, raw: unknown) => {
-      if (typeof onTranscript !== 'function') {
-        return;
-      }
-
       if (typeof transcript !== 'string') {
         return;
       }
@@ -158,19 +190,20 @@ export function useDeepgramSpeechToText({
         }
       }
 
-      onTranscript(normalized, info);
+      onTranscriptRef.current(normalized, info);
 
       if (isFinal) {
         lastPartialTranscriptRef.current = '';
       }
     },
-    [onTranscript, trackTranscript]
+    [trackTranscript]
   );
 
   const startListening = useCallback(
     async (overrideOptions: DeepgramLiveListenOptions = {}) => {
       try {
-        onBeforeStart();
+        onBeforeStartRef.current();
+        endFiredRef.current = false;
         if (trackState) {
           setInternalState({ status: 'loading', error: null });
         }
@@ -188,7 +221,7 @@ export function useDeepgramSpeechToText({
         const merged: DeepgramLiveListenOptions = {
           encoding: 'linear16',
           sampleRate: DEFAULT_SAMPLE_RATE,
-          model: 'nova-2',
+          model: 'nova-3',
           apiVersion: 'v1',
           ...live,
           ...overrideOptions,
@@ -210,6 +243,10 @@ export function useDeepgramSpeechToText({
         const isV2 = merged.apiVersion === 'v2';
         apiVersionRef.current = isV2 ? 'v2' : 'v1';
 
+        // Per Deepgram API reference, Flux (v2) only accepts a small set of
+        // query parameters. Sending v1-only params can cause the server to
+        // reject the connection or be silently ignored. Build the query map
+        // separately for each API version.
         const query: Record<
           string,
           | string
@@ -218,42 +255,48 @@ export function useDeepgramSpeechToText({
           | null
           | undefined
           | Array<string | number | boolean | null | undefined>
-        > = {
-          callback: merged.callback,
-          callback_method: merged.callbackMethod,
-          channels: merged.channels,
-          diarize: merged.diarize,
-          dictation: merged.dictation,
-          encoding: merged.encoding,
-          endpointing: merged.endpointing,
-          filler_words: merged.fillerWords,
-          interim_results: merged.interimResults,
-          keyterm: merged.keyterm,
-          keywords: merged.keywords,
-          language: merged.language,
-          mip_opt_out: merged.mipOptOut,
-          model: merged.model,
-          multichannel: merged.multichannel,
-          numerals: merged.numerals,
-          profanity_filter: merged.profanityFilter,
-          punctuate: merged.punctuate,
-          replace: merged.replace,
-          sample_rate: merged.sampleRate,
-          search: merged.search,
-          smart_format: merged.smartFormat,
-          tag: merged.tag,
-          utterance_end_ms: merged.utteranceEndMs,
-          vad_events: merged.vadEvents,
-          version: merged.version,
-        };
+        > = isV2
+          ? {
+              model: merged.model,
+              encoding: merged.encoding,
+              sample_rate: merged.sampleRate,
+              eager_eot_threshold: merged.eagerEotThreshold,
+              eot_threshold: merged.eotThreshold,
+              eot_timeout_ms: merged.eotTimeoutMs,
+              keyterm: merged.keyterm,
+              mip_opt_out: merged.mipOptOut,
+              tag: merged.tag,
+            }
+          : {
+              callback: merged.callback,
+              callback_method: merged.callbackMethod,
+              channels: merged.channels,
+              diarize: merged.diarize,
+              dictation: merged.dictation,
+              encoding: merged.encoding,
+              endpointing: merged.endpointing,
+              filler_words: merged.fillerWords,
+              interim_results: merged.interimResults,
+              keyterm: merged.keyterm,
+              keywords: merged.keywords,
+              language: merged.language,
+              mip_opt_out: merged.mipOptOut,
+              model: merged.model,
+              multichannel: merged.multichannel,
+              numerals: merged.numerals,
+              profanity_filter: merged.profanityFilter,
+              punctuate: merged.punctuate,
+              replace: merged.replace,
+              sample_rate: merged.sampleRate,
+              search: merged.search,
+              smart_format: merged.smartFormat,
+              tag: merged.tag,
+              utterance_end_ms: merged.utteranceEndMs,
+              vad_events: merged.vadEvents,
+              version: merged.version,
+            };
 
-        if (isV2) {
-          query.eager_eot_threshold = merged.eagerEotThreshold;
-          query.eot_threshold = merged.eotThreshold;
-          query.eot_timeout_ms = merged.eotTimeoutMs;
-        }
-
-        if (merged.redact) {
+        if (!isV2 && merged.redact) {
           query.redact = Array.isArray(merged.redact)
             ? merged.redact
             : [merged.redact];
@@ -276,98 +319,72 @@ export function useDeepgramSpeechToText({
         });
 
         ws.current.onopen = () => {
-          onStart();
+          onStartRef.current();
           if (trackState) {
             setInternalState({ status: 'listening', error: null });
           }
         };
 
-        const emitter = new NativeEventEmitter(NativeModules.Deepgram);
-        audioSub.current = emitter.addListener(
-          Platform.select({
-            ios: 'DeepgramAudioPCM',
-            android: 'AudioChunk',
-          }) as string,
-          (ev: any) => {
-            if (typeof ev?.sampleRate === 'number' && ev.sampleRate > 0) {
-              if (ev.sampleRate !== nativeInputSampleRateRef.current) {
-                nativeInputSampleRateRef.current = ev.sampleRate;
-                downsampleFactorRef.current = computeDownsampleFactor(
-                  targetSampleRateRef.current,
-                  nativeInputSampleRateRef.current
-                );
-              }
-            }
-
-            const factor = downsampleFactorRef.current;
-            let chunk: ArrayBufferLike | undefined;
-            if (typeof ev?.b64 === 'string') {
-              const bytes = Uint8Array.from(atob(ev.b64), (c) =>
-                c.charCodeAt(0)
+        audioSub.current = getEmitter().addListener(AUDIO_EVENT, (ev: any) => {
+          if (typeof ev?.sampleRate === 'number' && ev.sampleRate > 0) {
+            if (ev.sampleRate !== nativeInputSampleRateRef.current) {
+              nativeInputSampleRateRef.current = ev.sampleRate;
+              downsampleFactorRef.current = computeDownsampleFactor(
+                targetSampleRateRef.current,
+                nativeInputSampleRateRef.current
               );
-              let int16: Int16Array<ArrayBufferLike> = new Int16Array(
-                bytes.buffer
-              );
-              int16 = downsampleInt16(int16, factor);
-              chunk = int16.buffer;
-            } else if (Array.isArray(ev?.data)) {
-              const bytes = new Uint8Array(ev.data.length);
-              for (let i = 0; i < ev.data.length; i++) {
-                const v = ev.data[i];
-                bytes[i] = v < 0 ? v + 256 : v;
-              }
-              const view = new DataView(bytes.buffer);
-              const int16 = new Int16Array(bytes.length / 2);
-              for (let i = 0; i < int16.length; i++) {
-                int16[i] = view.getInt16(i * 2, true);
-              }
-              const downsampled = downsampleInt16(
-                int16 as Int16Array<ArrayBufferLike>,
-                factor
-              );
-              chunk = downsampled.buffer;
-            }
-
-            if (chunk && ws.current?.readyState === WebSocket.OPEN) {
-              ws.current.send(chunk);
             }
           }
-        );
 
-        ws.current.onmessage = (ev) => {
+          const factor = downsampleFactorRef.current;
+          let chunk: ArrayBuffer | undefined;
+          if (typeof ev?.b64 === 'string') {
+            const bytes = Uint8Array.from(atob(ev.b64), (c) => c.charCodeAt(0));
+            let int16 = new Int16Array(bytes.buffer);
+            int16 = downsampleInt16(int16, factor) as Int16Array<ArrayBuffer>;
+            chunk = int16.buffer as ArrayBuffer;
+          }
+
+          if (chunk && ws.current?.readyState === WebSocket.OPEN) {
+            ws.current.send(chunk);
+          }
+        });
+
+        ws.current.onmessage = (ev: any) => {
           if (typeof ev.data === 'string') {
             try {
               const msg = JSON.parse(ev.data);
               if (isV2) {
+                // Flux (v2) message envelope reference:
+                // https://developers.deepgram.com/reference/speech-to-text-api/listen-flux
+                // - "Connected"        — handshake ack (no transcript)
+                // - "TurnInfo"         — carries transcript + an `event` field
+                //   ("Update" | "StartOfTurn" | "EagerEndOfTurn"
+                //    | "TurnResumed" | "EndOfTurn")
+                // - "ConfigureSuccess" / "ConfigureFailure"
+                // - "Error"            — fatal stream error
                 if (msg.type === 'Error') {
                   const description =
                     msg.description || 'Deepgram stream error';
-                  onError(new Error(description));
+                  onErrorRef.current(new Error(description));
                   if (trackState) {
                     setInternalState({
                       status: 'error',
                       error: new Error(description),
                     });
                   }
-                  closeEverything();
+                  closeResources();
+                  return;
+                }
+
+                if (msg.type !== 'TurnInfo') {
                   return;
                 }
 
                 const transcript = msg.transcript;
                 if (typeof transcript === 'string' && transcript.length > 0) {
-                  const type =
-                    typeof msg.type === 'string'
-                      ? msg.type.toLowerCase()
-                      : undefined;
-                  const isFinal =
-                    msg.is_final === true ||
-                    msg.speech_final === true ||
-                    msg.finished === true ||
-                    type === 'utteranceend' ||
-                    type === 'speechfinal' ||
-                    type === 'speech.end' ||
-                    (typeof type === 'string' && type.includes('final'));
-                  emitTranscript(transcript, Boolean(isFinal), msg);
+                  const isFinal = msg.event === 'EndOfTurn';
+                  emitTranscript(transcript, isFinal, msg);
                 }
                 return;
               }
@@ -378,14 +395,12 @@ export function useDeepgramSpeechToText({
                   msg.is_final === true || msg.speech_final === true;
                 emitTranscript(transcript, Boolean(isFinal), msg);
               }
-            } catch {
-              // non-JSON or unexpected format
-            }
+            } catch {}
           }
         };
 
-        ws.current.onerror = (err) => {
-          onError(err);
+        ws.current.onerror = (err: any) => {
+          onErrorRef.current(err);
           if (trackState) {
             setInternalState({
               status: 'error',
@@ -394,38 +409,29 @@ export function useDeepgramSpeechToText({
           }
         };
         ws.current.onclose = () => {
-          onEnd();
-          closeEverything();
+          closeResources();
+          fireEnd();
         };
       } catch (err) {
-        onError(err);
+        onErrorRef.current(err);
         if (trackState) {
           setInternalState({
             status: 'error',
             error: err instanceof Error ? err : new Error(String(err)),
           });
         }
-        closeEverything();
+        closeResources();
       }
     },
-    [
-      emitTranscript,
-      onBeforeStart,
-      onStart,
-      onError,
-      onEnd,
-      live,
-      closeEverything,
-      trackState,
-    ]
+    [emitTranscript, live, closeResources, trackState, fireEnd]
   );
 
   const stopListening = useCallback(() => {
     try {
-      closeEverything();
-      onEnd();
+      closeResources();
+      fireEnd();
     } catch (err) {
-      onError(err);
+      onErrorRef.current(err);
       if (trackState) {
         setInternalState({
           status: 'error',
@@ -433,14 +439,14 @@ export function useDeepgramSpeechToText({
         });
       }
     }
-  }, [onEnd, onError, closeEverything, trackState]);
+  }, [closeResources, trackState, fireEnd]);
 
   const transcribeFile = useCallback(
     async (
       file: DeepgramPrerecordedSource,
       overrideOptions: DeepgramPrerecordedOptions = {}
     ) => {
-      onBeforeTranscribe();
+      onBeforeTranscribeRef.current();
       if (trackState) {
         setInternalState({ status: 'transcribing', error: null });
       }
@@ -503,11 +509,7 @@ export function useDeepgramSpeechToText({
         }
 
         if (merged.detectLanguage !== undefined) {
-          if (typeof merged.detectLanguage === 'boolean') {
-            query.detect_language = merged.detectLanguage;
-          } else {
-            query.detect_language = merged.detectLanguage;
-          }
+          query.detect_language = merged.detectLanguage;
         }
 
         if (merged.redact) {
@@ -571,7 +573,7 @@ export function useDeepgramSpeechToText({
         const transcript =
           json.results?.channels?.[0]?.alternatives?.[0]?.transcript;
         if (transcript) {
-          onTranscribeSuccess(transcript);
+          onTranscribeSuccessRef.current(transcript);
           if (trackState) {
             setInternalState({ status: 'idle', error: null });
           }
@@ -579,7 +581,7 @@ export function useDeepgramSpeechToText({
           throw new Error('No transcript present in Deepgram response');
         }
       } catch (err) {
-        onTranscribeError(err);
+        onTranscribeErrorRef.current(err);
         if (trackState) {
           setInternalState({
             status: 'error',
@@ -588,14 +590,10 @@ export function useDeepgramSpeechToText({
         }
       }
     },
-    [
-      onBeforeTranscribe,
-      onTranscribeSuccess,
-      onTranscribeError,
-      prerecorded,
-      trackState,
-    ]
+    [prerecorded, trackState]
   );
+
+  useEffect(() => () => closeResources(), [closeResources]);
 
   return {
     startListening,

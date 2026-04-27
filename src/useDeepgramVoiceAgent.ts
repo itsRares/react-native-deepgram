@@ -1,8 +1,8 @@
 import { useRef, useCallback, useEffect, useState } from 'react';
-import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
-import { Buffer } from 'buffer';
+import { NativeEventEmitter, Platform } from 'react-native';
 import { Deepgram } from './NativeDeepgram';
 import { askMicPermission } from './helpers/askMicPermission';
+import { arrayBufferToBase64 } from './helpers';
 import type {
   DeepgramVoiceAgentSettings,
   DeepgramVoiceAgentSettingsMessage,
@@ -35,6 +35,14 @@ const eventName = Platform.select({
   android: 'AudioChunk',
   default: 'DeepgramAudioPCM',
 });
+
+let cachedEmitter: NativeEventEmitter | null = null;
+const getEmitter = (): NativeEventEmitter => {
+  if (!cachedEmitter) {
+    cachedEmitter = new NativeEventEmitter(Deepgram as any);
+  }
+  return cachedEmitter;
+};
 
 const ensureArrayBuffer = (data: any): ArrayBuffer | null => {
   if (!data) return null;
@@ -537,19 +545,7 @@ export function useDeepgramVoiceAgent({
           }
           int16 = downsampled;
         }
-        chunk = int16.buffer;
-      } else if (Array.isArray(ev?.data)) {
-        const bytes = new Uint8Array(ev.data.length);
-        for (let i = 0; i < ev.data.length; i++) {
-          const value = ev.data[i];
-          bytes[i] = value < 0 ? value + 256 : value;
-        }
-        const view = new DataView(bytes.buffer);
-        const int16 = new Int16Array(bytes.length / 2);
-        for (let i = 0; i < int16.length; i++) {
-          int16[i] = view.getInt16(i * 2, true);
-        }
-        chunk = int16.buffer;
+        chunk = int16.buffer as ArrayBuffer;
       }
 
       if (!chunk) {
@@ -562,7 +558,7 @@ export function useDeepgramVoiceAgent({
         onErrorRef.current?.(err);
       }
     },
-    [downsampleFactor, onErrorRef]
+    [downsampleFactor]
   );
 
   const handleSocketMessage = useCallback(
@@ -692,7 +688,7 @@ export function useDeepgramVoiceAgent({
                   const sampleRate =
                     configMsg.sample_rate || DEFAULT_INPUT_SAMPLE_RATE;
                   const channels = configMsg.channels || 1;
-                  Deepgram.startPlayer?.(sampleRate, channels);
+                  Deepgram.startPlayer(sampleRate, channels);
                 }
 
                 onAudioConfigRef.current?.(configMsg);
@@ -762,9 +758,8 @@ export function useDeepgramVoiceAgent({
       if (buffer) {
         if (autoPlayAudio) {
           try {
-            const bytes = new Uint8Array(buffer);
-            const b64 = Buffer.from(bytes).toString('base64');
-            Deepgram.feedAudio?.(b64);
+            const b64 = arrayBufferToBase64(buffer);
+            Deepgram.feedAudio(b64);
           } catch (err) {
             console.warn('[VoiceAgent] Auto-feed audio error:', err);
           }
@@ -773,27 +768,7 @@ export function useDeepgramVoiceAgent({
         onAudioRef.current?.(buffer);
       }
     },
-    [
-      onAgentAudioDoneRef,
-      onAgentStartedSpeakingRef,
-      onAgentThinkingRef,
-      onConversationTextRef,
-      onErrorRef,
-      onFunctionCallRequestRef,
-      onFunctionCallResponseRef,
-      onInjectionRefusedRef,
-      onMessageRef,
-      onPromptUpdatedRef,
-      onServerErrorRef,
-      onSettingsAppliedRef,
-      onSpeakUpdatedRef,
-      onUserStartedSpeakingRef,
-      onWarningRef,
-      autoPlayAudio,
-      trackAgentStatus,
-      trackConversation,
-      trackState,
-    ]
+    [autoPlayAudio, trackAgentStatus, trackConversation, trackState]
   );
 
   const sendJsonMessage = useCallback(
@@ -886,12 +861,14 @@ export function useDeepgramVoiceAgent({
         if (!granted) {
           throw new Error('Microphone permission denied');
         }
-        await Deepgram.startRecording();
+        await Deepgram.startRecording({ enableVoiceProcessing: true });
         microphoneActive.current = true;
 
-        const emitter = new NativeEventEmitter(NativeModules.Deepgram);
         if (eventName) {
-          audioSub.current = emitter.addListener(eventName, handleMicChunk);
+          audioSub.current = getEmitter().addListener(
+            eventName,
+            handleMicChunk
+          );
         }
       } else {
         // Only initialize audio session for playback if not recording
@@ -941,7 +918,7 @@ export function useDeepgramVoiceAgent({
           const sampleRate =
             merged?.audio?.output?.sample_rate ?? DEFAULT_INPUT_SAMPLE_RATE;
           const channels = 1;
-          Deepgram.startPlayer?.(sampleRate, channels);
+          Deepgram.startPlayer(sampleRate, channels);
         }
 
         onConnectRef.current?.();

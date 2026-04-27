@@ -55,9 +55,17 @@ typedef struct {
 @property (nonatomic, strong) AVAudioEngine      *audioEngine;
 @property (nonatomic, strong) AVAudioPlayerNode  *playerNode;
 @property (nonatomic, strong) AVAudioFormat      *playbackFormat;
-@property (nonatomic, assign) BOOL                isPlaying;
-@property (nonatomic, assign) int                 currentSampleRate;
+@property (atomic,    assign) BOOL                isPlaying;
+@property (atomic,    assign) int                 currentSampleRate;
 @property (nonatomic, assign) BOOL                audioSessionConfigured;
+// YES while we're capturing the microphone through `audioEngine.inputNode`
+// (Voice Agent / duplex). When YES, the AudioQueue path is bypassed and the
+// session must use VoiceChat mode so Apple's Voice-Processing I/O Audio Unit
+// engages and performs hardware echo cancellation.
+@property (atomic,    assign) BOOL                engineCaptureActive;
+@property (atomic,    assign) BOOL                voiceProcessingRequested;
+@property (nonatomic, strong) AVAudioConverter   *captureConverter;
+@property (nonatomic, strong) AVAudioFormat      *captureOutputFormat;
 @end
 
 @interface Deepgram (RecordingPrivate)
@@ -167,6 +175,12 @@ RCT_EXPORT_MODULE();
                 name:AVAudioSessionInterruptionNotification
               object:nil];
     DGLogDebug(@"[Deepgram] init: registered for AVAudioSessionInterruptionNotification");
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self
+           selector:@selector(handleMediaServicesReset:)
+                name:AVAudioSessionMediaServicesWereResetNotification
+              object:nil];
+    DGLogDebug(@"[Deepgram] init: registered for AVAudioSessionMediaServicesWereResetNotification");
   }
   return self;
 }
@@ -206,7 +220,11 @@ RCT_EXPORT_MODULE();
 {
   DGLogDebug(@"[Deepgram] deactivateAudioSession: begin");
   NSError *error = nil;
-  if (![[AVAudioSession sharedInstance] setActive:NO error:&error] && error) {
+  // Use NotifyOthersOnDeactivation so other audio sessions (expo-av, etc.)
+  // know they can resume.
+  if (![[AVAudioSession sharedInstance] setActive:NO
+                                      withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation
+                                            error:&error] && error) {
     DGLogError(@"[Deepgram] Failed to deactivate audio session: %@",
           error.localizedDescription ?: error);
   }
@@ -234,43 +252,70 @@ RCT_EXPORT_MODULE();
 
 - (BOOL)configureAudioSession:(NSError **)outError
 {
-  DGLogDebug(@"[Deepgram] configureAudioSession: begin");
+  BOOL needsMic = _recordState.isRunning || self.engineCaptureActive;
+  return [self configureAudioSessionForRecording:needsMic error:outError];
+}
+
+/**
+ * Configure audio session with mode appropriate to current usage.
+ * Uses MixWithOthers to avoid interfering with other packages (expo-av, etc.).
+ * Only uses VoiceChat mode when both recording and playback are active simultaneously.
+ */
+- (BOOL)configureAudioSessionForRecording:(BOOL)needsMicrophone error:(NSError **)outError
+{
+  DGLogDebug(@"[Deepgram] configureAudioSession: begin (mic=%@)", needsMicrophone ? @"YES" : @"NO");
   AVAudioSession *session = [AVAudioSession sharedInstance];
   NSError *error = nil;
 
-  AVAudioSessionCategoryOptions options = AVAudioSessionCategoryOptionDuckOthers |
-                                           AVAudioSessionCategoryOptionDefaultToSpeaker |
-                                           AVAudioSessionCategoryOptionAllowBluetooth;
+  // Use MixWithOthers to coexist with other audio packages (expo-av, etc.)
+  AVAudioSessionCategoryOptions options = AVAudioSessionCategoryOptionMixWithOthers |
+                                           AVAudioSessionCategoryOptionDefaultToSpeaker;
 
-  if (@available(iOS 10.0, *)) {
-    DGLogDebug(@"[Deepgram] configureAudioSession: enabling AirPlay option");
-    options |= AVAudioSessionCategoryOptionAllowAirPlay;
+  // iOS 17 deprecated `AllowBluetooth` (HFP route) in favor of
+  // `AllowBluetoothHFP`. Prefer the new symbol when building against the iOS
+  // 17+ SDK and fall back to the legacy spelling on older toolchains.
+#if defined(__IPHONE_17_0) && (__IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_17_0)
+  if (@available(iOS 17.0, *)) {
+    options |= AVAudioSessionCategoryOptionAllowBluetoothHFP;
+  } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    options |= AVAudioSessionCategoryOptionAllowBluetooth;
+#pragma clang diagnostic pop
+  }
+#else
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  options |= AVAudioSessionCategoryOptionAllowBluetooth;
+#pragma clang diagnostic pop
+#endif
+  options |= AVAudioSessionCategoryOptionAllowBluetoothA2DP;
+  options |= AVAudioSessionCategoryOptionAllowAirPlay;
+
+  AVAudioSessionCategory category;
+  NSString *mode;
+
+  if (needsMicrophone) {
+    // When recording, we need PlayAndRecord. Use VoiceChat mode whenever we
+    // also need echo cancellation (engine-based capture for the Voice Agent,
+    // or playback while recording). Apple's hardware AEC (VPIO) only kicks in
+    // when the session mode is VoiceChat or VideoChat.
+    category = AVAudioSessionCategoryPlayAndRecord;
+    BOOL needsAEC = self.engineCaptureActive || self.voiceProcessingRequested || self.isPlaying;
+    mode = needsAEC ? AVAudioSessionModeVoiceChat : AVAudioSessionModeDefault;
+  } else {
+    // Playback only — use Playback category to avoid audio route conflicts
+    category = AVAudioSessionCategoryPlayback;
+    mode = AVAudioSessionModeDefault;
   }
 
   BOOL categorySuccess = NO;
 
-  if (@available(iOS 10.0, *)) {
-    DGLogDebug(@"[Deepgram] configureAudioSession: setCategory PlayAndRecord voice chat (iOS10+)");
-    categorySuccess = [session setCategory:AVAudioSessionCategoryPlayAndRecord
-                                     mode:AVAudioSessionModeVoiceChat
-                                  options:options
-                                    error:&error];
-  } else {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    DGLogDebug(@"[Deepgram] configureAudioSession: setCategory legacy path");
-    categorySuccess = [session setCategory:AVAudioSessionCategoryPlayAndRecord
-                             withOptions:options
-                                   error:&error];
-#pragma clang diagnostic pop
-    if (categorySuccess && !error) {
-      NSError *modeError = nil;
-      categorySuccess = [session setMode:AVAudioSessionModeVoiceChat error:&modeError] && !modeError;
-      if (modeError) {
-        error = modeError;
-      }
-    }
-  }
+  DGLogDebug(@"[Deepgram] configureAudioSession: setCategory %@ mode %@", category, mode);
+  categorySuccess = [session setCategory:category
+                                   mode:mode
+                                options:options
+                                  error:&error];
 
   if (!categorySuccess || error) {
     DGLogError(@"[Deepgram] configureAudioSession: category failed error=%@",
@@ -284,20 +329,7 @@ RCT_EXPORT_MODULE();
 
   NSError *activeError = nil;
   BOOL activeSuccess = [session setActive:YES error:&activeError];
-  if (!activeSuccess && activeError.code == AVAudioSessionErrorCodeInsufficientPriority) {
-    DGLogWarn(@"[Deepgram] configureAudioSession: insufficient priority, retrying with mix-with-others");
-    NSError *retryError = nil;
-    BOOL categoryRetry = [session setCategory:session.category
-                                        mode:session.mode
-                                     options:options | AVAudioSessionCategoryOptionMixWithOthers
-                                       error:&retryError];
-    if (!categoryRetry) {
-      DGLogWarn(@"[Deepgram] configureAudioSession: unable to update category options %@", retryError.localizedDescription ?: retryError);
-    }
-    activeError = nil;
-    activeSuccess = [session setActive:YES error:&activeError];
-  }
-  if (!activeSuccess || activeError) {
+  if (!activeSuccess && activeError) {
     DGLogError(@"[Deepgram] configureAudioSession: setActive failed error=%@",
           activeError.localizedDescription ?: activeError);
     if (outError) {
@@ -314,10 +346,11 @@ RCT_EXPORT_MODULE();
 
 - (void)maybeDeactivateAudioSession
 {
-  DGLogDebug(@"[Deepgram] maybeDeactivateAudioSession: running=%@ playing=%@",
+  DGLogDebug(@"[Deepgram] maybeDeactivateAudioSession: running=%@ playing=%@ engineCapture=%@",
         _recordState.isRunning ? @"YES" : @"NO",
-        self.isPlaying ? @"YES" : @"NO");
-  if (!_recordState.isRunning && !self.isPlaying) {
+        self.isPlaying ? @"YES" : @"NO",
+        self.engineCaptureActive ? @"YES" : @"NO");
+  if (!_recordState.isRunning && !self.isPlaying && !self.engineCaptureActive) {
     DGLogDebug(@"[Deepgram] maybeDeactivateAudioSession: deactivating");
     [self deactivateAudioSession];
   }
@@ -331,6 +364,17 @@ RCT_EXPORT_MODULE();
                                                  ? (AVAudioSessionRouteChangeReason)
                                                        reasonValue.unsignedIntegerValue
                                                  : AVAudioSessionRouteChangeReasonUnknown;
+
+  // Headphones / Bluetooth headset unplugged — pause playback so we don't
+  // surprise the user by suddenly blasting through the loud speaker.
+  // (System would route audio to the speaker automatically; that's the point
+  // of this notification.) Matches expo-audio behavior and Apple's guidance.
+  if (reason == AVAudioSessionRouteChangeReasonOldDeviceUnavailable) {
+    DGLogDebug(@"[Deepgram] handleAudioRouteChange: old device unavailable — pausing playback");
+    if (self.isPlaying && self.playerNode) {
+      [self.playerNode pause];
+    }
+  }
 
   BOOL causedByCategory =
       reason == AVAudioSessionRouteChangeReasonCategoryChange ||
@@ -357,6 +401,43 @@ RCT_EXPORT_MODULE();
 
   DGLogDebug(@"[Deepgram] handleAudioRouteChange: reactivating session");
   [self activateAudioSession:NULL];
+}
+
+// AVAudioSession can post this when mediaserverd restarts (e.g. after a
+// rare system audio HAL hiccup). Once it fires, every AudioQueue / AVAudioEngine
+// instance becomes a zombie. Apple's documented fix is to throw everything
+// away and rebuild on demand. Match expo-audio's approach.
+- (void)handleMediaServicesReset:(NSNotification *)note
+{
+  DGLogDebug(@"[Deepgram] handleMediaServicesReset: tearing down audio stack");
+  self.audioSessionConfigured = NO;
+
+  // Recording queue must be torn down — it's a zombie after a media services reset.
+  if (_recordState.isRunning || _recordState.queue) {
+    [self cleanupRecordingQueue];
+  }
+
+  // Engine-based capture path also dies with mediaserverd; force a full
+  // teardown so the next startRecording rebuilds VPIO from scratch.
+  self.engineCaptureActive = NO;
+  self.captureConverter = nil;
+  self.captureOutputFormat = nil;
+
+  // AVAudioEngine + player node are no longer valid. Stop and discard so the
+  // next setup call rebuilds from scratch.
+  @try {
+    if (self.playerNode) {
+      [self.playerNode stop];
+    }
+    if (self.audioEngine) {
+      [self.audioEngine stop];
+    }
+  } @catch (NSException *e) {
+    DGLogError(@"[Deepgram] handleMediaServicesReset: teardown exception %@", e);
+  }
+  self.playerNode = nil;
+  self.audioEngine = nil;
+  self.isPlaying = NO;
 }
 
 - (void)handleAudioInterruption:(NSNotification *)note
@@ -401,7 +482,7 @@ RCT_EXPORT_MODULE();
   DGLogDebug(@"[Deepgram] handleAppDidBecomeActive: %@", note.userInfo);
   self.appIsActive = YES;
 
-  if (_recordState.isRunning || self.isPlaying) {
+  if (_recordState.isRunning || self.isPlaying || self.engineCaptureActive) {
     DGLogDebug(@"[Deepgram] handleAppDidBecomeActive: reactivating session");
     [self activateAudioSession:NULL];
   }
@@ -411,7 +492,6 @@ RCT_EXPORT_MODULE();
 {
   DGLogDebug(@"[Deepgram] handleAppDidEnterBackground: %@", note.userInfo);
   self.appIsActive = NO;
-  [self maybeDeactivateAudioSession];
 }
 #endif
 
@@ -526,19 +606,244 @@ RCT_EXPORT_MODULE();
 /* ================================================================== */
 /*  1.  MICROPHONE CAPTURE (16 kHz PCM16 emission)                     */
 /* ================================================================== */
-RCT_EXPORT_METHOD(startRecording
-                  :(RCTPromiseResolveBlock)resolve
+
+/**
+ * Engine-based microphone capture path used when the JS side opts in to
+ * hardware voice processing (Voice Agent / duplex). This routes through
+ * `AVAudioEngine.inputNode` with `setVoiceProcessingEnabled:YES` on both
+ * input and output nodes — the only Apple-supported way to actually engage
+ * the VPIO Audio Unit's hardware echo cancellation on iOS. The legacy
+ * AudioQueue path is preserved for STT-only usage where AEC is undesirable.
+ */
+- (BOOL)startEngineCaptureAndReturnError:(NSError **)outError
+{
+  self.currentSampleRate = 16000;
+
+  if (!self.audioEngine) {
+    NSError *engineError = nil;
+    if (![self setupAudioEngineWithSampleRate:self.currentSampleRate
+                                     channels:1
+                        enableVoiceProcessing:YES
+                                        error:&engineError]) {
+      if (outError) *outError = engineError;
+      return NO;
+    }
+  } else {
+#if TARGET_IPHONE_SIMULATOR
+    // VPIO is unsupported on the simulator and toggling VP corrupts the
+    // input node's format (sampleRate becomes 0), which would later fail
+    // the IsFormatSampleRateAndChannelCountValid check. Skip entirely.
+    DGLogWarn(@"[Deepgram] NOTE: Voice Processing I/O (Echo Cancellation) is NOT supported on the iOS Simulator. Audio output may be picked up by the microphone. Please test on a physical device for proper AEC behavior.");
+#else
+    @try {
+      NSError *vpError = nil;
+      if (self.audioEngine.inputNode &&
+          ![self.audioEngine.inputNode setVoiceProcessingEnabled:YES error:&vpError]) {
+        DGLogWarn(@"[Deepgram] inputNode VP enable failed: %@", vpError);
+      }
+      if (self.audioEngine.outputNode &&
+          ![self.audioEngine.outputNode setVoiceProcessingEnabled:YES error:&vpError]) {
+        DGLogWarn(@"[Deepgram] outputNode VP enable failed: %@", vpError);
+      }
+    } @catch (NSException *e) {
+      DGLogWarn(@"[Deepgram] VP enable threw: %@", e);
+    }
+#endif
+  }
+
+  AVAudioInputNode *inputNode = self.audioEngine.inputNode;
+  if (!inputNode) {
+    if (outError) {
+      *outError = [NSError errorWithDomain:@"DeepgramAudioEngine"
+                                      code:-2
+                                  userInfo:@{NSLocalizedDescriptionKey: @"No input node available"}];
+    }
+    return NO;
+  }
+
+  AVAudioFormat *hwFormat = [inputNode inputFormatForBus:0];
+  if (!hwFormat || hwFormat.sampleRate <= 0) {
+    if (outError) {
+      *outError = [NSError errorWithDomain:@"DeepgramAudioEngine"
+                                      code:-3
+                                  userInfo:@{NSLocalizedDescriptionKey: @"Invalid input format"}];
+    }
+    return NO;
+  }
+
+  AVAudioFormat *outputFormat =
+      [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatInt16
+                                        sampleRate:self.currentSampleRate
+                                          channels:1
+                                       interleaved:YES];
+  self.captureOutputFormat = outputFormat;
+  self.captureConverter = [[AVAudioConverter alloc] initFromFormat:hwFormat toFormat:outputFormat];
+  if (!self.captureConverter) {
+    if (outError) {
+      *outError = [NSError errorWithDomain:@"DeepgramAudioEngine"
+                                      code:-4
+                                  userInfo:@{NSLocalizedDescriptionKey: @"Failed to build AVAudioConverter"}];
+    }
+    return NO;
+  }
+
+  AVAudioFrameCount tapFrames = (AVAudioFrameCount)MAX(1024, (NSUInteger)round(hwFormat.sampleRate * 0.2));
+
+  __weak __typeof(self) weakSelf = self;
+  @try {
+    [inputNode removeTapOnBus:0];
+  } @catch (__unused NSException *e) {
+    // No prior tap — fine.
+  }
+
+  @try {
+    [inputNode installTapOnBus:0
+                    bufferSize:tapFrames
+                        format:hwFormat
+                         block:^(AVAudioPCMBuffer * _Nonnull inBuf, __unused AVAudioTime * _Nonnull when) {
+      __strong __typeof(weakSelf) strongSelf = weakSelf;
+      if (!strongSelf || !strongSelf.engineCaptureActive) return;
+      AVAudioConverter *converter = strongSelf.captureConverter;
+      AVAudioFormat *outFmt = strongSelf.captureOutputFormat;
+      if (!converter || !outFmt || inBuf.frameLength == 0) return;
+
+      AVAudioFrameCount outCapacity =
+          (AVAudioFrameCount)ceil((double)inBuf.frameLength * outFmt.sampleRate /
+                                  inBuf.format.sampleRate) + 16;
+      AVAudioPCMBuffer *outBuf =
+          [[AVAudioPCMBuffer alloc] initWithPCMFormat:outFmt frameCapacity:outCapacity];
+      if (!outBuf) return;
+
+      __block BOOL provided = NO;
+      NSError *cvtError = nil;
+      AVAudioConverterInputBlock inputBlock =
+          ^AVAudioBuffer * _Nullable(__unused AVAudioPacketCount inNumPackets,
+                                     AVAudioConverterInputStatus * _Nonnull outStatus) {
+        if (provided) {
+          *outStatus = AVAudioConverterInputStatus_NoDataNow;
+          return nil;
+        }
+        provided = YES;
+        *outStatus = AVAudioConverterInputStatus_HaveData;
+        return inBuf;
+      };
+
+      AVAudioConverterOutputStatus status =
+          [converter convertToBuffer:outBuf error:&cvtError withInputFromBlock:inputBlock];
+      if (status == AVAudioConverterOutputStatus_Error || cvtError) {
+        DGLogWarn(@"[Deepgram] capture convert failed: %@", cvtError);
+        return;
+      }
+      if (outBuf.frameLength == 0 || !outBuf.int16ChannelData) return;
+
+      NSUInteger byteCount = (NSUInteger)outBuf.frameLength * 2;
+      NSData *pcm = [NSData dataWithBytes:outBuf.int16ChannelData[0] length:byteCount];
+      [strongSelf appendPCMDataAndEmitIfNeeded:pcm];
+    }];
+  } @catch (NSException *e) {
+    DGLogError(@"[Deepgram] installTapOnBus exception: %@", e);
+    if (outError) {
+      *outError = [NSError errorWithDomain:@"DeepgramAudioEngine"
+                                      code:-5
+                                  userInfo:@{NSLocalizedDescriptionKey: e.reason ?: @"Tap install failed"}];
+    }
+    return NO;
+  }
+
+  self.chunkSizeBytes = (NSUInteger)MAX(1, (int)round(self.currentSampleRate * 2 * 0.2));
+  self.engineCaptureActive = YES;
+
+  if (!self.audioEngine.isRunning) {
+    NSError *startError = nil;
+    if (![self.audioEngine startAndReturnError:&startError]) {
+      DGLogError(@"[Deepgram] engine start failed: %@", startError);
+      @try { [inputNode removeTapOnBus:0]; } @catch (__unused NSException *e) {}
+      self.engineCaptureActive = NO;
+      if (outError) *outError = startError;
+      return NO;
+    }
+  }
+  return YES;
+}
+
+- (void)stopEngineCapture
+{
+  if (!self.engineCaptureActive && !self.captureConverter) return;
+  DGLogDebug(@"[Deepgram] stopEngineCapture");
+  self.engineCaptureActive = NO;
+
+  @try {
+    [self.audioEngine.inputNode removeTapOnBus:0];
+  } @catch (NSException *e) {
+    DGLogWarn(@"[Deepgram] removeTapOnBus exception: %@", e);
+  }
+
+#if !TARGET_IPHONE_SIMULATOR
+  @try {
+    NSError *vpError = nil;
+    if (self.audioEngine.inputNode) {
+      [self.audioEngine.inputNode setVoiceProcessingEnabled:NO error:&vpError];
+    }
+  } @catch (__unused NSException *e) {
+    // best-effort
+  }
+#endif
+
+  self.captureConverter = nil;
+  self.captureOutputFormat = nil;
+
+  if (!self.isPlaying && self.audioEngine.isRunning) {
+    @try { [self.audioEngine stop]; } @catch (__unused NSException *e) {}
+  }
+}
+
+RCT_EXPORT_METHOD(startRecording:(NSDictionary *)options
+                  resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
   @try {
     DGLogDebug(@"[Deepgram] startRecording: begin");
+
+    BOOL enableVoiceProcessing = NO;
+    if ([options isKindOfClass:[NSDictionary class]]) {
+      id raw = options[@"enableVoiceProcessing"];
+      if ([raw isKindOfClass:[NSNumber class]]) {
+        enableVoiceProcessing = [(NSNumber *)raw boolValue];
+      }
+    }
+    self.voiceProcessingRequested = enableVoiceProcessing;
+
     self.currentSampleRate = 16000;
-    DGLogDebug(@"[Deepgram] startRecording: targetSampleRate=%d", self.currentSampleRate);
+    DGLogDebug(@"[Deepgram] startRecording: targetSampleRate=%d vp=%@",
+               self.currentSampleRate,
+               enableVoiceProcessing ? @"YES" : @"NO");
     NSError *sessionError = nil;
     if (![self activateAudioSession:&sessionError]) {
       NSString *message = sessionError.localizedDescription ?: @"Failed to activate audio session";
       DGLogError(@"[Deepgram] startRecording: activation failed %@", message);
+      self.voiceProcessingRequested = NO;
       if (reject) reject(@"record_start_error", message, sessionError);
+      return;
+    }
+
+    if (enableVoiceProcessing) {
+      if (_recordState.isRunning) {
+        [self cleanupRecordingQueue];
+      }
+      [self stopEngineCapture];
+      self.pendingPCMBuffer = [[NSMutableData alloc] init];
+
+      NSError *engineError = nil;
+      if (![self startEngineCaptureAndReturnError:&engineError]) {
+        NSString *message = engineError.localizedDescription ?: @"Failed to start engine capture";
+        DGLogError(@"[Deepgram] startRecording: %@", message);
+        self.voiceProcessingRequested = NO;
+        [self maybeDeactivateAudioSession];
+        if (reject) reject(@"record_start_error", message, engineError);
+        return;
+      }
+      DGLogDebug(@"[Deepgram] startRecording: engine capture started");
+      if (resolve) resolve(nil);
       return;
     }
 
@@ -680,9 +985,12 @@ RCT_EXPORT_METHOD(stopRecording
 {
   @try {
     DGLogDebug(@"[Deepgram] stopRecording: begin");
+    [self stopEngineCapture];
     [self cleanupRecordingQueue];
     [self flushPendingPCM];
     self.pendingPCMBuffer = nil;
+    self.voiceProcessingRequested = NO;
+    [self maybeDeactivateAudioSession];
     DGLogDebug(@"[Deepgram] stopRecording: finished");
     if (resolve) resolve(nil);
   }
@@ -739,11 +1047,15 @@ RCT_EXPORT_METHOD(stopAudio
 /* ================================================================== */
 
 /**
- * Setup AVAudioEngine with Voice Processing I/O for echo cancellation.
- * This enables hardware-level echo cancellation during simultaneous recording + playback.
+ * Setup AVAudioEngine for output. When `enableVoiceProcessing` is YES we also
+ * configure the input node for hardware echo cancellation (Voice Agent /
+ * duplex use case). When NO (pure TTS playback), we deliberately avoid
+ * touching `inputNode` so we don't request the microphone or interfere with
+ * other audio libraries.
  */
 - (BOOL)setupAudioEngineWithSampleRate:(int)sampleRate
                               channels:(int)channels
+                  enableVoiceProcessing:(BOOL)enableVoiceProcessing
                                  error:(NSError **)outError {
   if (self.audioEngine && self.audioEngine.isRunning) {
     [self.audioEngine stop];
@@ -772,19 +1084,40 @@ RCT_EXPORT_METHOD(stopAudio
                          to:self.audioEngine.mainMixerNode
                      format:self.playbackFormat];
   
-  @try {
-    AVAudioInputNode *inputNode = self.audioEngine.inputNode;
-    if (inputNode) {
-      NSError *voiceProcessingError = nil;
-      [inputNode setVoiceProcessingEnabled:YES error:&voiceProcessingError];
-    }
-  } @catch (NSException *exception) {
-    // Continue - voice processing not critical for basic playback
-  }
-
+  if (enableVoiceProcessing) {
 #if TARGET_IPHONE_SIMULATOR
-  DGLogWarn(@"[Deepgram] NOTE: Voice Processing I/O (Echo Cancellation) is NOT supported on the iOS Simulator. Audio output may be picked up by the microphone. Please test on a physical device for proper AEC behavior.");
+    // VPIO is not implemented on the simulator. Calling
+    // setVoiceProcessingEnabled:YES there raises an internal AVAEInternal
+    // exception about IsFormatSampleRateAndChannelCountValid because the
+    // simulator's input node cannot satisfy the VPIO format constraints.
+    // Skip VP entirely; AEC has to be tested on a physical device.
+    DGLogWarn(@"[Deepgram] NOTE: Voice Processing I/O (Echo Cancellation) is NOT supported on the iOS Simulator. Audio output may be picked up by the microphone. Please test on a physical device for proper AEC behavior.");
+#else
+    @try {
+      AVAudioInputNode *inputNode = self.audioEngine.inputNode;
+      AVAudioOutputNode *outputNode = self.audioEngine.outputNode;
+      // Apple's hardware AEC (VPIO Audio Unit) only engages when *both*
+      // input and output flow through a voice-processing-enabled audio
+      // unit. Enabling VP only on the input node is a no-op for capture
+      // unless rendering goes through the same unit, so we enable both.
+      if (inputNode) {
+        NSError *voiceProcessingError = nil;
+        if (![inputNode setVoiceProcessingEnabled:YES error:&voiceProcessingError]) {
+          DGLogWarn(@"[Deepgram] inputNode VP enable failed: %@", voiceProcessingError);
+        }
+      }
+      if (outputNode) {
+        NSError *voiceProcessingError = nil;
+        if (![outputNode setVoiceProcessingEnabled:YES error:&voiceProcessingError]) {
+          DGLogWarn(@"[Deepgram] outputNode VP enable failed: %@", voiceProcessingError);
+        }
+      }
+    } @catch (NSException *exception) {
+      // Continue - voice processing not critical for basic playback
+      DGLogWarn(@"[Deepgram] VP enable threw: %@", exception);
+    }
 #endif
+  }
   
   [self.audioEngine prepare];
   NSError *startError = nil;
@@ -842,8 +1175,15 @@ RCT_EXPORT_METHOD(startPlayer:(nonnull NSNumber *)sampleRate
   }
 
   NSError *engineError = nil;
+  // Voice processing (hardware echo cancellation) is only useful when we
+  // are also recording the microphone (Voice Agent duplex). Enabling it
+  // for pure TTS playback would force the input node open and can trip
+  // the system microphone indicator on some iOS versions.
+  BOOL needsVoiceProcessing = _recordState.isRunning || self.engineCaptureActive ||
+                              self.voiceProcessingRequested;
   if (![self setupAudioEngineWithSampleRate:sampleRate.intValue
                                    channels:channels.intValue
+                      enableVoiceProcessing:needsVoiceProcessing
                                       error:&engineError]) {
     DGLogError(@"[Deepgram] Failed to setup audio engine: %@", engineError);
     return;
@@ -891,12 +1231,19 @@ RCT_EXPORT_METHOD(feedAudio:(NSString *)b64)
     [self.playerNode scheduleBuffer:buffer completionHandler:^{
       Deepgram *strongSelf = weakSelf;
       if (strongSelf) {
-        strongSelf->_scheduledBufferCount--;
+        int remaining = --strongSelf->_scheduledBufferCount;
+        if (remaining <= 0) {
+          strongSelf.isPlaying = NO;
+          [strongSelf maybeDeactivateAudioSession];
+        }
       }
     }];
     
     if (!self.playerNode.isPlaying) {
+      self.isPlaying = YES;
       [self.playerNode play];
+    } else {
+      self.isPlaying = YES;
     }
   }
   @catch (NSException *e) {
@@ -912,19 +1259,19 @@ RCT_EXPORT_METHOD(stopPlayer
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
   @try {
-    
-    // Stop player node
+    // Stop player node first (must stop before detach to avoid crash)
     if (self.playerNode) {
       [self.playerNode stop];
-      if (self.audioEngine) {
-        [self.audioEngine detachNode:self.playerNode];
-      }
     }
     
-    // Stop and cleanup audio engine
+    // Stop audio engine before detaching nodes
     if (self.audioEngine) {
       if (self.audioEngine.isRunning) {
         [self.audioEngine stop];
+      }
+      // Detach after engine is stopped to prevent crash
+      if (self.playerNode) {
+        [self.audioEngine detachNode:self.playerNode];
       }
       [self.audioEngine reset];
     }
@@ -994,8 +1341,10 @@ RCT_EXPORT_METHOD(playAudioChunk:(NSString *)b64
     // Setup audio engine if needed
     if (!self.audioEngine || !self.audioEngine.isRunning) {
       NSError *engineError = nil;
+      // One-shot HTTP TTS playback never needs voice processing.
       if (![self setupAudioEngineWithSampleRate:sampleRate
                                        channels:channels
+                          enableVoiceProcessing:NO
                                           error:&engineError]) {
         DGLogError(@"[Deepgram] playAudioChunk: failed to setup audio engine: %@", engineError);
         if (reject) reject(@"audio_chunk_error", @"Failed to setup audio engine", engineError);
@@ -1014,9 +1363,13 @@ RCT_EXPORT_METHOD(playAudioChunk:(NSString *)b64
     self.isPlaying = YES;
     
     // Schedule buffer with completion handler to resolve promise
+    __weak Deepgram *weakSelf = self;
     [self.playerNode scheduleBuffer:buffer completionHandler:^{
-      self.isPlaying = NO;
-      [self maybeDeactivateAudioSession];
+      Deepgram *strongSelf = weakSelf;
+      if (strongSelf) {
+        strongSelf.isPlaying = NO;
+        [strongSelf maybeDeactivateAudioSession];
+      }
       if (resolve) resolve(nil);
     }];
     

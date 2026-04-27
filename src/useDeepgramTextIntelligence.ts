@@ -14,6 +14,16 @@ export function useDeepgramTextIntelligence({
   options = {},
   trackState = false,
 }: UseDeepgramTextIntelligenceProps = {}): UseDeepgramTextIntelligenceReturn {
+  const onBeforeAnalyzeRef = useRef(onBeforeAnalyze);
+  const onAnalyzeSuccessRef = useRef(onAnalyzeSuccess);
+  const onAnalyzeErrorRef = useRef(onAnalyzeError);
+
+  useEffect(() => {
+    onBeforeAnalyzeRef.current = onBeforeAnalyze;
+    onAnalyzeSuccessRef.current = onAnalyzeSuccess;
+    onAnalyzeErrorRef.current = onAnalyzeError;
+  });
+
   const [internalState, setInternalState] = useState<{
     status: 'idle' | 'loading' | 'analyzing' | 'error';
     error: Error | null;
@@ -39,7 +49,7 @@ export function useDeepgramTextIntelligence({
 
   const analyze = useCallback(
     async (input: DeepgramTextIntelligenceInput) => {
-      onBeforeAnalyze();
+      onBeforeAnalyzeRef.current();
 
       if (trackState) {
         setInternalState({ status: 'analyzing', error: null });
@@ -96,13 +106,13 @@ export function useDeepgramTextIntelligence({
         }
 
         const json = await res.json();
-        onAnalyzeSuccess(json);
+        onAnalyzeSuccessRef.current(json);
         if (trackState) {
           setInternalState({ status: 'idle', error: null });
         }
       } catch (err: any) {
         if (err.name === 'AbortError') return;
-        onAnalyzeError(err);
+        onAnalyzeErrorRef.current(err);
         if (trackState) {
           setInternalState({
             status: 'error',
@@ -112,9 +122,6 @@ export function useDeepgramTextIntelligence({
       }
     },
     [
-      onBeforeAnalyze,
-      onAnalyzeSuccess,
-      onAnalyzeError,
       summarize,
       topics,
       customTopic,

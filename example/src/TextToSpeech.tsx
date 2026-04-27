@@ -1,13 +1,5 @@
 import { useMemo, useState } from 'react';
-import {
-  View,
-  Button,
-  Text,
-  TextInput,
-  ScrollView,
-  StyleSheet,
-  Switch,
-} from 'react-native';
+import { ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import {
   useDeepgramTextToSpeech,
   type DeepgramTextToSpeechStreamMetadataMessage,
@@ -21,6 +13,11 @@ import {
 } from 'react-native-deepgram';
 
 import OptionSelect, { type Option } from './components/OptionSelect';
+import Button from './components/Button';
+import Card from './components/Card';
+import Field from './components/Field';
+import StatusBadge from './components/StatusBadge';
+import { colors, radius, spacing, type } from './theme';
 
 const POPULAR_TTS_MODELS = [
   'aura-2-asteria-en',
@@ -77,11 +74,11 @@ const formatModelLabel = (model: string) => {
   if (segments.length < 2) return model;
   const language = segments.pop() ?? '';
   const readable = segments
-    .map((segment) => {
-      if (!segment) return segment;
-      if (/^\d+$/.test(segment)) return segment;
-      return segment.charAt(0).toUpperCase() + segment.slice(1);
-    })
+    .map((segment) =>
+      !segment || /^\d+$/.test(segment)
+        ? segment
+        : segment.charAt(0).toUpperCase() + segment.slice(1)
+    )
     .join(' ');
   return `${readable} (${language.toUpperCase()})`;
 };
@@ -106,7 +103,6 @@ const parseNumber = (value: string): number | undefined => {
 export default function TextToSpeech() {
   const [text, setText] = useState('');
   const [streamText, setStreamText] = useState('');
-  // Removed manual status/error states in favor of trackState
   const [lastMetadata, setLastMetadata] =
     useState<DeepgramTextToSpeechStreamMetadataMessage | null>(null);
   const [lastFlushedSequence, setLastFlushedSequence] = useState<number | null>(
@@ -148,14 +144,14 @@ export default function TextToSpeech() {
   const httpBitRateValue =
     httpEncodingValue && httpEncodingValue !== 'linear16'
       ? (parseNumber(httpBitRate) as DeepgramTextToSpeechBitRate | undefined)
-      : undefined; // Deepgram rejects bitRate when encoding=linear16
+      : undefined;
   const httpCallbackValue = httpCallbackUrl.trim() || undefined;
   const httpCallbackMethodValue =
     httpCallbackValue && httpCallbackMethod.trim()
       ? (httpCallbackMethod
           .trim()
           .toUpperCase() as DeepgramTextToSpeechCallbackMethod)
-      : undefined; // Deepgram requires callbackMethod only if callback is set
+      : undefined;
 
   const streamModelValue = streamModel.trim() || undefined;
   const streamEncodingValue = streamEncoding.trim()
@@ -215,53 +211,208 @@ export default function TextToSpeech() {
     },
   });
 
+  const isSynthesizing = httpState?.status === 'loading';
+  const isStreaming = streamState?.status === 'connected';
+
+  const tone = streamState?.error ? 'error' : isStreaming ? 'live' : 'idle';
+  const toneLabel = streamState?.error
+    ? 'Error'
+    : isStreaming
+      ? 'Streaming'
+      : 'Idle';
+
   const handleSynthesize = async () => {
     try {
       await synthesize(text);
     } catch (err) {
-      if ((err as any)?.name !== 'AbortError') {
+      if ((err as { name?: string })?.name !== 'AbortError') {
         console.warn('Synthesize failed', err);
       }
     }
   };
-  const handleStream = async () => {
+
+  const handleStartStream = async () => {
     try {
       await startStreaming(text);
     } catch (err) {
       console.warn('Start stream failed', err);
     }
   };
+
   const handleSendText = () => {
     if (sendText(streamText, { flush: streamAutoFlush })) {
-      setStreamText(''); // Clear the input after sending
+      setStreamText('');
     }
   };
-  const handleFlush = () => flushStream();
-  const handleClear = () => clearStream();
-  const handleCloseGracefully = () => closeStreamGracefully();
 
   return (
-    <ScrollView>
-      <View style={styles.container}>
-        <TextInput
-          value={text}
-          onChangeText={setText}
-          placeholder="Enter text to speak"
-          style={styles.input}
-          multiline
-        />
-
-        <View style={styles.optionsSection}>
-          <Text style={styles.sectionTitle}>HTTP options</Text>
-          <Text style={styles.optionHint}>
-            Configure parameters for single text-to-speech requests.
+    <View style={styles.container}>
+      <ScrollView contentContainerStyle={styles.scrollContent}>
+        {/* Hero */}
+        <View style={styles.hero}>
+          <View style={styles.heroTop}>
+            <StatusBadge tone={tone} label={toneLabel} />
+          </View>
+          <Text style={styles.heroIcon}>🔊</Text>
+          <Text style={styles.heroTitle}>Text-to-Speech</Text>
+          <Text style={styles.heroSubtitle}>
+            Synthesize via REST or stream tokens over a WebSocket. Audio plays
+            through the device speaker automatically.
           </Text>
+        </View>
+
+        {/* Main input */}
+        <Card title="Text" subtitle="What should the agent say?">
+          <Field
+            value={text}
+            onChangeText={setText}
+            placeholder="Type something to speak…"
+            multiline
+            numberOfLines={4}
+          />
+          <View style={styles.actionRow}>
+            <Button
+              title="Synthesize (HTTP)"
+              variant="primary"
+              onPress={handleSynthesize}
+              loading={isSynthesizing}
+              disabled={isSynthesizing || !text.trim()}
+              iconLeft="📨"
+            />
+            {isStreaming ? (
+              <Button
+                title="Stop stream"
+                variant="danger"
+                onPress={stopStreaming}
+              />
+            ) : (
+              <Button
+                title="Start stream"
+                variant="secondary"
+                onPress={handleStartStream}
+                disabled={!text.trim()}
+                iconLeft="🎧"
+              />
+            )}
+          </View>
+          {httpState?.error ? (
+            <View style={styles.errorBanner}>
+              <Text style={styles.errorText}>⚠ {httpState.error.message}</Text>
+            </View>
+          ) : null}
+          {streamState?.error ? (
+            <View style={styles.errorBanner}>
+              <Text style={styles.errorText}>
+                ⚠ Stream: {streamState.error.message}
+              </Text>
+            </View>
+          ) : null}
+        </Card>
+
+        {/* Continuous stream */}
+        {isStreaming && (
+          <Card
+            title="Continuous streaming"
+            subtitle="Send more text to the open WebSocket"
+          >
+            <Field
+              value={streamText}
+              onChangeText={setStreamText}
+              placeholder="Add more text…"
+              multiline
+              numberOfLines={3}
+            />
+            <View style={styles.switchRow}>
+              <Text style={styles.switchLabel}>Flush automatically</Text>
+              <Switch
+                value={streamAutoFlush}
+                onValueChange={setStreamAutoFlush}
+                thumbColor={streamAutoFlush ? colors.primary : '#888'}
+                trackColor={{
+                  false: colors.surfaceMuted,
+                  true: colors.primaryMuted,
+                }}
+              />
+            </View>
+            <View style={styles.actionRow}>
+              <Button
+                title={streamAutoFlush ? 'Send' : 'Queue (no flush)'}
+                variant="primary"
+                onPress={handleSendText}
+                disabled={!streamText.trim()}
+              />
+              <Button
+                title="Flush"
+                variant="secondary"
+                onPress={() => flushStream()}
+              />
+              <Button
+                title="Clear"
+                variant="ghost"
+                onPress={() => clearStream()}
+              />
+              <Button
+                title="Close gracefully"
+                variant="ghost"
+                onPress={() => closeStreamGracefully()}
+              />
+            </View>
+          </Card>
+        )}
+
+        {/* Stream debug */}
+        {(lastMetadata ||
+          lastFlushedSequence != null ||
+          lastClearedSequence != null ||
+          warnings.length > 0) && (
+          <Card title="Stream events" collapsible defaultCollapsed>
+            {lastMetadata ? (
+              <View style={styles.kvBlock}>
+                <Text style={styles.kvTitle}>Last metadata</Text>
+                <KV label="Request" value={lastMetadata.request_id} />
+                <KV label="Model" value={lastMetadata.model_name} />
+                <KV label="Version" value={lastMetadata.model_version} />
+              </View>
+            ) : null}
+            {lastFlushedSequence != null && (
+              <KV
+                label="Last flushed sequence"
+                value={String(lastFlushedSequence)}
+              />
+            )}
+            {lastClearedSequence != null && (
+              <KV
+                label="Last cleared sequence"
+                value={String(lastClearedSequence)}
+              />
+            )}
+            {warnings.length > 0 && (
+              <View style={[styles.kvBlock, { marginTop: spacing.md }]}>
+                <Text style={[styles.kvTitle, { color: colors.warning }]}>
+                  Warnings
+                </Text>
+                {warnings.map((w, i) => (
+                  <Text key={`${w.code}-${i}`} style={styles.warningItem}>
+                    {w.code}: {w.description}
+                  </Text>
+                ))}
+              </View>
+            )}
+          </Card>
+        )}
+
+        {/* HTTP options */}
+        <Card
+          title="HTTP options"
+          subtitle="Single REST request configuration"
+          collapsible
+          defaultCollapsed
+        >
           <OptionSelect
             label="Model"
             value={httpModel}
             onChange={setHttpModel}
             options={modelOptions}
-            placeholder="Select a voice model"
             allowCustom
             customPlaceholder="Enter a Deepgram model id"
           />
@@ -270,18 +421,14 @@ export default function TextToSpeech() {
             value={httpEncoding}
             onChange={setHttpEncoding}
             options={HTTP_ENCODING_OPTIONS}
-            placeholder="Select encoding"
             allowCustom
-            customPlaceholder="Enter an encoding"
           />
           <OptionSelect
             label="Sample rate"
             value={httpSampleRate}
             onChange={setHttpSampleRate}
             options={SAMPLE_RATE_OPTIONS}
-            placeholder="Select sample rate"
             allowCustom
-            customPlaceholder="Enter sample rate (Hz)"
             customKeyboardType="numeric"
           />
           <OptionSelect
@@ -289,26 +436,21 @@ export default function TextToSpeech() {
             value={httpContainer}
             onChange={setHttpContainer}
             options={CONTAINER_OPTIONS}
-            placeholder="Select container"
             allowCustom
-            customPlaceholder="Enter container format"
           />
           <OptionSelect
             label="Bit rate"
             value={httpBitRate}
             onChange={setHttpBitRate}
             options={BITRATE_OPTIONS}
-            placeholder="Select bit rate"
             allowCustom
-            customPlaceholder="Enter bit rate (bps)"
             customKeyboardType="numeric"
           />
-          <Text style={styles.fieldLabel}>Callback URL</Text>
-          <TextInput
+          <Field
+            label="Callback URL"
             value={httpCallbackUrl}
             onChangeText={setHttpCallbackUrl}
             placeholder="Optional webhook URL"
-            style={styles.optionInput}
             autoCapitalize="none"
             autoCorrect={false}
           />
@@ -317,300 +459,148 @@ export default function TextToSpeech() {
             value={httpCallbackMethod}
             onChange={setHttpCallbackMethod}
             options={CALLBACK_METHOD_OPTIONS}
-            placeholder="Select HTTP method"
             allowCustom
-            customPlaceholder="Enter HTTP method"
           />
-          <View style={styles.toggleRow}>
-            <Text style={styles.switchLabel}>Opt out of the MIP</Text>
-            <Switch value={httpMipOptOut} onValueChange={setHttpMipOptOut} />
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>Opt out of MIP</Text>
+            <Switch
+              value={httpMipOptOut}
+              onValueChange={setHttpMipOptOut}
+              thumbColor={httpMipOptOut ? colors.primary : '#888'}
+              trackColor={{
+                false: colors.surfaceMuted,
+                true: colors.primaryMuted,
+              }}
+            />
           </View>
-        </View>
+        </Card>
 
-        <View style={[styles.optionsSection, styles.optionsSectionSpacing]}>
-          <Text style={styles.sectionTitle}>Streaming options</Text>
-          <Text style={styles.optionHint}>
-            These apply to the WebSocket streaming connection.
-          </Text>
+        {/* Streaming options */}
+        <Card
+          title="Streaming options"
+          subtitle="WebSocket configuration"
+          collapsible
+          defaultCollapsed
+        >
           <OptionSelect
             label="Model"
             value={streamModel}
             onChange={setStreamModel}
             options={modelOptions}
-            placeholder="Select a voice model"
             allowCustom
-            customPlaceholder="Enter a Deepgram model id"
           />
           <OptionSelect
             label="Encoding"
             value={streamEncoding}
             onChange={setStreamEncoding}
             options={STREAM_ENCODING_OPTIONS}
-            placeholder="Select encoding"
             allowCustom
-            customPlaceholder="Enter an encoding"
           />
           <OptionSelect
             label="Sample rate"
             value={streamSampleRate}
             onChange={setStreamSampleRate}
             options={SAMPLE_RATE_OPTIONS}
-            placeholder="Select sample rate"
             allowCustom
-            customPlaceholder="Enter sample rate (Hz)"
             customKeyboardType="numeric"
           />
-          <View style={styles.toggleRow}>
-            <Text style={styles.switchLabel}>Opt out of the MIP</Text>
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>Opt out of MIP</Text>
             <Switch
               value={streamMipOptOut}
               onValueChange={setStreamMipOptOut}
+              thumbColor={streamMipOptOut ? colors.primary : '#888'}
+              trackColor={{
+                false: colors.surfaceMuted,
+                true: colors.primaryMuted,
+              }}
             />
           </View>
-        </View>
+        </Card>
+      </ScrollView>
+    </View>
+  );
+}
 
-        {/* HTTP synthesis */}
-        <View style={styles.buttonRow}>
-          <Button
-            title="Synthesize (HTTP)"
-            onPress={handleSynthesize}
-            disabled={httpState?.status === 'loading' || !text.trim()}
-          />
-        </View>
-        {httpState?.status === 'loading' && (
-          <Text style={styles.status}>Synthesizing…</Text>
-        )}
-        {httpState?.error && (
-          <Text style={styles.error}>Error: {httpState.error.message}</Text>
-        )}
-
-        {/* streaming */}
-        <View style={[styles.buttonRow, styles.streamingSection]}>
-          <Button
-            title="Start Stream"
-            onPress={handleStream}
-            disabled={streamState?.status === 'connected' || !text.trim()}
-          />
-          <Button
-            title="Stop Stream"
-            onPress={stopStreaming}
-            disabled={streamState?.status !== 'connected'}
-          />
-        </View>
-        {streamState?.status === 'connected' && (
-          <Text style={styles.status}>Streaming…</Text>
-        )}
-        {streamState?.error && (
-          <Text style={styles.error}>
-            Stream error: {streamState.error.message}
-          </Text>
-        )}
-
-        {/* Continuous streaming - send additional text to active stream */}
-        {streamState?.status === 'connected' && (
-          <View style={[styles.continuousSection, styles.continuousMargin]}>
-            <Text style={styles.sectionTitle}>Continuous Streaming</Text>
-            <TextInput
-              value={streamText}
-              onChangeText={setStreamText}
-              placeholder="Send more text to the active stream..."
-              style={styles.streamInput}
-              multiline
-            />
-            <View style={styles.toggleRow}>
-              <Text style={styles.switchLabel}>Flush automatically</Text>
-              <Switch
-                value={streamAutoFlush}
-                onValueChange={setStreamAutoFlush}
-              />
-            </View>
-            <View style={styles.buttonRow}>
-              <Button
-                title={streamAutoFlush ? 'Send Text' : 'Queue Text (no flush)'}
-                onPress={handleSendText}
-                disabled={!streamText.trim()}
-              />
-              <Button title="Flush" onPress={handleFlush} />
-            </View>
-            <View style={styles.buttonRow}>
-              <Button title="Clear Buffer" onPress={handleClear} />
-              <Button
-                title="Close Gracefully"
-                onPress={handleCloseGracefully}
-              />
-            </View>
-          </View>
-        )}
-
-        <ScrollView style={styles.outputContainer}>
-          <Text style={styles.note}>
-            Audio is played automatically by the built-in native player; there’s
-            no transcript to display.
-          </Text>
-          {lastMetadata && (
-            <View style={styles.debugPanel}>
-              <Text style={styles.debugTitle}>Last metadata</Text>
-              <Text style={styles.debugText}>
-                Request: {lastMetadata.request_id}
-              </Text>
-              <Text style={styles.debugText}>
-                Model: {lastMetadata.model_name}
-              </Text>
-              <Text style={styles.debugText}>
-                Version: {lastMetadata.model_version}
-              </Text>
-            </View>
-          )}
-          {(lastFlushedSequence != null || lastClearedSequence != null) && (
-            <View style={styles.debugPanel}>
-              <Text style={styles.debugTitle}>Stream events</Text>
-              {lastFlushedSequence != null && (
-                <Text style={styles.debugText}>
-                  Last flushed sequence: {lastFlushedSequence}
-                </Text>
-              )}
-              {lastClearedSequence != null && (
-                <Text style={styles.debugText}>
-                  Last cleared sequence: {lastClearedSequence}
-                </Text>
-              )}
-            </View>
-          )}
-          {warnings.length > 0 && (
-            <View style={[styles.debugPanel, styles.warningPanel]}>
-              <Text style={[styles.debugTitle, styles.warningTitle]}>
-                Warnings
-              </Text>
-              {warnings.map((warning, index) => (
-                <Text
-                  key={`${warning.code}-${index}`}
-                  style={styles.warningText}
-                >
-                  {warning.code}: {warning.description}
-                </Text>
-              ))}
-            </View>
-          )}
-        </ScrollView>
-      </View>
-    </ScrollView>
+function KV({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.kvRow}>
+      <Text style={styles.kvLabel}>{label}</Text>
+      <Text style={styles.kvValue}>{value}</Text>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 16, backgroundColor: '#fff' },
-  input: {
-    minHeight: 100,
-    borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 4,
-    padding: 8,
-    marginBottom: 16,
-    textAlignVertical: 'top',
+  container: { flex: 1, backgroundColor: colors.bg },
+  scrollContent: {
+    padding: spacing.lg,
+    paddingBottom: spacing.xxl,
   },
-  buttonRow: {
+  hero: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.xl,
+    alignItems: 'center',
+    marginBottom: spacing.lg,
+  },
+  heroTop: {
+    width: '100%',
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 12,
+    justifyContent: 'flex-start',
+    marginBottom: spacing.md,
   },
-  status: { marginVertical: 8, fontStyle: 'italic' },
-  error: { marginVertical: 8, color: 'red' },
-  optionsSection: {
-    borderWidth: 1,
-    borderColor: '#eee',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 16,
-    backgroundColor: '#fafafa',
+  heroIcon: { fontSize: 40, marginBottom: spacing.sm },
+  heroTitle: { ...type.h2, color: colors.text },
+  heroSubtitle: {
+    ...type.small,
+    color: colors.textMuted,
+    marginTop: 4,
+    textAlign: 'center',
+    paddingHorizontal: spacing.md,
   },
-  optionsSectionSpacing: {
-    marginTop: 8,
+  actionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
   },
-  optionHint: {
-    fontSize: 13,
-    color: '#555',
-    marginBottom: 12,
-  },
-  fieldLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#444',
-    marginBottom: 4,
-  },
-  optionInput: {
-    borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 4,
-    padding: 8,
-    marginBottom: 12,
-    backgroundColor: '#fff',
-  },
-  continuousSection: {
-    borderTopWidth: 1,
-    borderTopColor: '#eee',
-    paddingTop: 16,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginBottom: 12,
-    color: '#333',
-  },
-  streamInput: {
-    minHeight: 60,
-    borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 4,
-    padding: 8,
-    marginBottom: 12,
-    textAlignVertical: 'top',
-    backgroundColor: '#f9f9f9',
-  },
-  toggleRow: {
+  switchRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 12,
+    marginBottom: spacing.md,
   },
   switchLabel: {
-    fontSize: 14,
-    color: '#333',
+    ...type.body,
+    color: colors.text,
+    flex: 1,
+    marginRight: spacing.md,
   },
-  streamingSection: {
-    marginTop: 24,
-  },
-  continuousMargin: {
-    marginTop: 24,
-  },
-  outputContainer: { flex: 1, marginTop: 8 },
-  note: { fontSize: 14, lineHeight: 20 },
-  debugPanel: {
-    marginTop: 16,
-    padding: 12,
-    borderRadius: 8,
-    backgroundColor: '#f5f5f5',
-  },
-  debugTitle: {
-    fontWeight: 'bold',
-    marginBottom: 4,
-    color: '#333',
-  },
-  debugText: {
-    fontSize: 13,
-    color: '#444',
-    marginBottom: 2,
-  },
-  warningPanel: {
-    backgroundColor: '#fff5f5',
+  errorBanner: {
+    backgroundColor: '#3a1418',
+    borderColor: colors.danger,
     borderWidth: 1,
-    borderColor: '#ffcdd2',
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginTop: spacing.md,
   },
-  warningTitle: {
-    color: '#c62828',
+  errorText: { color: colors.danger, ...type.smallMedium },
+  kvBlock: {},
+  kvTitle: {
+    ...type.smallMedium,
+    color: colors.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginBottom: 6,
   },
-  warningText: {
-    fontSize: 13,
-    color: '#c62828',
-    marginBottom: 2,
+  kvRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
   },
+  kvLabel: { ...type.small, color: colors.textMuted },
+  kvValue: { ...type.small, color: colors.text, fontFamily: 'Menlo' },
+  warningItem: { color: colors.warning, marginTop: 4 },
 });

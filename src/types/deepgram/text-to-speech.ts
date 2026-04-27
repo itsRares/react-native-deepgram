@@ -190,7 +190,15 @@ export interface UseDeepgramTextToSpeechOptions {
  * Message sent to the TTS WebSocket stream.
  */
 export type DeepgramTextToSpeechStreamTextMessage = {
+  /** @deprecated Prefer `type: 'Speak'` (Deepgram API canonical message type). */
   type: 'Text';
+  text: string;
+  /** Optional identifier for advanced sequencing use cases. */
+  sequence_id?: number;
+};
+
+export type DeepgramTextToSpeechStreamSpeakMessage = {
+  type: 'Speak';
   text: string;
   /** Optional identifier for advanced sequencing use cases. */
   sequence_id?: number;
@@ -212,6 +220,7 @@ export type DeepgramTextToSpeechStreamCloseMessage = {
  * Union of all possible messages sent to the TTS WebSocket.
  */
 export type DeepgramTextToSpeechStreamInputMessage =
+  | DeepgramTextToSpeechStreamSpeakMessage
   | DeepgramTextToSpeechStreamTextMessage
   | DeepgramTextToSpeechStreamFlushMessage
   | DeepgramTextToSpeechStreamClearMessage

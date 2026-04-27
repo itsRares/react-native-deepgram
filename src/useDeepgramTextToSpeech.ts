@@ -1,7 +1,5 @@
-import { Buffer } from 'buffer';
-if (!globalThis.Buffer) globalThis.Buffer = Buffer;
 import { useRef, useCallback, useEffect, useMemo, useState } from 'react';
-import { NativeModules } from 'react-native';
+import { Deepgram } from './NativeDeepgram';
 import type {
   UseDeepgramTextToSpeechProps,
   UseDeepgramTextToSpeechReturn,
@@ -16,7 +14,7 @@ import type {
   DeepgramTextToSpeechStreamEncoding,
 } from './types';
 import { DEEPGRAM_BASEURL, DEEPGRAM_BASEWSS } from './constants';
-import { buildParams } from './helpers';
+import { buildParams, arrayBufferToBase64 } from './helpers';
 
 const DEFAULT_TTS_MODEL = 'aura-2-asteria-en';
 const DEFAULT_TTS_SAMPLE_RATE = 24_000;
@@ -57,6 +55,14 @@ const ensureQueryParam = (
   params[key] = value;
 };
 
+const getAuthorizationHeader = (apiKeyOrToken: string): string => {
+  const trimmed = apiKeyOrToken.trim();
+  if (/^(Token|Bearer)\s+/i.test(trimmed)) {
+    return trimmed;
+  }
+  return `Token ${trimmed}`;
+};
+
 const isMetadataMessage = (
   message: DeepgramTextToSpeechStreamResponseMessage
 ): message is DeepgramTextToSpeechStreamMetadataMessage =>
@@ -94,53 +100,26 @@ const asErrorMessage = (
     ? (message as DeepgramTextToSpeechStreamErrorMessage)
     : null;
 
-/* ────────────────────────────────────────────────────────────
-   Wrap the unified native module
-   ──────────────────────────────────────────────────────────── */
-const Deepgram = (() => {
-  /** Throws if the native side isn’t linked */
-  function getModule() {
-    const mod = NativeModules.Deepgram;
-    if (!mod) {
-      throw new Error(
-        'Deepgram native module not found. ' +
-          'Did you rebuild the app after installing / adding the module?'
-      );
-    }
-    return mod as {
-      /** Initialise playback engine */
-      startPlayer(sampleRate: number, channels: 1 | 2): void;
-      /** Set audio configuration */
-      setAudioConfig(sampleRate: number, channels: 1 | 2): void;
-      /** Feed a base-64 PCM chunk */
-      feedAudio(base64Pcm: string): void;
-      /** Play a single audio chunk */
-      playAudioChunk(base64Pcm: string): Promise<void>;
-      /** Stop / reset the player */
-      stopPlayer(): void;
-    };
-  }
+/* Native player helpers — delegates to shared Deepgram import */
+const NativePlayer = {
+  startPlayer: (sr = 16_000, ch: 1 | 2 = 1) => Deepgram.startPlayer(sr, ch),
 
-  return {
-    startPlayer: (sr = 16_000, ch: 1 | 2 = 1) =>
-      getModule().startPlayer(sr, ch),
+  feedAudio: (chunk: ArrayBuffer | Uint8Array) => {
+    const b64 = arrayBufferToBase64(
+      chunk instanceof Uint8Array ? (chunk.buffer as ArrayBuffer) : chunk
+    );
+    Deepgram.feedAudio(b64);
+  },
 
-    setAudioConfig: (sr = 16_000, ch: 1 | 2 = 1) =>
-      getModule().setAudioConfig(sr, ch),
+  playAudioChunk: (chunk: ArrayBuffer | Uint8Array) => {
+    const b64 = arrayBufferToBase64(
+      chunk instanceof Uint8Array ? (chunk.buffer as ArrayBuffer) : chunk
+    );
+    return Deepgram.playAudioChunk(b64);
+  },
 
-    feedAudio: (chunk: ArrayBuffer | Uint8Array) => {
-      const u8 = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
-      getModule().feedAudio(Buffer.from(u8).toString('base64'));
-    },
-
-    playAudioChunk: (chunk: ArrayBuffer | Uint8Array) => {
-      const u8 = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
-      return getModule().playAudioChunk(Buffer.from(u8).toString('base64'));
-    },
-
-    stopPlayer: () => getModule().stopPlayer(),
-  };
-})();
+  stopPlayer: () => Deepgram.stopPlayer(),
+};
 
 /* ────────────────────────────────────────────────────────────
    Hook: useDeepgramTextToSpeech
@@ -162,6 +141,36 @@ export function useDeepgramTextToSpeech({
   autoPlayAudio = true,
   trackState = false,
 }: UseDeepgramTextToSpeechProps = {}): UseDeepgramTextToSpeechReturn {
+  /* ---------- Stable refs for callbacks ---------- */
+  const onBeforeSynthesizeRef = useRef(onBeforeSynthesize);
+  const onSynthesizeSuccessRef = useRef(onSynthesizeSuccess);
+  const onSynthesizeErrorRef = useRef(onSynthesizeError);
+  const onBeforeStreamRef = useRef(onBeforeStream);
+  const onStreamStartRef = useRef(onStreamStart);
+  const onAudioChunkRef = useRef(onAudioChunk);
+  const onStreamErrorRef = useRef(onStreamError);
+  const onStreamEndRef = useRef(onStreamEnd);
+  const onStreamMetadataRef = useRef(onStreamMetadata);
+  const onStreamFlushedRef = useRef(onStreamFlushed);
+  const onStreamClearedRef = useRef(onStreamCleared);
+  const onStreamWarningRef = useRef(onStreamWarning);
+
+  useEffect(() => {
+    onBeforeSynthesizeRef.current = onBeforeSynthesize;
+    onSynthesizeSuccessRef.current = onSynthesizeSuccess;
+    onSynthesizeErrorRef.current = onSynthesizeError;
+    onBeforeStreamRef.current = onBeforeStream;
+    onStreamStartRef.current = onStreamStart;
+    onAudioChunkRef.current = onAudioChunk;
+    onStreamErrorRef.current = onStreamError;
+    onStreamEndRef.current = onStreamEnd;
+    onStreamMetadataRef.current = onStreamMetadata;
+    onStreamFlushedRef.current = onStreamFlushed;
+    onStreamClearedRef.current = onStreamCleared;
+    onStreamWarningRef.current = onStreamWarning;
+  });
+
+  const streamEndFiredRef = useRef(false);
   const [internalState, setInternalState] = useState<{
     status: 'idle' | 'loading' | 'connecting' | 'connected' | 'error';
     error: Error | null;
@@ -254,7 +263,7 @@ export function useDeepgramTextToSpeech({
 
   const synthesize = useCallback(
     async (text: string) => {
-      onBeforeSynthesize();
+      onBeforeSynthesizeRef.current();
       if (trackState) {
         setInternalState({ status: 'loading', error: null });
       }
@@ -304,7 +313,7 @@ export function useDeepgramTextToSpeech({
         const res = await fetch(url, {
           method: 'POST',
           headers: {
-            'Authorization': `Token ${apiKey}`,
+            'Authorization': getAuthorizationHeader(apiKey),
             'Content-Type': 'application/json',
             'Accept': 'application/octet-stream',
           },
@@ -318,9 +327,9 @@ export function useDeepgramTextToSpeech({
         }
 
         const audio = await res.arrayBuffer();
-        await Deepgram.playAudioChunk(audio);
+        await NativePlayer.playAudioChunk(audio);
 
-        onSynthesizeSuccess(audio);
+        onSynthesizeSuccessRef.current(audio);
         if (trackState) {
           setInternalState({ status: 'idle', error: null });
         }
@@ -330,7 +339,7 @@ export function useDeepgramTextToSpeech({
           throw err;
         }
 
-        onSynthesizeError(err);
+        onSynthesizeErrorRef.current(err);
         if (trackState) {
           setInternalState({
             status: 'error',
@@ -340,13 +349,7 @@ export function useDeepgramTextToSpeech({
         throw err;
       }
     },
-    [
-      onBeforeSynthesize,
-      onSynthesizeSuccess,
-      onSynthesizeError,
-      resolvedHttpOptions,
-      trackState,
-    ]
+    [resolvedHttpOptions, trackState]
   );
 
   /* ---------- WebSocket (streaming synth) ---------- */
@@ -356,7 +359,7 @@ export function useDeepgramTextToSpeech({
     ws.current?.close(1000, 'cleanup');
     ws.current = null;
     if (autoPlayAudio) {
-      Deepgram.stopPlayer();
+      NativePlayer.stopPlayer();
     }
     if (trackState) {
       setInternalState((prev) => ({ ...prev, status: 'idle' }));
@@ -370,10 +373,14 @@ export function useDeepgramTextToSpeech({
       }
 
       try {
-        ws.current.send(JSON.stringify(message));
+        const normalizedMessage =
+          message.type === 'Text'
+            ? { ...message, type: 'Speak' as const }
+            : message;
+        ws.current.send(JSON.stringify(normalizedMessage));
         return true;
       } catch (err) {
-        onStreamError(err);
+        onStreamErrorRef.current(err);
         if (trackState) {
           setInternalState({
             status: 'error',
@@ -383,7 +390,7 @@ export function useDeepgramTextToSpeech({
         return false;
       }
     },
-    [onStreamError, trackState]
+    [trackState]
   );
 
   const flushStream = useCallback(
@@ -413,7 +420,7 @@ export function useDeepgramTextToSpeech({
       }
 
       const didSend = sendMessage({
-        type: 'Text',
+        type: 'Speak',
         text: trimmed,
         ...(config?.sequenceId != null
           ? { sequence_id: config.sequenceId }
@@ -433,7 +440,8 @@ export function useDeepgramTextToSpeech({
 
   const startStreaming = useCallback(
     async (text: string) => {
-      onBeforeStream();
+      streamEndFiredRef.current = false;
+      onBeforeStreamRef.current();
       if (trackState) {
         setInternalState({ status: 'connecting', error: null });
       }
@@ -464,7 +472,7 @@ export function useDeepgramTextToSpeech({
           ? `${DEEPGRAM_BASEWSS}/speak?${wsParamString}`
           : `${DEEPGRAM_BASEWSS}/speak`;
         ws.current = new (WebSocket as any)(url, undefined, {
-          headers: { Authorization: `Token ${apiKey}` },
+          headers: { Authorization: getAuthorizationHeader(apiKey) },
         });
 
         // Ensure WebSocket receives binary data as ArrayBuffer
@@ -472,14 +480,14 @@ export function useDeepgramTextToSpeech({
 
         ws.current.onopen = () => {
           if (autoPlayAudio) {
-            Deepgram.startPlayer(
+            NativePlayer.startPlayer(
               Number(resolvedStreamOptions.sampleRate) ||
                 DEFAULT_TTS_SAMPLE_RATE,
               1
             );
           }
           sendText(text);
-          onStreamStart();
+          onStreamStartRef.current();
           if (trackState) {
             setInternalState({ status: 'connected', error: null });
           }
@@ -488,15 +496,15 @@ export function useDeepgramTextToSpeech({
         ws.current.onmessage = (ev) => {
           if (ev.data instanceof ArrayBuffer) {
             if (autoPlayAudio) {
-              Deepgram.feedAudio(ev.data);
+              NativePlayer.feedAudio(ev.data);
             }
-            onAudioChunk(ev.data);
+            onAudioChunkRef.current(ev.data);
           } else if (ev.data instanceof Blob) {
             ev.data.arrayBuffer().then((buffer) => {
               if (autoPlayAudio) {
-                Deepgram.feedAudio(buffer);
+                NativePlayer.feedAudio(buffer);
               }
-              onAudioChunk(buffer);
+              onAudioChunkRef.current(buffer);
             });
           } else if (typeof ev.data === 'string') {
             try {
@@ -507,22 +515,22 @@ export function useDeepgramTextToSpeech({
               switch (message.type) {
                 case 'Metadata':
                   if (isMetadataMessage(message)) {
-                    onStreamMetadata(message);
+                    onStreamMetadataRef.current(message);
                   }
                   break;
                 case 'Flushed':
                   if (isFlushedMessage(message)) {
-                    onStreamFlushed(message);
+                    onStreamFlushedRef.current(message);
                   }
                   break;
                 case 'Cleared':
                   if (isClearedMessage(message)) {
-                    onStreamCleared(message);
+                    onStreamClearedRef.current(message);
                   }
                   break;
                 case 'Warning':
                   if (isWarningMessage(message)) {
-                    onStreamWarning(message);
+                    onStreamWarningRef.current(message);
                   }
                   break;
                 case 'Error': {
@@ -534,7 +542,9 @@ export function useDeepgramTextToSpeech({
                   const code =
                     err && typeof err.code === 'string' ? err.code : undefined;
 
-                  onStreamError(new Error(description ?? code ?? 'TTS error'));
+                  onStreamErrorRef.current(
+                    new Error(description ?? code ?? 'TTS error')
+                  );
                   if (trackState) {
                     setInternalState({
                       status: 'error',
@@ -554,7 +564,7 @@ export function useDeepgramTextToSpeech({
         };
 
         ws.current.onerror = (err) => {
-          onStreamError(err);
+          onStreamErrorRef.current(err);
           if (trackState) {
             setInternalState({
               status: 'error',
@@ -563,11 +573,14 @@ export function useDeepgramTextToSpeech({
           }
         };
         ws.current.onclose = () => {
-          onStreamEnd();
+          if (!streamEndFiredRef.current) {
+            streamEndFiredRef.current = true;
+            onStreamEndRef.current();
+          }
           closeStream();
         };
       } catch (err) {
-        onStreamError(err);
+        onStreamErrorRef.current(err);
         if (trackState) {
           setInternalState({
             status: 'error',
@@ -578,30 +591,18 @@ export function useDeepgramTextToSpeech({
         throw err;
       }
     },
-    [
-      onBeforeStream,
-      onStreamStart,
-      onAudioChunk,
-      onStreamError,
-      onStreamEnd,
-      onStreamMetadata,
-      onStreamFlushed,
-      onStreamCleared,
-      onStreamWarning,
-      resolvedStreamOptions,
-      sendText,
-      autoPlayAudio,
-      closeStream,
-      trackState,
-    ]
+    [resolvedStreamOptions, sendText, autoPlayAudio, closeStream, trackState]
   );
 
   const stopStreaming = useCallback(() => {
     try {
       closeStream();
-      onStreamEnd();
+      if (!streamEndFiredRef.current) {
+        streamEndFiredRef.current = true;
+        onStreamEndRef.current();
+      }
     } catch (err) {
-      onStreamError(err);
+      onStreamErrorRef.current(err);
       if (trackState) {
         setInternalState({
           status: 'error',
@@ -609,7 +610,7 @@ export function useDeepgramTextToSpeech({
         });
       }
     }
-  }, [onStreamEnd, onStreamError, closeStream, trackState]);
+  }, [closeStream, trackState]);
 
   /* ---------- cleanup on unmount ---------- */
   useEffect(

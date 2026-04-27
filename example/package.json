@@ -6,7 +6,12 @@
   "scripts": {
     "start": "expo start --clear",
     "ios": "expo run:ios",
-    "android": "expo run:android"
+    "android": "expo run:android",
+    "ios:device": "expo run:ios --device",
+    "prebuild": "expo prebuild --clean",
+    "pods": "cd ios && pod install && cd ..",
+    "start:built": "DEEPGRAM_USE_BUILT=1 expo start --clear",
+    "clean": "expo prebuild --clean && rm -rf ios/build android/build .expo node_modules/.cache"
   },
   "dependencies": {
     "@expo/metro-runtime": "~4.0.1",

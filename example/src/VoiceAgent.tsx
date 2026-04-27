@@ -1,18 +1,22 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  View,
-  Text,
-  Button,
+  Animated,
   ScrollView,
   StyleSheet,
-  TextInput,
   Switch,
+  Text,
+  View,
 } from 'react-native';
 import {
   useDeepgramVoiceAgent,
   createAgentSettings,
 } from 'react-native-deepgram';
 import OptionSelect from './components/OptionSelect';
+import Button from './components/Button';
+import Card from './components/Card';
+import Field from './components/Field';
+import StatusBadge from './components/StatusBadge';
+import { colors, radius, spacing, type } from './theme';
 
 const LANGUAGE_OPTIONS = [
   { label: 'English (US)', value: 'en' },
@@ -51,27 +55,29 @@ export default function VoiceAgent() {
   const [temperature, setTemperature] = useState('0.7');
   const [customMessage, setCustomMessage] = useState('');
 
-  const agentSettings = useMemo(() => {
-    return createAgentSettings({
-      language,
+  const agentSettings = useMemo(
+    () =>
+      createAgentSettings({
+        language,
+        greeting,
+        listenModel,
+        thinkModel,
+        prompt,
+        temperature,
+        tags: tagsInput,
+        sampleRate: inputSampleRate,
+      }),
+    [
       greeting,
+      inputSampleRate,
+      language,
       listenModel,
-      thinkModel,
       prompt,
+      tagsInput,
       temperature,
-      tags: tagsInput,
-      sampleRate: inputSampleRate,
-    });
-  }, [
-    greeting,
-    inputSampleRate,
-    language,
-    listenModel,
-    prompt,
-    tagsInput,
-    temperature,
-    thinkModel,
-  ]);
+      thinkModel,
+    ]
+  );
 
   const {
     connect,
@@ -80,7 +86,6 @@ export default function VoiceAgent() {
     sendFunctionCallResponse,
     updatePrompt,
     sendKeepAlive,
-    isConnected,
     state,
     conversation,
     agentStatus,
@@ -93,42 +98,53 @@ export default function VoiceAgent() {
     trackAgentStatus: true,
   });
 
+  const connectionState = state?.connectionState ?? 'idle';
+  const connecting = connectionState === 'connecting';
+  const connected = connectionState === 'connected';
+  const conversationRef = useRef<ScrollView | null>(null);
+
+  // Mic pulse animation
+  const pulse = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!connected) {
+      pulse.stopAnimation();
+      pulse.setValue(0);
+      return undefined;
+    }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, {
+          toValue: 1,
+          duration: 1200,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulse, {
+          toValue: 0,
+          duration: 1200,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [connected, pulse]);
+
+  // Auto-scroll to newest message
+  useEffect(() => {
+    if (conversationRef.current && (conversation?.length ?? 0) > 0) {
+      conversationRef.current.scrollToEnd({ animated: true });
+    }
+  }, [conversation?.length]);
+
   const startAgent = async () => {
     try {
       await connect();
     } catch (err) {
-      // Error handled by hook state
       console.error('Start agent failed', err);
     }
   };
 
-  const stopAgent = () => {
-    disconnect();
-  };
-
-  const sendGreeting = () => {
-    const message = greeting.trim() || 'Hello! How can I help you today?';
-    injectUserMessage(message);
-  };
-
-  const sendToolResponse = () => {
-    sendFunctionCallResponse({
-      id: 'func_12345',
-      name: 'get_weather',
-      client_side: true,
-      content: JSON.stringify({ temperature: 72, condition: 'sunny' }),
-    });
-  };
-
-  const applyPromptUpdate = () => {
-    const newPrompt = prompt.trim();
-    if (!newPrompt) return;
-    updatePrompt(newPrompt);
-  };
-
-  const keepAlive = () => {
-    sendKeepAlive();
-  };
+  const stopAgent = () => disconnect();
 
   const sendCustomUserMessage = () => {
     const message = customMessage.trim();
@@ -137,53 +153,220 @@ export default function VoiceAgent() {
     setCustomMessage('');
   };
 
+  const sendToolResponse = () =>
+    sendFunctionCallResponse({
+      id: 'func_12345',
+      name: 'get_weather',
+      client_side: true,
+      content: JSON.stringify({ temperature: 72, condition: 'sunny' }),
+    });
+
+  const applyPromptUpdate = () => {
+    const trimmed = prompt.trim();
+    if (trimmed) updatePrompt(trimmed);
+  };
+
+  const tone = state?.error
+    ? 'error'
+    : connecting
+      ? 'connecting'
+      : connected
+        ? 'live'
+        : 'idle';
+  const toneLabel = state?.error
+    ? 'Error'
+    : connecting
+      ? 'Connecting'
+      : connected
+        ? 'Live'
+        : 'Disconnected';
+
+  const pulseScale = pulse.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 1.5],
+  });
+  const pulseOpacity = pulse.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.4, 0],
+  });
+
   return (
     <View style={styles.container}>
       <ScrollView
-        style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
       >
-        <View style={styles.buttonRow}>
-          <Button
-            title={
-              state?.connectionState === 'connected'
-                ? 'Connected'
-                : 'Start Agent'
-            }
-            onPress={startAgent}
-            disabled={state?.connectionState === 'connecting' || isConnected()}
-          />
-          <Button title="Stop" onPress={stopAgent} disabled={!isConnected()} />
+        {/* Hero / mic */}
+        <View style={styles.hero}>
+          <View style={styles.heroTop}>
+            <StatusBadge tone={tone} label={toneLabel} />
+            {agentStatus?.latency?.total != null && (
+              <Text style={styles.latency}>
+                {agentStatus.latency.total.toFixed(2)}s latency
+              </Text>
+            )}
+          </View>
+
+          <View style={styles.micWrap}>
+            {connected && (
+              <Animated.View
+                style={[
+                  styles.pulse,
+                  {
+                    transform: [{ scale: pulseScale }],
+                    opacity: pulseOpacity,
+                  },
+                ]}
+              />
+            )}
+            <View
+              style={[
+                styles.micCircle,
+                connected && styles.micCircleActive,
+                connecting && styles.micCircleConnecting,
+              ]}
+            >
+              <Text style={styles.micIcon}>🎙️</Text>
+            </View>
+          </View>
+
+          <Text style={styles.heroTitle}>
+            {connected
+              ? 'Listening — talk to the agent'
+              : connecting
+                ? 'Connecting…'
+                : 'Voice Agent'}
+          </Text>
+          <Text style={styles.heroSubtitle}>
+            {connected
+              ? `Model · ${thinkModel}`
+              : 'Configure below and tap Start'}
+          </Text>
+
+          <View style={styles.heroActions}>
+            {connected ? (
+              <Button
+                title="Disconnect"
+                variant="danger"
+                size="lg"
+                onPress={stopAgent}
+              />
+            ) : (
+              <Button
+                title={connecting ? 'Connecting…' : 'Start agent'}
+                variant="primary"
+                size="lg"
+                loading={connecting}
+                disabled={connecting}
+                onPress={startAgent}
+                iconLeft="▶"
+              />
+            )}
+          </View>
         </View>
 
-        <View style={styles.buttonRow}>
-          <Button
-            title="Send greeting"
-            onPress={sendGreeting}
-            disabled={!isConnected()}
-          />
-          <Button
-            title="Tool response"
-            onPress={sendToolResponse}
-            disabled={!isConnected()}
-          />
-        </View>
+        {state?.error ? (
+          <View style={styles.errorBanner}>
+            <Text style={styles.errorText}>⚠ {state.error}</Text>
+          </View>
+        ) : null}
+        {state?.warning ? (
+          <View style={styles.warningBanner}>
+            <Text style={styles.warningText}>{state.warning}</Text>
+          </View>
+        ) : null}
+        {agentStatus?.thinking ? (
+          <View style={styles.thinkingPill}>
+            <Text style={styles.thinkingText}>🤔 {agentStatus.thinking}</Text>
+          </View>
+        ) : null}
 
-        <View style={styles.buttonRow}>
-          <Button
-            title="Update prompt"
-            onPress={applyPromptUpdate}
-            disabled={!isConnected()}
-          />
-          <Button
-            title="Keep alive"
-            onPress={keepAlive}
-            disabled={!isConnected()}
-          />
-        </View>
+        {/* Conversation */}
+        <Card title="Conversation" subtitle="Transcripts of you and the agent">
+          <ScrollView
+            ref={conversationRef}
+            style={styles.conversation}
+            contentContainerStyle={styles.conversationContent}
+            nestedScrollEnabled
+          >
+            {(conversation?.length ?? 0) === 0 ? (
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyIcon}>💬</Text>
+                <Text style={styles.emptyTitle}>No messages yet</Text>
+                <Text style={styles.emptySubtitle}>
+                  Start the agent and say hello.
+                </Text>
+              </View>
+            ) : (
+              conversation?.map((entry, index) => {
+                const isUser = entry.role === 'user';
+                return (
+                  <View
+                    key={`${entry.role}-${index}`}
+                    style={[
+                      styles.bubbleRow,
+                      isUser ? styles.bubbleRowRight : styles.bubbleRowLeft,
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.bubble,
+                        isUser ? styles.userBubble : styles.agentBubble,
+                      ]}
+                    >
+                      <Text style={styles.bubbleRole}>
+                        {isUser ? 'You' : 'Agent'}
+                      </Text>
+                      <Text style={styles.bubbleText}>{entry.content}</Text>
+                    </View>
+                  </View>
+                );
+              })
+            )}
+          </ScrollView>
+        </Card>
 
-        <View style={styles.settingsCard}>
-          <Text style={styles.sectionTitle}>Agent Persona</Text>
+        {/* Send a manual message */}
+        <Card
+          title="Inject a message"
+          subtitle="Send text into the live conversation"
+        >
+          <Field
+            value={customMessage}
+            onChangeText={setCustomMessage}
+            placeholder="Type something for the user…"
+            multiline
+            numberOfLines={3}
+          />
+          <View style={styles.actionRow}>
+            <Button
+              title="Send as user"
+              variant="primary"
+              onPress={sendCustomUserMessage}
+              disabled={!connected || customMessage.trim().length === 0}
+            />
+            <Button
+              title="Tool reply"
+              variant="secondary"
+              onPress={sendToolResponse}
+              disabled={!connected}
+            />
+            <Button
+              title="Keep alive"
+              variant="ghost"
+              onPress={sendKeepAlive}
+              disabled={!connected}
+            />
+          </View>
+        </Card>
+
+        {/* Persona — collapsible */}
+        <Card
+          title="Agent persona"
+          subtitle="Greeting, prompt, language, model"
+          collapsible
+          defaultCollapsed
+        >
           <OptionSelect
             label="Language"
             value={language}
@@ -200,56 +383,64 @@ export default function VoiceAgent() {
             allowCustom
             customPlaceholder="Provider model id"
           />
-          <Text style={styles.inputLabel}>Greeting</Text>
-          <TextInput
+          <Field
+            label="Greeting"
             value={greeting}
             onChangeText={setGreeting}
-            style={styles.textInput}
             placeholder="Agent greeting"
           />
-          <Text style={styles.inputLabel}>Prompt</Text>
-          <TextInput
+          <Field
+            label="Prompt"
             value={prompt}
             onChangeText={setPrompt}
-            style={[styles.textInput, styles.textArea]}
             multiline
             numberOfLines={4}
-            textAlignVertical="top"
-            placeholder="Prompt that guides the agent personality"
+            placeholder="System prompt that guides the agent"
           />
-          <Text style={styles.inputLabel}>Temperature (0-2)</Text>
-          <TextInput
+          <Button
+            title="Update prompt now"
+            variant="secondary"
+            size="sm"
+            onPress={applyPromptUpdate}
+            disabled={!connected}
+          />
+          <View style={{ height: spacing.md }} />
+          <Field
+            label="Temperature (0–2)"
             value={temperature}
             onChangeText={setTemperature}
-            style={styles.textInput}
             keyboardType="decimal-pad"
             placeholder="0.7"
           />
-          <Text style={styles.inputLabel}>Tags (comma separated)</Text>
-          <TextInput
+          <Field
+            label="Tags"
             value={tagsInput}
             onChangeText={setTagsInput}
-            style={styles.textInput}
             placeholder="demo, playground"
             autoCapitalize="none"
             autoCorrect={false}
           />
-        </View>
+        </Card>
 
-        <View style={styles.settingsCard}>
-          <Text style={styles.sectionTitle}>Capture Settings</Text>
-
-          <View style={styles.infoBox}>
-            <Text style={styles.infoText}>
-              🎧 The agent will respond with voice. Make sure your volume is up!
-            </Text>
-          </View>
-
+        {/* Capture — collapsible */}
+        <Card
+          title="Capture settings"
+          subtitle="Microphone & ASR"
+          collapsible
+          defaultCollapsed
+        >
           <View style={styles.switchRow}>
             <Text style={styles.switchLabel}>Auto-start microphone</Text>
-            <Switch value={autoStartMic} onValueChange={setAutoStartMic} />
+            <Switch
+              value={autoStartMic}
+              onValueChange={setAutoStartMic}
+              thumbColor={autoStartMic ? colors.primary : '#888'}
+              trackColor={{
+                false: colors.surfaceMuted,
+                true: colors.primaryMuted,
+              }}
+            />
           </View>
-
           <OptionSelect
             label="Listen model"
             value={listenModel}
@@ -267,64 +458,7 @@ export default function VoiceAgent() {
             customPlaceholder="e.g. 16000"
             customKeyboardType="number-pad"
           />
-        </View>
-
-        <View style={styles.settingsCard}>
-          <Text style={styles.sectionTitle}>Manual Messages</Text>
-          <TextInput
-            value={customMessage}
-            onChangeText={setCustomMessage}
-            style={[styles.textInput, styles.textArea]}
-            multiline
-            numberOfLines={3}
-            textAlignVertical="top"
-            placeholder="Type a message to inject into the conversation"
-          />
-          <Button
-            title="Send message"
-            onPress={sendCustomUserMessage}
-            disabled={!isConnected() || customMessage.trim().length === 0}
-          />
-        </View>
-
-        {state?.connectionState === 'connecting' && (
-          <Text style={styles.status}>Connecting to Deepgram…</Text>
-        )}
-        {agentStatus?.thinking && (
-          <Text style={styles.status}>🤔 {agentStatus.thinking}</Text>
-        )}
-        {agentStatus?.latency && (
-          <Text style={styles.status}>
-            Latency: total {agentStatus.latency.total?.toFixed(2) ?? '–'}s · TTS{' '}
-            {agentStatus.latency.tts?.toFixed(2) ?? '–'}s · TTT{' '}
-            {agentStatus.latency.ttt?.toFixed(2) ?? '–'}s
-          </Text>
-        )}
-        {state?.warning && (
-          <Text style={styles.warning}>Warning: {state.warning}</Text>
-        )}
-        {state?.error && <Text style={styles.error}>Error: {state.error}</Text>}
-
-        <Text style={styles.sectionTitle}>Conversation</Text>
-        <View style={styles.infoBox}>
-          <Text style={styles.infoText}>
-            💬 Text transcripts of the conversation appear here alongside audio
-            playback.
-          </Text>
-        </View>
-        <View style={styles.conversation}>
-          {conversation?.map((entry, index) => (
-            <View key={`${entry.role}-${index}`} style={styles.messageRow}>
-              <Text style={styles.messageRole}>{entry.role}:</Text>
-              <Text style={styles.messageContent}>{entry.content}</Text>
-            </View>
-          ))}
-          {(conversation?.length ?? 0) === 0 && (
-            <Text style={styles.placeholder}>
-              Conversation will appear here once the agent responds.
-            </Text>
-          )}
-        </View>
+        </Card>
       </ScrollView>
     </View>
   );
@@ -333,112 +467,194 @@ export default function VoiceAgent() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
-  },
-  scroll: {
-    flex: 1,
+    backgroundColor: colors.bg,
   },
   scrollContent: {
-    padding: 16,
-    paddingBottom: 32,
+    padding: spacing.lg,
+    paddingBottom: spacing.xxl,
   },
-  buttonRow: {
+  hero: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.xl,
+    alignItems: 'center',
+    marginBottom: spacing.lg,
+  },
+  heroTop: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 12,
+    width: '100%',
+    marginBottom: spacing.md,
+  },
+  latency: {
+    ...type.small,
+    color: colors.textMuted,
+  },
+  micWrap: {
+    width: 120,
+    height: 120,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing.lg,
+  },
+  pulse: {
+    position: 'absolute',
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: colors.primary,
+  },
+  micCircle: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    backgroundColor: colors.surfaceMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: colors.border,
+  },
+  micCircleActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  micCircleConnecting: {
+    borderColor: colors.warning,
+  },
+  micIcon: {
+    fontSize: 36,
+  },
+  heroTitle: {
+    ...type.h2,
+    color: colors.text,
+    textAlign: 'center',
+  },
+  heroSubtitle: {
+    ...type.small,
+    color: colors.textMuted,
+    textAlign: 'center',
+    marginTop: 4,
+    marginBottom: spacing.lg,
+  },
+  heroActions: {
+    width: '100%',
+    alignItems: 'stretch',
+  },
+  errorBanner: {
+    backgroundColor: '#3a1418',
+    borderColor: colors.danger,
+    borderWidth: 1,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  errorText: {
+    color: colors.danger,
+    ...type.smallMedium,
+  },
+  warningBanner: {
+    backgroundColor: '#3a2c10',
+    borderColor: colors.warning,
+    borderWidth: 1,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  warningText: {
+    color: colors.warning,
+    ...type.smallMedium,
+  },
+  thinkingPill: {
+    backgroundColor: colors.accentMuted,
+    paddingVertical: 6,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.pill,
+    alignSelf: 'flex-start',
+    marginBottom: spacing.md,
+  },
+  thinkingText: {
+    color: colors.accent,
+    ...type.smallMedium,
+  },
+  conversation: {
+    maxHeight: 320,
+  },
+  conversationContent: {
+    paddingVertical: spacing.xs,
+  },
+  bubbleRow: {
+    marginBottom: spacing.sm,
+    flexDirection: 'row',
+  },
+  bubbleRowLeft: {
+    justifyContent: 'flex-start',
+  },
+  bubbleRowRight: {
+    justifyContent: 'flex-end',
+  },
+  bubble: {
+    maxWidth: '85%',
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+    borderRadius: radius.lg,
+  },
+  userBubble: {
+    backgroundColor: colors.userBubble,
+    borderBottomRightRadius: 4,
+  },
+  agentBubble: {
+    backgroundColor: colors.agentBubble,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderBottomLeftRadius: 4,
+  },
+  bubbleRole: {
+    ...type.small,
+    color: colors.textMuted,
+    marginBottom: 2,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    fontSize: 11,
+  },
+  bubbleText: {
+    color: colors.text,
+    ...type.body,
+  },
+  emptyState: {
+    paddingVertical: spacing.xl,
     alignItems: 'center',
   },
-  settingsCard: {
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 16,
-    backgroundColor: '#fafafa',
+  emptyIcon: {
+    fontSize: 32,
+    marginBottom: spacing.sm,
   },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#222',
-    marginBottom: 12,
+  emptyTitle: {
+    ...type.h3,
+    color: colors.text,
   },
-  inputLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#444',
-    marginBottom: 6,
+  emptySubtitle: {
+    ...type.small,
+    color: colors.textMuted,
+    marginTop: 2,
   },
-  textInput: {
-    borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    marginBottom: 12,
-    backgroundColor: '#fff',
-  },
-  textArea: {
-    minHeight: 96,
+  actionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
   },
   switchRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 12,
+    marginBottom: spacing.md,
   },
   switchLabel: {
+    ...type.body,
+    color: colors.text,
     flex: 1,
-    fontSize: 14,
-    color: '#333',
-    marginRight: 12,
-  },
-  infoBox: {
-    backgroundColor: '#d1ecf1',
-    borderWidth: 1,
-    borderColor: '#bee5eb',
-    borderRadius: 6,
-    padding: 12,
-    marginBottom: 12,
-  },
-  infoText: {
-    fontSize: 13,
-    color: '#0c5460',
-    lineHeight: 18,
-  },
-  status: {
-    marginBottom: 8,
-    fontStyle: 'italic',
-  },
-  warning: {
-    marginBottom: 8,
-    color: '#b35d00',
-  },
-  error: {
-    marginBottom: 8,
-    color: '#d22',
-  },
-  conversation: {
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
-    borderRadius: 8,
-    padding: 12,
-    backgroundColor: '#fff',
-    marginBottom: 24,
-  },
-  messageRow: {
-    flexDirection: 'row',
-    marginBottom: 8,
-  },
-  messageRole: {
-    fontWeight: '600',
-    marginRight: 8,
-  },
-  messageContent: {
-    flex: 1,
-    flexWrap: 'wrap',
-  },
-  placeholder: {
-    fontStyle: 'italic',
-    color: '#666',
+    marginRight: spacing.md,
   },
 });

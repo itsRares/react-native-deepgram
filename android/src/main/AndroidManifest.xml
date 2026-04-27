@@ -1,2 +1,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+	<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+	<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+	<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+
+	<application>
+		<service
+			android:name=".DeepgramAudioService"
+			android:enabled="true"
+			android:exported="false"
+			android:foregroundServiceType="microphone|mediaPlayback" />
+	</application>
+
 </manifest>

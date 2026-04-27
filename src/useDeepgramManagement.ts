@@ -63,9 +63,12 @@ export function useDeepgramManagement(): UseDeepgramManagementReturn {
   const models = useMemo(
     () => ({
       list: (includeOutdated = false, query?: Record<string, any>) => {
-        let path = dgPath('models');
-        if (includeOutdated) path += '?include_outdated=true';
-        return dgRequest<DeepgramListModelsResponse>(buildUrl(path, query));
+        const mergedQuery = includeOutdated
+          ? { ...query, include_outdated: true }
+          : query;
+        return dgRequest<DeepgramListModelsResponse>(
+          buildUrl(dgPath('models'), mergedQuery)
+        );
       },
       get: (modelId: string, query?: Record<string, any>) =>
         dgRequest<DeepgramSttModel | DeepgramTtsModel>(

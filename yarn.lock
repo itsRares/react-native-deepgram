@@ -2009,29 +2009,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@deepgram/captions@npm:^1.1.1":
-  version: 1.2.0
-  resolution: "@deepgram/captions@npm:1.2.0"
-  dependencies:
-    dayjs: ^1.11.10
-  checksum: 6b41c64b7dd5081ff9608877e50588e446924b79b12ddd87a5d8c5393d9425c89ff23ede485094c20515efd2d6da00a79926e258f4f27af1b4fc0c18f800225a
-  languageName: node
-  linkType: hard
-
-"@deepgram/sdk@npm:^4.7.0":
-  version: 4.7.0
-  resolution: "@deepgram/sdk@npm:4.7.0"
-  dependencies:
-    "@deepgram/captions": ^1.1.1
-    "@types/node": ^18.19.39
-    cross-fetch: ^3.1.5
-    deepmerge: ^4.3.1
-    events: ^3.3.0
-    ws: ^8.17.0
-  checksum: 0e3f0c80e404523ba6f9ce38673ccdc5e81053dfd272329c254ee997082c8b22ebdd9bf948831d2ad2d8f54258710a0886c8dfa2f863d557c5611d8bab73d83c
-  languageName: node
-  linkType: hard
-
 "@eslint-community/eslint-utils@npm:^4.1.2, @eslint-community/eslint-utils@npm:^4.2.0, @eslint-community/eslint-utils@npm:^4.4.0, @eslint-community/eslint-utils@npm:^4.5.0, @eslint-community/eslint-utils@npm:^4.7.0":
   version: 4.7.0
   resolution: "@eslint-community/eslint-utils@npm:4.7.0"
@@ -4242,15 +4219,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/node@npm:^18.19.39":
-  version: 18.19.115
-  resolution: "@types/node@npm:18.19.115"
-  dependencies:
-    undici-types: ~5.26.4
-  checksum: fc39f51a17364c00fdfda35494dc71b84d3eef2d5f8ee97103a9af55492784c20963bbc21b5b7f419b29fe97eecf9276cdf766673036efa3660b241396189a1b
-  languageName: node
-  linkType: hard
-
 "@types/normalize-package-data@npm:^2.4.0, @types/normalize-package-data@npm:^2.4.3":
   version: 2.4.4
   resolution: "@types/normalize-package-data@npm:2.4.4"
@@ -5637,6 +5605,16 @@ __metadata:
   languageName: node
   linkType: hard
 
+"buffer@npm:^6.0.3":
+  version: 6.0.3
+  resolution: "buffer@npm:6.0.3"
+  dependencies:
+    base64-js: ^1.3.1
+    ieee754: ^1.2.1
+  checksum: 5ad23293d9a731e4318e420025800b42bf0d264004c0286c8cc010af7a270c7a0f6522e84f54b9ad65cbd6db20b8badbfd8d2ebf4f80fa03dab093b89e68c3f9
+  languageName: node
+  linkType: hard
+
 "bundle-name@npm:^4.1.0":
   version: 4.1.0
   resolution: "bundle-name@npm:4.1.0"
@@ -6697,7 +6675,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"dayjs@npm:^1.11.10, dayjs@npm:^1.8.15":
+"dayjs@npm:^1.8.15":
   version: 1.11.13
   resolution: "dayjs@npm:1.11.13"
   checksum: f388db88a6aa93956c1f6121644e783391c7b738b73dbc54485578736565c8931bdfba4bb94e9b1535c6e509c97d5deb918bbe1ae6b34358d994de735055cca9
@@ -7954,13 +7932,6 @@ __metadata:
   version: 5.0.1
   resolution: "event-target-shim@npm:5.0.1"
   checksum: 1ffe3bb22a6d51bdeb6bf6f7cf97d2ff4a74b017ad12284cc9e6a279e727dc30a5de6bb613e5596ff4dc3e517841339ad09a7eec44266eccb1aa201a30448166
-  languageName: node
-  linkType: hard
-
-"events@npm:^3.3.0":
-  version: 3.3.0
-  resolution: "events@npm:3.3.0"
-  checksum: f6f487ad2198aa41d878fa31452f1a3c00958f46e9019286ff4787c84aac329332ab45c9cdc8c445928fc6d7ded294b9e005a7fce9426488518017831b272780
   languageName: node
   linkType: hard
 
@@ -9321,7 +9292,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"ieee754@npm:^1.1.13":
+"ieee754@npm:^1.1.13, ieee754@npm:^1.2.1":
   version: 1.2.1
   resolution: "ieee754@npm:1.2.1"
   checksum: 5144c0c9815e54ada181d80a0b810221a253562422e7c6c3a60b1901154184f49326ec239d618c416c1c5945a2e197107aee8d986a3dd836b53dffefd99b5e7e
@@ -13476,7 +13447,6 @@ __metadata:
   resolution: "react-native-deepgram@workspace:."
   dependencies:
     "@commitlint/config-conventional": ^19.6.0
-    "@deepgram/sdk": ^4.7.0
     "@eslint/compat": ^1.2.7
     "@eslint/eslintrc": ^3.3.0
     "@eslint/js": ^9.22.0
@@ -13489,6 +13459,7 @@ __metadata:
     "@types/react": ^19.0.0
     "@typescript-eslint/eslint-plugin": latest
     "@typescript-eslint/parser": latest
+    buffer: ^6.0.3
     commitlint: ^19.6.1
     del-cli: ^5.1.0
     eslint: ^9.22.0
@@ -13507,8 +13478,8 @@ __metadata:
     turbo: ^1.10.7
     typescript: ^5.5.4
   peerDependencies:
-    react: "*"
-    react-native: "*"
+    react: ">=18.0.0"
+    react-native: ">=0.72.0"
   languageName: unknown
   linkType: soft
 
@@ -15776,13 +15747,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"undici-types@npm:~5.26.4":
-  version: 5.26.5
-  resolution: "undici-types@npm:5.26.5"
-  checksum: 3192ef6f3fd5df652f2dc1cd782b49d6ff14dc98e5dced492aa8a8c65425227da5da6aafe22523c67f035a272c599bb89cfe803c1db6311e44bed3042fc25487
-  languageName: node
-  linkType: hard
-
 "undici-types@npm:~7.8.0":
   version: 7.8.0
   resolution: "undici-types@npm:7.8.0"
@@ -16420,7 +16384,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"ws@npm:^8.11.0, ws@npm:^8.12.1, ws@npm:^8.17.0":
+"ws@npm:^8.11.0, ws@npm:^8.12.1":
   version: 8.18.3
   resolution: "ws@npm:8.18.3"
   peerDependencies:

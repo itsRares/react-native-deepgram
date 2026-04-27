@@ -11,6 +11,7 @@ import {
   View,
   type TextInputProps,
 } from 'react-native';
+import { colors, radius, spacing, type } from '../theme';
 
 export type Option = { label: string; value: string };
 
@@ -152,46 +153,50 @@ export default OptionSelect;
 
 const styles = StyleSheet.create({
   container: {
-    marginBottom: 12,
+    marginBottom: spacing.md,
   },
   label: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#444',
-    marginBottom: 4,
+    ...type.smallMedium,
+    color: colors.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginBottom: 6,
   },
   dropdown: {
     borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 4,
+    borderColor: colors.border,
+    borderRadius: radius.md,
     paddingVertical: 10,
     paddingHorizontal: 12,
-    backgroundColor: '#fff',
+    backgroundColor: colors.surfaceMuted,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
   dropdownValue: {
-    fontSize: 14,
-    color: '#333',
+    fontSize: 15,
+    color: colors.text,
     flex: 1,
   },
   dropdownPlaceholder: {
-    fontSize: 14,
-    color: '#888',
+    fontSize: 15,
+    color: colors.textDim,
     flex: 1,
   },
   dropdownIcon: {
     fontSize: 16,
-    color: '#666',
+    color: colors.textMuted,
     marginLeft: 8,
   },
   input: {
     borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 4,
-    padding: 8,
-    backgroundColor: '#fff',
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: colors.surfaceMuted,
+    color: colors.text,
+    fontSize: 15,
   },
   customInput: {
     marginTop: 8,
@@ -202,28 +207,31 @@ const styles = StyleSheet.create({
   },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.35)',
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
   },
   modalSheet: {
     maxHeight: '70%',
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 32,
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.xxl,
+    borderTopWidth: 1,
+    borderColor: colors.border,
   },
   modalTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 12,
-    color: '#222',
+    ...type.h3,
+    color: colors.text,
+    marginBottom: spacing.md,
   },
   modalOption: {
-    paddingVertical: 12,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.divider,
   },
   modalOptionText: {
-    fontSize: 15,
-    color: '#333',
+    ...type.body,
+    color: colors.text,
   },
 });

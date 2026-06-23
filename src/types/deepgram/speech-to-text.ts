@@ -55,6 +55,7 @@ export type DeepgramLiveListenModel =
   | 'video'
   | 'custom'
   | 'flux-general-en'
+  | 'flux-general-multi'
   | (string & {});
 
 /**
@@ -74,6 +75,13 @@ export type DeepgramLiveListenCallbackMethod =
   | 'GET'
   | 'PUT'
   | 'DELETE';
+
+/**
+ * Diarization model versions available for live streaming. Setting this
+ * enables diarization without also passing `diarize`. Streaming supports
+ * `v1` and `latest`.
+ */
+export type DeepgramLiveListenDiarizeModel = 'latest' | 'v1' | (string & {});
 
 /**
  * Configuration options for Deepgram Live Listen (Streaming) sessions.
@@ -96,8 +104,21 @@ export type DeepgramLiveListenOptions = {
   callbackMethod?: DeepgramLiveListenCallbackMethod;
   /** Number of audio channels in the input. */
   channels?: number;
-  /** Enable speaker diarization. */
+  /**
+   * Enable speaker diarization.
+   * @deprecated Use `diarizeModel` instead.
+   */
   diarize?: boolean;
+  /**
+   * Select a diarization model version. Setting this enables diarization
+   * without also passing `diarize`. Streaming supports `v1` and `latest`.
+   */
+  diarizeModel?: DeepgramLiveListenDiarizeModel;
+  /**
+   * Identify and extract key entities from the submitted audio. Entities
+   * appear in final results. Enables punctuation by default.
+   */
+  detectEntities?: boolean;
   /** Enable dictation intelligence. */
   dictation?: boolean;
   /** Expected encoding for the submitted audio. */
@@ -113,12 +134,18 @@ export type DeepgramLiveListenOptions = {
   fillerWords?: boolean;
   /** Emit interim transcripts while audio is streaming. */
   interimResults?: boolean;
-  /** Key term prompting (Nova-3 only). */
+  /** Key term prompting for Nova-3 and Flux. */
   keyterm?: string | string[];
-  /** Keyword boosting/suppression. */
+  /** Keyword boosting/suppression for legacy/non-Nova-3 models. */
   keywords?: string | string[];
   /** Primary spoken language hint (BCP-47). */
   language?: string;
+  /**
+   * Language hints that constrain and prioritize language detection. Only
+   * valid with the `flux-general-multi` model on the v2/Flux API. Pass an
+   * array to specify multiple language codes.
+   */
+  languageHint?: string | string[];
   /** Opt out of the Model Improvement Program. */
   mipOptOut?: boolean;
   /** Model to use for live transcription. */
@@ -188,6 +215,17 @@ export type DeepgramPrerecordedRedaction =
   | 'numbers'
   | (string & {});
 
+/**
+ * Diarization model versions available for pre-recorded transcription.
+ * Setting this enables diarization without also passing `diarize`. Batch
+ * supports `latest`, `v1`, and `v2`.
+ */
+export type DeepgramPrerecordedDiarizeModel =
+  | 'latest'
+  | 'v1'
+  | 'v2'
+  | (string & {});
+
 export type DeepgramPrerecordedCustomMode = DeepgramCustomMode;
 
 export type DeepgramPrerecordedSummarize =
@@ -244,22 +282,32 @@ export type DeepgramPrerecordedOptions = {
   detectEntities?: boolean;
   /** Detect the dominant language (or limit detection to specific languages). */
   detectLanguage?: boolean | string | string[];
-  /** Enable speaker diarization. */
+  /**
+   * Enable speaker diarization.
+   * @deprecated Use `diarizeModel` instead.
+   */
   diarize?: boolean;
+  /**
+   * Select a diarization model version. Setting this enables diarization
+   * without also passing `diarize`. Batch supports `latest`, `v1`, and `v2`.
+   */
+  diarizeModel?: DeepgramPrerecordedDiarizeModel;
   /** Enable dictation intelligence. */
   dictation?: boolean;
   /** Expected encoding for the submitted audio. */
   encoding?: DeepgramPrerecordedEncoding;
   /** Include filler words such as “um” and “uh”. */
   fillerWords?: boolean;
-  /** Key term prompting (Nova-3 only). */
+  /** Key term prompting for Nova-3 and Flux. */
   keyterm?: string | string[];
-  /** Keyword boosting/suppression. */
+  /** Keyword boosting/suppression for legacy/non-Nova-3 models. */
   keywords?: string | string[];
   /** Primary spoken language hint (BCP-47). */
   language?: string;
   /** Convert spoken measurements into abbreviations. */
   measurements?: boolean;
+  /** Opt out of the Deepgram Model Improvement Program. */
+  mipOptOut?: boolean;
   /** Model to use for the transcription. */
   model?: DeepgramPrerecordedModel;
   /** Transcribe each channel independently. */

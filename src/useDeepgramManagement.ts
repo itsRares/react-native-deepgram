@@ -4,15 +4,18 @@ import type {
   DeepgramTtsModel,
   DeepgramListModelsResponse,
   DeepgramProject,
+  DeepgramMessageResponse,
   DeepgramKey,
+  DeepgramCreatedKey,
   DeepgramMember,
   DeepgramScope,
   DeepgramInvitation,
   DeepgramRequest,
-  DeepgramUsageField,
+  DeepgramUsageFields,
   DeepgramUsageBreakdown,
   DeepgramPurchase,
   DeepgramBalance,
+  DeepgramGrantTokenResponse,
   UseDeepgramManagementReturn,
 } from './types/deepgram';
 import { DEEPGRAM_BASEURL } from './constants';
@@ -63,9 +66,12 @@ export function useDeepgramManagement(): UseDeepgramManagementReturn {
   const models = useMemo(
     () => ({
       list: (includeOutdated = false, query?: Record<string, any>) => {
-        let path = dgPath('models');
-        if (includeOutdated) path += '?include_outdated=true';
-        return dgRequest<DeepgramListModelsResponse>(buildUrl(path, query));
+        const mergedQuery = includeOutdated
+          ? { ...query, include_outdated: true }
+          : query;
+        return dgRequest<DeepgramListModelsResponse>(
+          buildUrl(dgPath('models'), mergedQuery)
+        );
       },
       get: (modelId: string, query?: Record<string, any>) =>
         dgRequest<DeepgramSttModel | DeepgramTtsModel>(
@@ -98,11 +104,14 @@ export function useDeepgramManagement(): UseDeepgramManagementReturn {
         body: Record<string, unknown>,
         query?: Record<string, any>
       ) =>
-        dgRequest<DeepgramProject>(buildUrl(dgPath('projects', id), query), {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        }),
+        dgRequest<DeepgramMessageResponse>(
+          buildUrl(dgPath('projects', id), query),
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          }
+        ),
 
       listModels: (id: string, query?: Record<string, any>) =>
         dgRequest<DeepgramListModelsResponse>(
@@ -120,20 +129,24 @@ export function useDeepgramManagement(): UseDeepgramManagementReturn {
   /** ------------------- KEYS ------------------- */
   const keys = useMemo(
     () => ({
-      list: (pid: string, query?: Record<string, any>) =>
-        dgRequest<DeepgramKey[]>(
+      list: async (pid: string, query?: Record<string, any>) => {
+        const res = await dgRequest<{ api_keys: DeepgramKey[] }>(
           buildUrl(dgPath('projects', pid, 'keys'), query)
-        ),
+        );
+        return res.api_keys;
+      },
       create: (pid: string, body: Record<string, unknown>) =>
-        dgRequest<DeepgramKey>(dgPath('projects', pid, 'keys'), {
+        dgRequest<DeepgramCreatedKey>(dgPath('projects', pid, 'keys'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         }),
-      get: (pid: string, kid: string, query?: Record<string, any>) =>
-        dgRequest<DeepgramKey>(
+      get: async (pid: string, kid: string, query?: Record<string, any>) => {
+        const res = await dgRequest<{ item: DeepgramKey }>(
           buildUrl(dgPath('projects', pid, 'keys', kid), query)
-        ),
+        );
+        return res.item;
+      },
       delete: (pid: string, kid: string, query?: Record<string, any>) =>
         dgRequest<void>(buildUrl(dgPath('projects', pid, 'keys', kid), query), {
           method: 'DELETE',
@@ -145,10 +158,12 @@ export function useDeepgramManagement(): UseDeepgramManagementReturn {
   /** ------------------- MEMBERS ------------------- */
   const members = useMemo(
     () => ({
-      list: (pid: string, query?: Record<string, any>) =>
-        dgRequest<DeepgramMember[]>(
+      list: async (pid: string, query?: Record<string, any>) => {
+        const res = await dgRequest<{ members: DeepgramMember[] }>(
           buildUrl(dgPath('projects', pid, 'members'), query)
-        ),
+        );
+        return res.members;
+      },
       delete: (pid: string, mid: string) =>
         dgRequest<void>(dgPath('projects', pid, 'members', mid), {
           method: 'DELETE',
@@ -160,12 +175,14 @@ export function useDeepgramManagement(): UseDeepgramManagementReturn {
   /** ------------------- SCOPES ------------------- */
   const scopes = useMemo(
     () => ({
-      list: (pid: string, mid: string, query?: Record<string, any>) =>
-        dgRequest<DeepgramScope[]>(
+      list: async (pid: string, mid: string, query?: Record<string, any>) => {
+        const res = await dgRequest<{ scopes: DeepgramScope[] }>(
           buildUrl(dgPath('projects', pid, 'members', mid, 'scopes'), query)
-        ),
+        );
+        return res.scopes;
+      },
       update: (pid: string, mid: string, body: Record<string, unknown>) =>
-        dgRequest<DeepgramScope[]>(
+        dgRequest<DeepgramMessageResponse>(
           dgPath('projects', pid, 'members', mid, 'scopes'),
           {
             method: 'PUT',
@@ -180,25 +197,26 @@ export function useDeepgramManagement(): UseDeepgramManagementReturn {
   /** ------------------- INVITATIONS ------------------- */
   const invitations = useMemo(
     () => ({
-      list: (pid: string, query?: Record<string, any>) =>
-        dgRequest<DeepgramInvitation[]>(
-          buildUrl(dgPath('projects', pid, 'invitations'), query)
-        ),
+      list: async (pid: string, query?: Record<string, any>) => {
+        const res = await dgRequest<{ invites: DeepgramInvitation[] }>(
+          buildUrl(dgPath('projects', pid, 'invites'), query)
+        );
+        return res.invites;
+      },
       create: (pid: string, body: Record<string, unknown>) =>
-        dgRequest<DeepgramInvitation>(dgPath('projects', pid, 'invitations'), {
+        dgRequest<DeepgramMessageResponse>(dgPath('projects', pid, 'invites'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         }),
-      delete: (pid: string, inviteId: string) =>
-        dgRequest<void>(dgPath('projects', pid, 'invitations', inviteId), {
+      delete: (pid: string, email: string) =>
+        dgRequest<void>(dgPath('projects', pid, 'invites', email), {
           method: 'DELETE',
         }),
-      leave: (pid: string, query?: Record<string, any>) =>
-        dgRequest<void>(
-          buildUrl(dgPath('projects', pid, 'invitations'), query),
-          { method: 'DELETE' }
-        ),
+      leave: (pid: string) =>
+        dgRequest<DeepgramMessageResponse>(dgPath('projects', pid, 'leave'), {
+          method: 'DELETE',
+        }),
     }),
     [dgRequest]
   );
@@ -206,16 +224,24 @@ export function useDeepgramManagement(): UseDeepgramManagementReturn {
   /** ------------------- USAGE ------------------- */
   const usage = useMemo(
     () => ({
-      listRequests: (pid: string, query?: Record<string, any>) =>
-        dgRequest<DeepgramRequest[]>(
+      listRequests: async (pid: string, query?: Record<string, any>) => {
+        const res = await dgRequest<{ requests: DeepgramRequest[] }>(
           buildUrl(dgPath('projects', pid, 'requests'), query)
-        ),
-      getRequest: (pid: string, rid: string, query?: Record<string, any>) =>
-        dgRequest<DeepgramRequest>(
+        );
+        return res.requests;
+      },
+      getRequest: async (
+        pid: string,
+        rid: string,
+        query?: Record<string, any>
+      ) => {
+        const res = await dgRequest<{ request: DeepgramRequest }>(
           buildUrl(dgPath('projects', pid, 'requests', rid), query)
-        ),
+        );
+        return res.request;
+      },
       listFields: (pid: string, query?: Record<string, any>) =>
-        dgRequest<DeepgramUsageField[]>(
+        dgRequest<DeepgramUsageFields>(
           buildUrl(dgPath('projects', pid, 'usage', 'fields'), query)
         ),
       getBreakdown: (pid: string, query?: Record<string, any>) =>
@@ -240,14 +266,29 @@ export function useDeepgramManagement(): UseDeepgramManagementReturn {
   /** ------------------- BALANCES ------------------- */
   const balances = useMemo(
     () => ({
-      list: (pid: string, query?: Record<string, any>) =>
-        dgRequest<DeepgramBalance[]>(
+      list: async (pid: string, query?: Record<string, any>) => {
+        const res = await dgRequest<{ balances: DeepgramBalance[] }>(
           buildUrl(dgPath('projects', pid, 'balances'), query)
-        ),
+        );
+        return res.balances;
+      },
       get: (pid: string, bid: string, query?: Record<string, any>) =>
         dgRequest<DeepgramBalance>(
           buildUrl(dgPath('projects', pid, 'balances', bid), query)
         ),
+    }),
+    [dgRequest]
+  );
+
+  /** ------------------- AUTH (TEMPORARY TOKENS) ------------------- */
+  const auth = useMemo(
+    () => ({
+      grant: (body?: { ttl_seconds?: number }) =>
+        dgRequest<DeepgramGrantTokenResponse>(dgPath('auth', 'grant'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body ?? {}),
+        }),
     }),
     [dgRequest]
   );
@@ -270,5 +311,6 @@ export function useDeepgramManagement(): UseDeepgramManagementReturn {
     usage,
     purchases,
     balances,
+    auth,
   };
 }

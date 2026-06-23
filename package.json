@@ -1,8 +1,8 @@
 {
   "name": "react-native-deepgram",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "React Native SDK for Deepgram's AI-powered speech-to-text, real-time transcription, and text intelligence APIs. Supports live audio streaming, file transcription, sentiment analysis, and topic detection for iOS and Android.",
-  "source": "./src/index.tsx",
+  "source": "./src/index.ts",
   "main": "./lib/commonjs/index.js",
   "module": "./lib/module/index.js",
   "types": "./lib/typescript/commonjs/src/index.d.ts",
@@ -22,15 +22,18 @@
   "files": [
     "src",
     "lib",
-    "plugin",
+    "plugin/build",
+    "plugin/src",
+    "plugin/tsconfig.json",
     "app.plugin.js",
     "android",
     "ios",
-    "cpp",
-    "*.podspec",
     "react-native.config.js",
+    "*.podspec",
     "!ios/build",
+    "!ios/generated/build",
     "!android/build",
+    "!android/generated",
     "!android/gradle",
     "!android/gradlew",
     "!android/gradlew.bat",
@@ -38,14 +41,14 @@
     "!**/__tests__",
     "!**/__fixtures__",
     "!**/__mocks__",
-    "!**/.*",
-    "metro"
+    "!**/.*"
   ],
   "scripts": {
     "test": "jest",
     "typecheck": "tsc",
     "lint": "eslint \"**/*.{js,ts,tsx}\" --fix",
     "clean": "del-cli android/build example/android/build example/android/app/build example/ios/build lib",
+    "postinstall": "node -e \"const fs=require('fs'),p=require('path'),l=p.join('example','node_modules','react-native-deepgram');fs.mkdirSync(p.dirname(l),{recursive:true});try{fs.unlinkSync(l)}catch{}fs.symlinkSync(p.join('..','..'),l,'dir')\"",
     "prepare": "bob build",
     "release": "release-it --only-version",
     "build": "npx react-native-builder-bob build",
@@ -55,6 +58,10 @@
     "example": "yarn workspace react-native-deepgram-example start",
     "example:ios": "yarn workspace react-native-deepgram-example ios",
     "example:android": "yarn workspace react-native-deepgram-example android",
+    "example:pods": "yarn workspace react-native-deepgram-example pods",
+    "example:prebuild": "yarn workspace react-native-deepgram-example prebuild",
+    "example:start:built": "yarn workspace react-native-deepgram-example start:built",
+    "example:clean": "yarn workspace react-native-deepgram-example clean",
     "build:all": "yarn install && yarn build && yarn build:plugin && yarn build:pod"
   },
   "keywords": [
@@ -91,7 +98,7 @@
     "registry": "https://registry.npmjs.org/"
   },
   "dependencies": {
-    "@deepgram/sdk": "^4.7.0"
+    "buffer": "^6.0.3"
   },
   "devDependencies": {
     "@commitlint/config-conventional": "^19.6.0",
@@ -126,8 +133,11 @@
     "typescript": "^5.5.4"
   },
   "peerDependencies": {
-    "react": "*",
-    "react-native": "*"
+    "react": ">=18.0.0",
+    "react-native": ">=0.72.0"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "workspaces": [
     "example"
@@ -206,7 +216,7 @@
       "android": "android/generated"
     },
     "android": {
-      "javaPackageName": "com.ahhzo.react-native-deepgram"
+      "javaPackageName": "com.deepgram"
     }
   },
   "create-react-native-library": {

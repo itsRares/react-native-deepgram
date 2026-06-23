@@ -11,7 +11,7 @@ export function createAudioPlayerController() {
   return {
     start: async (sampleRate = 16000, channels: 1 | 2 = 1) => {
       const { Deepgram } = await import('../NativeDeepgram');
-      Deepgram.startPlayer?.(sampleRate, channels);
+      Deepgram.startPlayer(sampleRate, channels);
       isActive = true;
     },
 
@@ -19,12 +19,12 @@ export function createAudioPlayerController() {
       const { Deepgram } = await import('../NativeDeepgram');
       const b64 =
         typeof audio === 'string' ? audio : arrayBufferToBase64(audio);
-      await Deepgram.feedAudio?.(b64);
+      await Deepgram.feedAudio(b64);
     },
 
     stop: async () => {
       const { Deepgram } = await import('../NativeDeepgram');
-      Deepgram.stopPlayer?.();
+      Deepgram.stopPlayer();
       isActive = false;
     },
 

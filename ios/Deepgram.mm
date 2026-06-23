@@ -73,6 +73,7 @@ typedef struct {
 @interface Deepgram : RCTEventEmitter {
   DGRecordState _recordState;
   std::atomic<int> _scheduledBufferCount;
+  std::atomic<int> _playbackGeneration;
 }
 
 // Recording
@@ -110,6 +111,8 @@ typedef struct {
                              mode:(NSString *)mode
                           options:(AVAudioSessionCategoryOptions)options
                             error:(NSError **)outError;
+- (void)stopAndDetachPlayerNode;
+- (void)interruptPlayerPlayback;
 - (void)maybeDeactivateAudioSession;
 @end
 
@@ -1261,15 +1264,69 @@ RCT_EXPORT_METHOD(stopAudio : (RCTPromiseResolveBlock)
  * touching `inputNode` so we don't request the microphone or interfere with
  * other audio libraries.
  */
+- (void)stopAndDetachPlayerNode {
+  if (self.playerNode) {
+    _playbackGeneration.fetch_add(1);
+
+    @try {
+      [self.playerNode stop];
+    } @catch (NSException *e) {
+      DGLogWarn(@"[Deepgram] playerNode stop exception: %@", e);
+    }
+
+    if (self.audioEngine) {
+      @try {
+        [self.audioEngine detachNode:self.playerNode];
+      } @catch (NSException *e) {
+        DGLogWarn(@"[Deepgram] playerNode detach exception: %@", e);
+      }
+    }
+  }
+
+  self.playerNode = nil;
+  self.playbackFormat = nil;
+  self.isPlaying = NO;
+  _scheduledBufferCount = 0;
+}
+
+- (void)interruptPlayerPlayback {
+  if (self.playerNode) {
+    _playbackGeneration.fetch_add(1);
+
+    @try {
+      [self.playerNode stop];
+    } @catch (NSException *e) {
+      DGLogWarn(@"[Deepgram] playerNode interrupt exception: %@", e);
+    }
+  }
+
+  self.isPlaying = NO;
+  _scheduledBufferCount = 0;
+}
+
 - (BOOL)setupAudioEngineWithSampleRate:(int)sampleRate
                               channels:(int)channels
                  enableVoiceProcessing:(BOOL)enableVoiceProcessing
                                  error:(NSError **)outError {
+  BOOL reuseCaptureEngine = self.audioEngine && self.engineCaptureActive;
+
   if (self.audioEngine && self.audioEngine.isRunning) {
     [self.audioEngine stop];
   }
 
-  self.audioEngine = [[AVAudioEngine alloc] init];
+  [self stopAndDetachPlayerNode];
+
+  if (!reuseCaptureEngine) {
+    if (self.audioEngine) {
+      [self.audioEngine reset];
+    }
+    self.audioEngine = [[AVAudioEngine alloc] init];
+  }
+
+  if (!self.audioEngine) {
+    self.audioEngine = [[AVAudioEngine alloc] init];
+  }
+
   self.playerNode = [[AVAudioPlayerNode alloc] init];
 
   self.playbackFormat =
@@ -1386,7 +1443,9 @@ RCT_EXPORT_METHOD(stopAudio : (RCTPromiseResolveBlock)
 
 RCT_EXPORT_METHOD(startPlayer : (nonnull NSNumber *)
                       sampleRate channels : (nonnull NSNumber *)channels) {
-  [self stopPlayer:nil rejecter:nil];
+  if (!self.engineCaptureActive) {
+    [self stopPlayer:nil rejecter:nil];
+  }
 
   NSError *sessionError = nil;
   if (![self activateAudioSession:&sessionError]) {
@@ -1449,11 +1508,17 @@ RCT_EXPORT_METHOD(feedAudio : (NSString *)b64) {
     }
 
     _scheduledBufferCount++;
+    int playbackGeneration = _playbackGeneration.load();
     __weak Deepgram *weakSelf = self;
     [self.playerNode scheduleBuffer:buffer
                   completionHandler:^{
                     Deepgram *strongSelf = weakSelf;
                     if (strongSelf) {
+                      if (strongSelf->_playbackGeneration.load() !=
+                          playbackGeneration) {
+                        return;
+                      }
+
                       int remaining = --strongSelf->_scheduledBufferCount;
                       if (remaining <= 0) {
                         strongSelf.isPlaying = NO;
@@ -1473,35 +1538,44 @@ RCT_EXPORT_METHOD(feedAudio : (NSString *)b64) {
   }
 }
 
+RCT_EXPORT_METHOD(interruptAudio) {
+  @try {
+    [self interruptPlayerPlayback];
+    [self maybeDeactivateAudioSession];
+  } @catch (NSException *e) {
+    DGLogError(@"[Deepgram] interruptAudio: exception %@", e);
+  }
+}
+
 /**
  * Stop audio playback and cleanup AVAudioEngine.
  */
 RCT_EXPORT_METHOD(stopPlayer : (RCTPromiseResolveBlock)
                       resolve rejecter : (RCTPromiseRejectBlock)reject) {
   @try {
-    // Stop player node first (must stop before detach to avoid crash)
-    if (self.playerNode) {
-      [self.playerNode stop];
-    }
+    BOOL preserveCaptureEngine = self.engineCaptureActive;
 
-    // Stop audio engine before detaching nodes
     if (self.audioEngine) {
       if (self.audioEngine.isRunning) {
         [self.audioEngine stop];
       }
-      // Detach after engine is stopped to prevent crash
-      if (self.playerNode) {
-        [self.audioEngine detachNode:self.playerNode];
-      }
-      [self.audioEngine reset];
-    }
 
-    // Clear properties
-    self.playerNode = nil;
-    self.audioEngine = nil;
-    self.playbackFormat = nil;
-    self.isPlaying = NO;
-    _scheduledBufferCount = 0;
+      [self stopAndDetachPlayerNode];
+
+      if (preserveCaptureEngine) {
+        [self.audioEngine prepare];
+        NSError *restartError = nil;
+        if (![self.audioEngine startAndReturnError:&restartError]) {
+          DGLogWarn(@"[Deepgram] stopPlayer: failed to restart capture engine: %@",
+                    restartError);
+        }
+      } else {
+        [self.audioEngine reset];
+        self.audioEngine = nil;
+      }
+    } else {
+      [self stopAndDetachPlayerNode];
+    }
 
     [self maybeDeactivateAudioSession];
 

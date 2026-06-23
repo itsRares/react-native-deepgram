@@ -23,6 +23,7 @@ interface DeepgramNative {
   playAudioChunk(chunk: string): Promise<void>;
   setAudioConfig(sampleRate: number, channels?: number): void;
   feedAudio(base64Chunk: string): void;
+  interruptAudio?: () => void;
   stopPlayer(): void;
   startPlayer(sampleRate: number, channels?: number): void;
 }
@@ -61,6 +62,12 @@ export const Deepgram: DeepgramNative = {
   },
   feedAudio(base64Chunk: string) {
     return NativeDeepgramModule.feedAudio(base64Chunk);
+  },
+  interruptAudio() {
+    if (typeof NativeDeepgramModule.interruptAudio === 'function') {
+      return NativeDeepgramModule.interruptAudio();
+    }
+    return NativeDeepgramModule.stopPlayer();
   },
   stopPlayer() {
     return NativeDeepgramModule.stopPlayer();

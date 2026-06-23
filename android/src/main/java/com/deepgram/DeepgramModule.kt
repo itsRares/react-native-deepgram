@@ -638,6 +638,15 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     }
   }
 
+  @ReactMethod
+  fun interruptAudio() {
+    try {
+      stopStreamingPlayback(throwOnError = false)
+    } catch (e: Exception) {
+      Log.w(TAG, "interruptAudio error", e)
+    }
+  }
+
   private fun startStreamingPlayback() {
     if (isPlaying) return
 

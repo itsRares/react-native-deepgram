@@ -26,7 +26,7 @@ const LANGUAGE_OPTIONS = [
 
 const LISTEN_MODEL_OPTIONS = [
   { label: 'nova-3 (default)', value: 'nova-3' },
-  { label: 'nova-3 general', value: 'nova-3-general-nova' },
+  { label: 'nova-3 general', value: 'nova-3-general' },
   { label: 'nova-2', value: 'nova-2' },
 ];
 

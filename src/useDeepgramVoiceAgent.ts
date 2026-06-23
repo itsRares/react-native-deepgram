@@ -1,5 +1,5 @@
 import { useRef, useCallback, useEffect, useState } from 'react';
-import { NativeEventEmitter, Platform } from 'react-native';
+import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 import { Deepgram } from './NativeDeepgram';
 import { askMicPermission } from './helpers/askMicPermission';
 import { arrayBufferToBase64 } from './helpers';
@@ -45,7 +45,7 @@ const eventName = Platform.select({
 let cachedEmitter: NativeEventEmitter | null = null;
 const getEmitter = (): NativeEventEmitter => {
   if (!cachedEmitter) {
-    cachedEmitter = new NativeEventEmitter(Deepgram as any);
+    cachedEmitter = new NativeEventEmitter(NativeModules.Deepgram);
   }
   return cachedEmitter;
 };
@@ -669,6 +669,10 @@ export function useDeepgramVoiceAgent({
               }
               break;
             case 'UserStartedSpeaking':
+              if (autoPlayAudio) {
+                Deepgram.interruptAudio?.();
+              }
+
               onUserStartedSpeakingRef.current?.(
                 message as DeepgramVoiceAgentUserStartedSpeakingMessage
               );
@@ -735,20 +739,6 @@ export function useDeepgramVoiceAgent({
             case 'History':
               {
                 const historyMsg = message as DeepgramVoiceAgentHistoryMessage;
-
-                if (
-                  trackConversation &&
-                  typeof historyMsg.role === 'string' &&
-                  typeof historyMsg.content === 'string'
-                ) {
-                  setInternalConversation((prev) => [
-                    ...prev,
-                    {
-                      role: historyMsg.role as string,
-                      content: historyMsg.content as string,
-                    },
-                  ]);
-                }
 
                 onHistoryRef.current?.(historyMsg);
               }

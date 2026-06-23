@@ -241,6 +241,13 @@ export function useDeepgramSpeechToText({
 
         const isV2 = merged.apiVersion === 'v2';
         apiVersionRef.current = isV2 ? 'v2' : 'v1';
+        const usesKeyterm =
+          isV2 ||
+          (typeof merged.model === 'string' &&
+            merged.model.startsWith('nova-3'));
+        const keyterm =
+          merged.keyterm ?? (usesKeyterm ? merged.keywords : undefined);
+        const keywords = usesKeyterm ? undefined : merged.keywords;
 
         // Per Deepgram API reference, Flux (v2) only accepts a small set of
         // query parameters. Sending v1-only params can cause the server to
@@ -262,7 +269,7 @@ export function useDeepgramSpeechToText({
               eager_eot_threshold: merged.eagerEotThreshold,
               eot_threshold: merged.eotThreshold,
               eot_timeout_ms: merged.eotTimeoutMs,
-              keyterm: merged.keyterm,
+              keyterm,
               language_hint: merged.languageHint,
               profanity_filter: merged.profanityFilter,
               mip_opt_out: merged.mipOptOut,
@@ -280,8 +287,8 @@ export function useDeepgramSpeechToText({
               endpointing: merged.endpointing,
               filler_words: merged.fillerWords,
               interim_results: merged.interimResults,
-              keyterm: merged.keyterm,
-              keywords: merged.keywords,
+              keyterm,
+              keywords,
               language: merged.language,
               mip_opt_out: merged.mipOptOut,
               model: merged.model,

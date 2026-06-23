@@ -26,6 +26,38 @@
 #define DGLogWarn(...) RCTLogWarn(__VA_ARGS__)
 #define DGLogError(...) RCTLogError(__VA_ARGS__)
 
+static NSError *DGNativeError(NSString *domain, NSInteger code,
+                              NSString *message) {
+  return [NSError errorWithDomain:domain
+                             code:code
+                         userInfo:@{
+                           NSLocalizedDescriptionKey : message
+                               ?: @"Unknown Deepgram native error"
+                         }];
+}
+
+static NSError *DGOSStatusError(NSString *operation, OSStatus status) {
+  NSString *message = [NSString
+      stringWithFormat:@"%@ failed with OSStatus %d", operation, (int)status];
+  return DGNativeError(NSOSStatusErrorDomain, (NSInteger)status, message);
+}
+
+static void DGRejectPromise(RCTPromiseRejectBlock reject, NSString *code,
+                            NSString *message, NSError *error) {
+  if (!reject) {
+    return;
+  }
+
+  NSString *safeCode = code ?: @"deepgram_native_error";
+  NSString *safeMessage = message ?: error.localizedDescription
+                              ?: @"Deepgram native error";
+  NSError *safeError = error ?: DGNativeError(@"DeepgramNativeError", 0,
+                                             safeMessage);
+  DGLogError(@"[Deepgram] reject: code=%@ message=%@", safeCode,
+             safeMessage);
+  reject(safeCode, safeMessage, safeError);
+}
+
 @class Deepgram;
 
 typedef struct {
@@ -63,6 +95,7 @@ typedef struct {
 // engages and performs hardware echo cancellation.
 @property(atomic, assign) BOOL engineCaptureActive;
 @property(atomic, assign) BOOL voiceProcessingRequested;
+@property(atomic, assign) BOOL audioQueueCaptureRequested;
 @property(nonatomic, strong) AVAudioConverter *captureConverter;
 @property(nonatomic, strong) AVAudioFormat *captureOutputFormat;
 @end
@@ -72,6 +105,11 @@ typedef struct {
 - (BOOL)activateAudioSession:(NSError **)outError;
 - (BOOL)configureAudioSessionIfNeeded:(NSError **)outError;
 - (BOOL)configureAudioSession:(NSError **)outError;
+- (AVAudioSessionCategoryOptions)bluetoothHFPOption;
+- (BOOL)applyAudioSessionCategory:(AVAudioSessionCategory)category
+                             mode:(NSString *)mode
+                          options:(AVAudioSessionCategoryOptions)options
+                            error:(NSError **)outError;
 - (void)maybeDeactivateAudioSession;
 @end
 
@@ -234,7 +272,8 @@ RCT_EXPORT_MODULE();
 
 - (BOOL)configureAudioSessionIfNeeded:(NSError **)outError
 {
-  BOOL needsMic = _recordState.isRunning || self.engineCaptureActive || self.voiceProcessingRequested;
+  BOOL needsMic = _recordState.isRunning || self.audioQueueCaptureRequested ||
+                  self.engineCaptureActive || self.voiceProcessingRequested;
   AVAudioSession *session = [AVAudioSession sharedInstance];
 
   if (self.audioSessionConfigured) {
@@ -254,117 +293,210 @@ RCT_EXPORT_MODULE();
 }
 
 - (BOOL)configureAudioSession:(NSError **)outError {
-  BOOL needsMic = _recordState.isRunning || self.engineCaptureActive ||
-                  self.voiceProcessingRequested;
+  BOOL needsMic = _recordState.isRunning || self.audioQueueCaptureRequested ||
+                  self.engineCaptureActive || self.voiceProcessingRequested;
   return [self configureAudioSessionForRecording:needsMic error:outError];
 }
 
 /**
- * Configure audio session with mode appropriate to current usage.
- * Uses MixWithOthers to avoid interfering with other packages (expo-av, etc.).
- * Only uses VoiceChat mode when both recording and playback are active
- * simultaneously.
+ * Build the Bluetooth input option appropriate for the running OS.
+ * iOS 17 deprecated `AllowBluetooth` (HFP route) in favor of
+ * `AllowBluetoothHFP`. Prefer the new symbol when building against the iOS
+ * 17+ SDK and fall back to the legacy spelling on older toolchains.
  */
-- (BOOL)configureAudioSessionForRecording:(BOOL)needsMicrophone
-                                    error:(NSError **)outError {
-  DGLogDebug(@"[Deepgram] configureAudioSession: begin (mic=%@)",
-             needsMicrophone ? @"YES" : @"NO");
+- (AVAudioSessionCategoryOptions)bluetoothHFPOption {
+#if defined(__IPHONE_17_0) && (__IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_17_0)
+  if (@available(iOS 17.0, *)) {
+    return AVAudioSessionCategoryOptionAllowBluetoothHFP;
+  }
+#endif
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  return AVAudioSessionCategoryOptionAllowBluetooth;
+#pragma clang diagnostic pop
+}
+
+/**
+ * Attempt to apply a single category/mode/options tuple and activate the
+ * session. Returns YES on success. On failure, populates `outError` so the
+ * caller can decide whether to try a more conservative configuration.
+ */
+- (BOOL)applyAudioSessionCategory:(AVAudioSessionCategory)category
+                             mode:(NSString *)mode
+                          options:(AVAudioSessionCategoryOptions)options
+                            error:(NSError **)outError {
   AVAudioSession *session = [AVAudioSession sharedInstance];
   NSError *error = nil;
 
-  AVAudioSessionCategory category;
-  NSString *mode;
-
-  if (needsMicrophone) {
-    // When recording, we need PlayAndRecord. Use VoiceChat mode whenever we
-    // also need echo cancellation (engine-based capture for the Voice Agent,
-    // or playback while recording). Apple's hardware AEC (VPIO) only kicks in
-    // when the session mode is VoiceChat or VideoChat.
-    category = AVAudioSessionCategoryPlayAndRecord;
-    BOOL needsAEC = self.engineCaptureActive || self.voiceProcessingRequested ||
-                    self.isPlaying;
-    mode = needsAEC ? AVAudioSessionModeVoiceChat : AVAudioSessionModeDefault;
-  } else {
-    // Playback only — use Playback category to avoid audio route conflicts
-    category = AVAudioSessionCategoryPlayback;
-    mode = AVAudioSessionModeDefault;
-  }
-
-  // Use MixWithOthers to coexist with other audio packages (expo-av, etc.)
-  AVAudioSessionCategoryOptions options =
-      AVAudioSessionCategoryOptionMixWithOthers;
-
-  // Certain options are only valid with specific categories.
-  // 'DefaultToSpeaker' and Bluetooth HFP are only applicable with
-  // 'PlayAndRecord'.
-#if !TARGET_OS_SIMULATOR
-  if ([category isEqualToString:AVAudioSessionCategoryPlayAndRecord]) {
-    options |= AVAudioSessionCategoryOptionDefaultToSpeaker;
-
-    // iOS 17 deprecated `AllowBluetooth` (HFP route) in favor of
-    // `AllowBluetoothHFP`. Prefer the new symbol when building against the iOS
-    // 17+ SDK and fall back to the legacy spelling on older toolchains.
-#if defined(__IPHONE_17_0) && (__IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_17_0)
-    if (@available(iOS 17.0, *)) {
-      options |= AVAudioSessionCategoryOptionAllowBluetoothHFP;
-    } else {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-      options |= AVAudioSessionCategoryOptionAllowBluetooth;
-#pragma clang diagnostic pop
-    }
-#else
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    options |= AVAudioSessionCategoryOptionAllowBluetooth;
-#pragma clang diagnostic pop
-#endif
-  }
-#endif
-
-  // A2DP and AirPlay are valid for Playback, but generally incompatible with
-  // VoiceChat mode (which forces HFP). They also cause errors on simulators.
-#if !TARGET_OS_SIMULATOR
-  if (![mode isEqualToString:AVAudioSessionModeVoiceChat]) {
-    options |= AVAudioSessionCategoryOptionAllowBluetoothA2DP;
-    options |= AVAudioSessionCategoryOptionAllowAirPlay;
-  }
-#endif
-
-  BOOL categorySuccess = NO;
-
-  DGLogDebug(@"[Deepgram] configureAudioSession: setCategory %@ mode %@ options 0x%lx",
+  DGLogDebug(@"[Deepgram] configureAudioSession: setCategory %@ mode %@ "
+             @"options 0x%lx",
              category, mode, (unsigned long)options);
-  categorySuccess = [session setCategory:category
-                                    mode:mode
-                                 options:options
-                                   error:&error];
 
-  if (!categorySuccess || error) {
+  if (![session setCategory:category
+                       mode:mode
+                    options:options
+                      error:&error] ||
+      error) {
     DGLogError(@"[Deepgram] configureAudioSession: category failed error=%@",
                error.localizedDescription ?: error);
     if (outError) {
       *outError = error;
     }
-    self.audioSessionConfigured = NO;
     return NO;
   }
 
   NSError *activeError = nil;
-  BOOL activeSuccess = [session setActive:YES error:&activeError];
-  if (!activeSuccess && activeError) {
+  if (![session setActive:YES error:&activeError]) {
     DGLogError(@"[Deepgram] configureAudioSession: setActive failed error=%@",
                activeError.localizedDescription ?: activeError);
     if (outError) {
       *outError = activeError;
     }
-    self.audioSessionConfigured = NO;
     return NO;
   }
 
-  self.audioSessionConfigured = YES;
-  DGLogDebug(@"[Deepgram] configureAudioSession: success");
   return YES;
+}
+
+/**
+ * Configure audio session with mode appropriate to current usage.
+ *
+ * The configuration is attempted from most- to least-capable. If a richer
+ * setup is rejected we automatically fall back to a simpler one so audio still
+ * works instead of hard-failing.
+ *
+ * Two subtle rules drive the ordering below; getting them wrong yields
+ * OSStatus -50 (kAudioSession/paramErr) on `setCategory`, which then leaves the
+ * session in a half-configured state and makes a later AudioQueueStart fail
+ * with 'what' (kAudioSessionUnspecifiedError):
+ *
+ *   1. `DefaultToSpeaker` forces output to the built-in speaker, while
+ *      `AllowBluetoothA2DP` / `AllowAirPlay` route output to external devices.
+ *      Combining them is contradictory and is rejected with -50, so those
+ *      output-routing options are NEVER mixed with a recording configuration.
+ *      A2DP/AirPlay devices are output-only and can't supply a mic input
+ *      anyway — Bluetooth input uses the HFP route instead.
+ *   2. `MixWithOthers` lets us coexist with other audio packages (expo-av,
+ *      etc.) but can prevent us from acquiring the input on some routes. We try
+ *      it first to be a good citizen, then degrade to exclusive access so
+ *      recording still starts reliably.
+ *
+ * VoiceChat mode (which engages Apple's hardware AEC / VPIO) is used only when
+ * echo cancellation is required and only on a device — VPIO is unavailable on
+ * the Simulator and requesting it there guarantees a -50.
+ */
+- (BOOL)configureAudioSessionForRecording:(BOOL)needsMicrophone
+                                    error:(NSError **)outError {
+  DGLogDebug(@"[Deepgram] configureAudioSession: begin (mic=%@)",
+             needsMicrophone ? @"YES" : @"NO");
+
+  const AVAudioSessionCategoryOptions mixOption =
+      AVAudioSessionCategoryOptionMixWithOthers;
+
+  // Build an ordered list of attempts, best first.
+  NSMutableArray<NSDictionary *> *attempts = [NSMutableArray array];
+
+  if (needsMicrophone) {
+    BOOL needsAEC = self.engineCaptureActive || self.voiceProcessingRequested ||
+                    self.isPlaying;
+
+    // Input-safe options for PlayAndRecord. DefaultToSpeaker + HFP are valid
+    // here; A2DP/AirPlay are intentionally excluded (see rule 1 above).
+    AVAudioSessionCategoryOptions recordOptions =
+        AVAudioSessionCategoryOptionDefaultToSpeaker | [self bluetoothHFPOption];
+
+#if !TARGET_OS_SIMULATOR
+    // Preferred: hardware AEC via VoiceChat (device only). VoiceChat mode
+    // manages the route itself, so DefaultToSpeaker / HFP must NOT be combined
+    // with it — doing so is rejected with -50 on some iOS versions. Only
+    // MixWithOthers is safe to layer on top.
+    if (needsAEC) {
+      [attempts addObject:@{
+        @"category" : AVAudioSessionCategoryPlayAndRecord,
+        @"mode" : AVAudioSessionModeVoiceChat,
+        @"options" : @(mixOption),
+      }];
+      [attempts addObject:@{
+        @"category" : AVAudioSessionCategoryPlayAndRecord,
+        @"mode" : AVAudioSessionModeVoiceChat,
+        @"options" : @(0),
+      }];
+    }
+#endif
+
+    // PlayAndRecord without VoiceChat (no hardware AEC). Try with MixWithOthers
+    // first to coexist with other packages, then exclusively.
+    [attempts addObject:@{
+      @"category" : AVAudioSessionCategoryPlayAndRecord,
+      @"mode" : AVAudioSessionModeDefault,
+      @"options" : @(recordOptions | mixOption),
+    }];
+    [attempts addObject:@{
+      @"category" : AVAudioSessionCategoryPlayAndRecord,
+      @"mode" : AVAudioSessionModeDefault,
+      @"options" : @(recordOptions),
+    }];
+
+    // Last resort: bare PlayAndRecord with no options. Always valid.
+    [attempts addObject:@{
+      @"category" : AVAudioSessionCategoryPlayAndRecord,
+      @"mode" : AVAudioSessionModeDefault,
+      @"options" : @(0),
+    }];
+  } else {
+    // Playback already supports AirPlay and A2DP routes; the explicit route
+    // options are for PlayAndRecord and can be rejected with OSStatus -50.
+    AVAudioSessionCategoryOptions playbackOptions = mixOption;
+    [attempts addObject:@{
+      @"category" : AVAudioSessionCategoryPlayback,
+      @"mode" : AVAudioSessionModeDefault,
+      @"options" : @(playbackOptions),
+    }];
+
+    // Last resort: bare Playback with no options.
+    [attempts addObject:@{
+      @"category" : AVAudioSessionCategoryPlayback,
+      @"mode" : AVAudioSessionModeDefault,
+      @"options" : @(0),
+    }];
+  }
+
+  NSError *lastError = nil;
+  NSUInteger attemptIndex = 0;
+  for (NSDictionary *attempt in attempts) {
+    attemptIndex++;
+    NSError *attemptError = nil;
+    BOOL success = [self
+        applyAudioSessionCategory:attempt[@"category"]
+                             mode:attempt[@"mode"]
+                          options:(AVAudioSessionCategoryOptions)
+                                      [attempt[@"options"] unsignedIntegerValue]
+                            error:&attemptError];
+    if (success) {
+      if (attemptIndex > 1) {
+        DGLogDebug(@"[Deepgram] configureAudioSession: succeeded on fallback "
+                   @"attempt %lu/%lu",
+                   (unsigned long)attemptIndex, (unsigned long)attempts.count);
+      }
+      self.audioSessionConfigured = YES;
+      DGLogDebug(@"[Deepgram] configureAudioSession: success");
+      return YES;
+    }
+    lastError = attemptError;
+    DGLogDebug(@"[Deepgram] configureAudioSession: attempt %lu/%lu failed, "
+               @"trying next configuration",
+               (unsigned long)attemptIndex, (unsigned long)attempts.count);
+  }
+
+  DGLogError(@"[Deepgram] configureAudioSession: all %lu configurations failed; "
+             @"last error=%@",
+             (unsigned long)attempts.count,
+             lastError.localizedDescription ?: lastError);
+  if (outError) {
+    *outError = lastError;
+  }
+  self.audioSessionConfigured = NO;
+  return NO;
 }
 
 - (void)maybeDeactivateAudioSession {
@@ -609,6 +741,7 @@ RCT_EXPORT_MODULE();
 
 - (void)cleanupRecordingQueue {
   DGLogDebug(@"[Deepgram] cleanupRecordingQueue: begin");
+  self.audioQueueCaptureRequested = NO;
   _recordState.isRunning = false;
 
   if (_recordState.queue) {
@@ -884,6 +1017,7 @@ RCT_EXPORT_METHOD(startRecording : (NSDictionary *)options resolver : (
       }
     }
     self.voiceProcessingRequested = enableVoiceProcessing;
+    self.audioQueueCaptureRequested = !enableVoiceProcessing;
 
     self.currentSampleRate = 16000;
     DGLogDebug(@"[Deepgram] startRecording: targetSampleRate=%d vp=%@",
@@ -894,8 +1028,8 @@ RCT_EXPORT_METHOD(startRecording : (NSDictionary *)options resolver : (
                               ?: @"Failed to activate audio session";
       DGLogError(@"[Deepgram] startRecording: activation failed %@", message);
       self.voiceProcessingRequested = NO;
-      if (reject)
-        reject(@"record_start_error", message, sessionError);
+      self.audioQueueCaptureRequested = NO;
+      DGRejectPromise(reject, @"record_start_error", message, sessionError);
       return;
     }
 
@@ -913,8 +1047,7 @@ RCT_EXPORT_METHOD(startRecording : (NSDictionary *)options resolver : (
         DGLogError(@"[Deepgram] startRecording: %@", message);
         self.voiceProcessingRequested = NO;
         [self maybeDeactivateAudioSession];
-        if (reject)
-          reject(@"record_start_error", message, engineError);
+        DGRejectPromise(reject, @"record_start_error", message, engineError);
         return;
       }
       DGLogDebug(@"[Deepgram] startRecording: engine capture started");
@@ -967,12 +1100,11 @@ RCT_EXPORT_METHOD(startRecording : (NSDictionary *)options resolver : (
                            &_recordState, NULL, NULL, 0, &_recordState.queue);
 
     if (status != noErr) {
-      NSString *message = [NSString
-          stringWithFormat:@"AudioQueueNewInput failed: %d", (int)status];
+      NSError *error = DGOSStatusError(@"AudioQueueNewInput", status);
+      NSString *message = error.localizedDescription;
       DGLogError(@"[Deepgram] startRecording: %@", message);
       [self cleanupRecordingQueue];
-      if (reject)
-        reject(@"record_start_error", message, nil);
+      DGRejectPromise(reject, @"record_start_error", message, error);
       return;
     }
 
@@ -1012,49 +1144,46 @@ RCT_EXPORT_METHOD(startRecording : (NSDictionary *)options resolver : (
                                         _recordState.bufferByteSize,
                                         &_recordState.buffers[i]);
       if (status != noErr) {
-        NSString *message =
-            [NSString stringWithFormat:@"AudioQueueAllocateBuffer failed: %d",
-                                       (int)status];
+        NSError *error = DGOSStatusError(@"AudioQueueAllocateBuffer", status);
+        NSString *message = error.localizedDescription;
         DGLogError(@"[Deepgram] startRecording: %@", message);
         [self cleanupRecordingQueue];
-        if (reject)
-          reject(@"record_start_error", message, nil);
+        DGRejectPromise(reject, @"record_start_error", message, error);
         return;
       }
 
       status = AudioQueueEnqueueBuffer(_recordState.queue,
                                        _recordState.buffers[i], 0, NULL);
       if (status != noErr) {
-        NSString *message =
-            [NSString stringWithFormat:@"AudioQueueEnqueueBuffer failed: %d",
-                                       (int)status];
+        NSError *error = DGOSStatusError(@"AudioQueueEnqueueBuffer", status);
+        NSString *message = error.localizedDescription;
         DGLogError(@"[Deepgram] startRecording: %@", message);
         [self cleanupRecordingQueue];
-        if (reject)
-          reject(@"record_start_error", message, nil);
+        DGRejectPromise(reject, @"record_start_error", message, error);
         return;
       }
     }
 
     status = AudioQueueStart(_recordState.queue, NULL);
     if (status != noErr) {
-      NSString *message = [NSString
-          stringWithFormat:@"AudioQueueStart failed: %d", (int)status];
+      NSError *error = DGOSStatusError(@"AudioQueueStart", status);
+      NSString *message = error.localizedDescription;
       DGLogError(@"[Deepgram] startRecording: %@", message);
       [self cleanupRecordingQueue];
-      if (reject)
-        reject(@"record_start_error", message, nil);
+      DGRejectPromise(reject, @"record_start_error", message, error);
       return;
     }
 
     DGLogDebug(@"[Deepgram] startRecording: success");
+    self.audioQueueCaptureRequested = NO;
     if (resolve)
       resolve(nil);
   } @catch (NSException *e) {
     DGLogError(@"[Deepgram] startRecording: exception %@", e);
     [self cleanupRecordingQueue];
-    if (reject)
-      reject(@"record_start_error", e.reason, nil);
+    NSString *message = e.reason ?: @"Deepgram native exception";
+    NSError *error = DGNativeError(@"DeepgramNativeException", 0, message);
+    DGRejectPromise(reject, @"record_start_error", message, error);
   }
 }
 

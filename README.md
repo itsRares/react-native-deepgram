@@ -586,7 +586,7 @@ const {
 <Text>Transcript: {transcript}</Text>
 <Button
   title="Start"
-  onPress={() => startListening({ keywords: ['Deepgram'] })}
+  onPress={() => startListening({ keyterm: ['Deepgram'] })}
 />
 <Button title="Stop" onPress={stopListening} />
 ```
@@ -718,8 +718,8 @@ const {
 | `redact` | `DeepgramLiveListenRedaction \| DeepgramLiveListenRedaction[]` | – | Remove PCI/PII. |
 | `replace` | `string \| string[]` | – | Replace specific terms. |
 | `search` | `string \| string[]` | – | Return timestamps for search terms. |
-| `keywords` | `string \| string[]` | – | Boost or suppress keywords. |
-| `keyterm` | `string \| string[]` | – | Bias Nova-3 with key terms. |
+| `keywords` | `string \| string[]` | – | Boost or suppress keywords on legacy/non-Nova-3 models. |
+| `keyterm` | `string \| string[]` | – | Bias Nova-3 and Flux with key terms. |
 
 </details>
 
@@ -802,8 +802,8 @@ const {
 | `redact` | `DeepgramPrerecordedRedaction \| DeepgramPrerecordedRedaction[]` | – | Remove sensitive content. |
 | `replace` | `string \| string[]` | – | Replace specific terms. |
 | `search` | `string \| string[]` | – | Timestamps for search terms. |
-| `keywords` | `string \| string[]` | – | Boost or suppress keywords. |
-| `keyterm` | `string \| string[]` | – | Bias Nova-3 with key terms. |
+| `keywords` | `string \| string[]` | – | Boost or suppress keywords on legacy/non-Nova-3 models. |
+| `keyterm` | `string \| string[]` | – | Bias Nova-3 and Flux with key terms. |
 
 </details>
 

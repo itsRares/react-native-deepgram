@@ -29,7 +29,7 @@ interface DeepgramNative {
 
 const LINKING_ERROR = `react-native-deepgram: Native code not linked—did you run “pod install” & rebuild?`;
 
-export const Deepgram: DeepgramNative =
+const NativeDeepgramModule: DeepgramNative =
   NativeModules.Deepgram ??
   (new Proxy(
     {},
@@ -39,3 +39,33 @@ export const Deepgram: DeepgramNative =
       },
     }
   ) as any);
+
+export const Deepgram: DeepgramNative = {
+  startRecording(options: StartRecordingOptions = {}) {
+    return NativeDeepgramModule.startRecording(options);
+  },
+  stopRecording() {
+    return NativeDeepgramModule.stopRecording();
+  },
+  startAudio() {
+    return NativeDeepgramModule.startAudio();
+  },
+  stopAudio() {
+    return NativeDeepgramModule.stopAudio();
+  },
+  playAudioChunk(chunk: string) {
+    return NativeDeepgramModule.playAudioChunk(chunk);
+  },
+  setAudioConfig(sampleRate: number, channels?: number) {
+    return NativeDeepgramModule.setAudioConfig(sampleRate, channels);
+  },
+  feedAudio(base64Chunk: string) {
+    return NativeDeepgramModule.feedAudio(base64Chunk);
+  },
+  stopPlayer() {
+    return NativeDeepgramModule.stopPlayer();
+  },
+  startPlayer(sampleRate: number, channels?: number) {
+    return NativeDeepgramModule.startPlayer(sampleRate, channels);
+  },
+};

@@ -134,9 +134,9 @@ export type DeepgramLiveListenOptions = {
   fillerWords?: boolean;
   /** Emit interim transcripts while audio is streaming. */
   interimResults?: boolean;
-  /** Key term prompting (Nova-3 only). */
+  /** Key term prompting for Nova-3 and Flux. */
   keyterm?: string | string[];
-  /** Keyword boosting/suppression. */
+  /** Keyword boosting/suppression for legacy/non-Nova-3 models. */
   keywords?: string | string[];
   /** Primary spoken language hint (BCP-47). */
   language?: string;
@@ -298,9 +298,9 @@ export type DeepgramPrerecordedOptions = {
   encoding?: DeepgramPrerecordedEncoding;
   /** Include filler words such as “um” and “uh”. */
   fillerWords?: boolean;
-  /** Key term prompting (Nova-3 only). */
+  /** Key term prompting for Nova-3 and Flux. */
   keyterm?: string | string[];
-  /** Keyword boosting/suppression. */
+  /** Keyword boosting/suppression for legacy/non-Nova-3 models. */
   keywords?: string | string[];
   /** Primary spoken language hint (BCP-47). */
   language?: string;

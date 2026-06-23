@@ -38,6 +38,9 @@ export default function SpeechToText() {
         setLiveInterimTranscript(text);
       }
     },
+    onError: (err) => {
+      console.error('Live STT error', err);
+    },
     onEnd: () => setLiveInterimTranscript(''),
     live: {
       model: 'nova-3',
@@ -178,7 +181,7 @@ export default function SpeechToText() {
                 variant="primary"
                 size="lg"
                 iconLeft="▶"
-                onPress={() => startListening({ keywords: ['Deepgram'] })}
+                onPress={() => startListening({ keyterm: ['Deepgram'] })}
               />
             )}
           </View>

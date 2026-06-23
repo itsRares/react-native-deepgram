@@ -123,11 +123,13 @@ export default function TextToSpeech() {
   const [httpBitRate, setHttpBitRate] = useState('48000');
   const [httpCallbackUrl, setHttpCallbackUrl] = useState('');
   const [httpCallbackMethod, setHttpCallbackMethod] = useState('POST');
+  const [httpSpeed, setHttpSpeed] = useState('1');
   const [httpMipOptOut, setHttpMipOptOut] = useState(false);
 
   const [streamModel, setStreamModel] = useState('aura-2-asteria-en');
   const [streamEncoding, setStreamEncoding] = useState('linear16');
   const [streamSampleRate, setStreamSampleRate] = useState('16000');
+  const [streamSpeed, setStreamSpeed] = useState('1');
   const [streamMipOptOut, setStreamMipOptOut] = useState(false);
   const modelOptions = useModelOptions();
 
@@ -174,6 +176,7 @@ export default function TextToSpeech() {
         bitRate: httpBitRateValue,
         callback: httpCallbackValue,
         callbackMethod: httpCallbackMethodValue,
+        speed: parseNumber(httpSpeed),
         mipOptOut: httpMipOptOut,
       },
     },
@@ -205,6 +208,7 @@ export default function TextToSpeech() {
         model: streamModelValue,
         encoding: streamEncodingValue,
         sampleRate: streamSampleRateValue,
+        speed: parseNumber(streamSpeed),
         mipOptOut: streamMipOptOut,
         autoFlush: streamAutoFlush,
       },
@@ -461,6 +465,13 @@ export default function TextToSpeech() {
             options={CALLBACK_METHOD_OPTIONS}
             allowCustom
           />
+          <Field
+            label="Speed (0.7–1.5)"
+            value={httpSpeed}
+            onChangeText={setHttpSpeed}
+            keyboardType="decimal-pad"
+            placeholder="1"
+          />
           <View style={styles.switchRow}>
             <Text style={styles.switchLabel}>Opt out of MIP</Text>
             <Switch
@@ -503,6 +514,13 @@ export default function TextToSpeech() {
             options={SAMPLE_RATE_OPTIONS}
             allowCustom
             customKeyboardType="numeric"
+          />
+          <Field
+            label="Speed (0.7–1.5)"
+            value={streamSpeed}
+            onChangeText={setStreamSpeed}
+            keyboardType="decimal-pad"
+            placeholder="1"
           />
           <View style={styles.switchRow}>
             <Text style={styles.switchLabel}>Opt out of MIP</Text>

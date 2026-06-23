@@ -10,27 +10,7 @@ export {
   useAsyncCall,
   createAgentSettings,
 } from './helpers';
-export type {
-  DeepgramTextToSpeechModel,
-  DeepgramTextToSpeechEncoding,
-  DeepgramTextToSpeechHttpEncoding,
-  DeepgramTextToSpeechStreamEncoding,
-  DeepgramTextToSpeechSampleRate,
-  DeepgramTextToSpeechCallbackMethod,
-  DeepgramTextToSpeechContainer,
-  DeepgramTextToSpeechBitRate,
-  DeepgramTextToSpeechHttpOptions,
-  DeepgramTextToSpeechStreamOptions,
-  DeepgramTextToSpeechStreamInputMessage,
-  DeepgramTextToSpeechStreamMetadataMessage,
-  DeepgramTextToSpeechStreamFlushedMessage,
-  DeepgramTextToSpeechStreamClearedMessage,
-  DeepgramTextToSpeechStreamWarningMessage,
-  DeepgramTextToSpeechStreamResponseMessage,
-  UseDeepgramTextToSpeechOptions,
-  UseDeepgramTextToSpeechProps,
-  UseDeepgramTextToSpeechReturn,
-} from './types';
+export type * from './types';
 
 export const configure = (opts: { apiKey: string }) => {
   (globalThis as any).__DEEPGRAM_API_KEY__ = opts.apiKey;

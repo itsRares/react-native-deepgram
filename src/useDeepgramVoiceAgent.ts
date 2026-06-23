@@ -19,11 +19,17 @@ import type {
   DeepgramVoiceAgentFunctionCallRequestMessage,
   DeepgramVoiceAgentReceiveFunctionCallResponseMessage,
   DeepgramVoiceAgentPromptUpdatedMessage,
+  DeepgramVoiceAgentListenUpdatedMessage,
+  DeepgramVoiceAgentThinkUpdatedMessage,
   DeepgramVoiceAgentSpeakUpdatedMessage,
   DeepgramVoiceAgentInjectionRefusedMessage,
+  DeepgramVoiceAgentHistoryMessage,
   DeepgramVoiceAgentWarningMessage,
   DeepgramVoiceAgentErrorMessage,
   DeepgramVoiceAgentAudioConfigMessage,
+  DeepgramVoiceAgentListenConfig,
+  DeepgramVoiceAgentThinkConfig,
+  DeepgramVoiceAgentSpeakConfig,
 } from './types';
 
 const DEFAULT_AGENT_ENDPOINT = 'wss://agent.deepgram.com/v1/agent/converse';
@@ -211,10 +217,13 @@ export interface UseDeepgramVoiceAgentProps {
     message: DeepgramVoiceAgentReceiveFunctionCallResponseMessage
   ) => void;
   onPromptUpdated?: (message: DeepgramVoiceAgentPromptUpdatedMessage) => void;
+  onListenUpdated?: (message: DeepgramVoiceAgentListenUpdatedMessage) => void;
+  onThinkUpdated?: (message: DeepgramVoiceAgentThinkUpdatedMessage) => void;
   onSpeakUpdated?: (message: DeepgramVoiceAgentSpeakUpdatedMessage) => void;
   onInjectionRefused?: (
     message: DeepgramVoiceAgentInjectionRefusedMessage
   ) => void;
+  onHistory?: (message: DeepgramVoiceAgentHistoryMessage) => void;
   onWarning?: (message: DeepgramVoiceAgentWarningMessage) => void;
   onServerError?: (message: DeepgramVoiceAgentErrorMessage) => void;
   onAudioConfig?: (message: DeepgramVoiceAgentAudioConfigMessage) => void;
@@ -227,12 +236,15 @@ export interface UseDeepgramVoiceAgentReturn {
   sendMessage: (message: DeepgramVoiceAgentClientMessage) => boolean;
   sendSettings: (settings: DeepgramVoiceAgentSettings) => boolean;
   injectUserMessage: (content: string) => boolean;
-  injectAgentMessage: (message: string) => boolean;
+  injectAgentMessage: (message: string, behavior?: string) => boolean;
   sendFunctionCallResponse: (
     response: Omit<DeepgramVoiceAgentFunctionCallResponseMessage, 'type'>
   ) => boolean;
   sendKeepAlive: () => boolean;
   updatePrompt: (prompt: string) => boolean;
+  updateListen: (listen: DeepgramVoiceAgentListenConfig) => boolean;
+  updateThink: (think: DeepgramVoiceAgentThinkConfig) => boolean;
+  updateSpeak: (speak: DeepgramVoiceAgentSpeakConfig) => boolean;
   sendMedia: (chunk: ArrayBuffer | Uint8Array | number[]) => boolean;
   isConnected: () => boolean;
   state?: {
@@ -272,8 +284,11 @@ export function useDeepgramVoiceAgent({
   onFunctionCallRequest,
   onFunctionCallResponse,
   onPromptUpdated,
+  onListenUpdated,
+  onThinkUpdated,
   onSpeakUpdated,
   onInjectionRefused,
+  onHistory,
   onWarning,
   onServerError,
   onAudioConfig,
@@ -311,8 +326,11 @@ export function useDeepgramVoiceAgent({
   const onFunctionCallRequestRef = useRef(onFunctionCallRequest);
   const onFunctionCallResponseRef = useRef(onFunctionCallResponse);
   const onPromptUpdatedRef = useRef(onPromptUpdated);
+  const onListenUpdatedRef = useRef(onListenUpdated);
+  const onThinkUpdatedRef = useRef(onThinkUpdated);
   const onSpeakUpdatedRef = useRef(onSpeakUpdated);
   const onInjectionRefusedRef = useRef(onInjectionRefused);
+  const onHistoryRef = useRef(onHistory);
   const onWarningRef = useRef(onWarning);
   const onServerErrorRef = useRef(onServerError);
   const onAudioConfigRef = useRef(onAudioConfig);
@@ -471,8 +489,11 @@ export function useDeepgramVoiceAgent({
   onFunctionCallRequestRef.current = onFunctionCallRequest;
   onFunctionCallResponseRef.current = onFunctionCallResponse;
   onPromptUpdatedRef.current = onPromptUpdated;
+  onListenUpdatedRef.current = onListenUpdated;
+  onThinkUpdatedRef.current = onThinkUpdated;
   onSpeakUpdatedRef.current = onSpeakUpdated;
   onInjectionRefusedRef.current = onInjectionRefused;
+  onHistoryRef.current = onHistory;
   onWarningRef.current = onWarning;
   onServerErrorRef.current = onServerError;
   onAudioConfigRef.current = onAudioConfig;
@@ -671,6 +692,16 @@ export function useDeepgramVoiceAgent({
                 message as DeepgramVoiceAgentPromptUpdatedMessage
               );
               break;
+            case 'ListenUpdated':
+              onListenUpdatedRef.current?.(
+                message as DeepgramVoiceAgentListenUpdatedMessage
+              );
+              break;
+            case 'ThinkUpdated':
+              onThinkUpdatedRef.current?.(
+                message as DeepgramVoiceAgentThinkUpdatedMessage
+              );
+              break;
             case 'SpeakUpdated':
               onSpeakUpdatedRef.current?.(
                 message as DeepgramVoiceAgentSpeakUpdatedMessage
@@ -699,6 +730,27 @@ export function useDeepgramVoiceAgent({
                 onInjectionRefusedRef.current?.(
                   message as DeepgramVoiceAgentInjectionRefusedMessage
                 );
+              }
+              break;
+            case 'History':
+              {
+                const historyMsg = message as DeepgramVoiceAgentHistoryMessage;
+
+                if (
+                  trackConversation &&
+                  typeof historyMsg.role === 'string' &&
+                  typeof historyMsg.content === 'string'
+                ) {
+                  setInternalConversation((prev) => [
+                    ...prev,
+                    {
+                      role: historyMsg.role as string,
+                      content: historyMsg.content as string,
+                    },
+                  ]);
+                }
+
+                onHistoryRef.current?.(historyMsg);
               }
               break;
             case 'Warning':
@@ -974,8 +1026,12 @@ export function useDeepgramVoiceAgent({
   );
 
   const injectAgentMessage = useCallback(
-    (message: string) =>
-      sendJsonMessage({ type: 'InjectAgentMessage', message }),
+    (message: string, behavior?: string) =>
+      sendJsonMessage({
+        type: 'InjectAgentMessage',
+        message,
+        ...(behavior !== undefined ? { behavior } : {}),
+      }),
     [sendJsonMessage]
   );
 
@@ -995,6 +1051,24 @@ export function useDeepgramVoiceAgent({
 
   const updatePrompt = useCallback(
     (prompt: string) => sendJsonMessage({ type: 'UpdatePrompt', prompt }),
+    [sendJsonMessage]
+  );
+
+  const updateListen = useCallback(
+    (listen: DeepgramVoiceAgentListenConfig) =>
+      sendJsonMessage({ type: 'UpdateListen', listen }),
+    [sendJsonMessage]
+  );
+
+  const updateThink = useCallback(
+    (think: DeepgramVoiceAgentThinkConfig) =>
+      sendJsonMessage({ type: 'UpdateThink', think }),
+    [sendJsonMessage]
+  );
+
+  const updateSpeak = useCallback(
+    (speak: DeepgramVoiceAgentSpeakConfig) =>
+      sendJsonMessage({ type: 'UpdateSpeak', speak }),
     [sendJsonMessage]
   );
 
@@ -1024,6 +1098,9 @@ export function useDeepgramVoiceAgent({
     sendFunctionCallResponse,
     sendKeepAlive,
     updatePrompt,
+    updateListen,
+    updateThink,
+    updateSpeak,
     sendMedia: sendBinary,
     isConnected,
     ...(trackState ? { state: internalState } : {}),

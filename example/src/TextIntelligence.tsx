@@ -1,6 +1,9 @@
 import { useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { useDeepgramTextIntelligence } from 'react-native-deepgram';
+import {
+  useDeepgramTextIntelligence,
+  type DeepgramTextIntelligenceResponse,
+} from 'react-native-deepgram';
 import Button from './components/Button';
 import Card from './components/Card';
 import Field from './components/Field';
@@ -10,35 +13,11 @@ import { colors, radius, spacing, type } from './theme';
 const SAMPLE_TEXT =
   'Yesterday I listened to an incredible podcast about the first commercial spacewalk — really inspiring stuff. I want to start my own podcast about exploration!';
 
-type AnalyzeResult = {
-  results?: {
-    summary?: { text?: string };
-    topics?: {
-      segments?: Array<{
-        text?: string;
-        topics?: Array<{ topic?: string; confidence_score?: number }>;
-      }>;
-    };
-    intents?: {
-      segments?: Array<{
-        text?: string;
-        intents?: Array<{ intent?: string; confidence_score?: number }>;
-      }>;
-    };
-    sentiments?: {
-      average?: { sentiment?: string; sentiment_score?: number };
-      segments?: Array<{
-        text?: string;
-        sentiment?: string;
-        sentiment_score?: number;
-      }>;
-    };
-  };
-};
-
 export default function TextIntelligence() {
   const [input, setInput] = useState<string>('');
-  const [result, setResult] = useState<AnalyzeResult | null>(null);
+  const [result, setResult] = useState<DeepgramTextIntelligenceResponse | null>(
+    null
+  );
 
   const { analyze, state } = useDeepgramTextIntelligence({
     trackState: true,
@@ -52,9 +31,10 @@ export default function TextIntelligence() {
       customIntentMode: 'extended',
       sentiment: true,
       language: 'en-US',
+      tag: 'demo-text-intelligence',
     },
     onBeforeAnalyze: () => setResult(null),
-    onAnalyzeSuccess: (r: unknown) => setResult(r as AnalyzeResult),
+    onAnalyzeSuccess: setResult,
   });
 
   const isAnalyzing = state?.status === 'analyzing';

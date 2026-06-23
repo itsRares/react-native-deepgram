@@ -218,11 +218,14 @@ export function useDeepgramSpeechToText({
         const apiKey = (globalThis as any).__DEEPGRAM_API_KEY__;
         if (!apiKey) throw new Error('Deepgram API key missing');
 
+        const requestedVersion: 'v1' | 'v2' =
+          overrideOptions.apiVersion ?? live.apiVersion ?? 'v1';
+
         const merged: DeepgramLiveListenOptions = {
           encoding: 'linear16',
           sampleRate: DEFAULT_SAMPLE_RATE,
-          model: 'nova-3',
-          apiVersion: 'v1',
+          model: requestedVersion === 'v2' ? 'flux-general-en' : 'nova-3',
+          apiVersion: requestedVersion,
           ...live,
           ...overrideOptions,
         };
@@ -235,10 +238,6 @@ export function useDeepgramSpeechToText({
           targetSampleRateRef.current,
           nativeInputSampleRateRef.current
         );
-
-        if (merged.apiVersion === 'v2' && !merged.model) {
-          merged.model = 'flux-general-en';
-        }
 
         const isV2 = merged.apiVersion === 'v2';
         apiVersionRef.current = isV2 ? 'v2' : 'v1';
@@ -264,6 +263,8 @@ export function useDeepgramSpeechToText({
               eot_threshold: merged.eotThreshold,
               eot_timeout_ms: merged.eotTimeoutMs,
               keyterm: merged.keyterm,
+              language_hint: merged.languageHint,
+              profanity_filter: merged.profanityFilter,
               mip_opt_out: merged.mipOptOut,
               tag: merged.tag,
             }
@@ -271,7 +272,9 @@ export function useDeepgramSpeechToText({
               callback: merged.callback,
               callback_method: merged.callbackMethod,
               channels: merged.channels,
+              detect_entities: merged.detectEntities,
               diarize: merged.diarize,
+              diarize_model: merged.diarizeModel,
               dictation: merged.dictation,
               encoding: merged.encoding,
               endpointing: merged.endpointing,
@@ -479,6 +482,7 @@ export function useDeepgramSpeechToText({
           custom_intent_mode: merged.customIntentMode,
           detect_entities: merged.detectEntities,
           diarize: merged.diarize,
+          diarize_model: merged.diarizeModel,
           dictation: merged.dictation,
           encoding: merged.encoding,
           filler_words: merged.fillerWords,
@@ -486,6 +490,7 @@ export function useDeepgramSpeechToText({
           keywords: merged.keywords,
           language: merged.language,
           measurements: merged.measurements,
+          mip_opt_out: merged.mipOptOut,
           model: merged.model,
           multichannel: merged.multichannel,
           numerals: merged.numerals,

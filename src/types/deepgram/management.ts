@@ -44,26 +44,75 @@ export interface DeepgramListModelsResponse {
   tts: DeepgramTtsModel[] | null;
 }
 
+/* ---------- projects ---------- */
+
 /**
  * Represents a Deepgram Project.
  */
 export interface DeepgramProject {
   project_id: string;
   name: string;
+  /** Model Improvement Program opt-out flag (returned by Get a Project). */
+  mip_opt_out?: boolean;
   created?: string;
   balance?: number;
 }
 
 /**
- * Represents a Deepgram API Key.
+ * Generic confirmation message returned by several Manage endpoints
+ * (e.g. update project, create invite, update scopes).
  */
-export interface DeepgramKey {
-  key_id: string;
-  project_id: string;
+export interface DeepgramMessageResponse {
+  message: string;
+}
+
+/* ---------- keys ---------- */
+
+/**
+ * The API key portion of a project key record.
+ */
+export interface DeepgramApiKey {
+  api_key_id: string;
   comment?: string;
   scopes?: string[];
+  tags?: string[];
+  expiration_date?: string;
   created?: string;
 }
+
+/**
+ * The member a project key belongs to.
+ */
+export interface DeepgramKeyMember {
+  member_id: string;
+  email: string;
+  first_name?: string;
+  last_name?: string;
+}
+
+/**
+ * Represents a Deepgram API Key as returned by list/get
+ * (the secret value is never included here).
+ */
+export interface DeepgramKey {
+  member: DeepgramKeyMember;
+  api_key: DeepgramApiKey;
+}
+
+/**
+ * Response returned when creating a key. This is the only time the secret
+ * `key` value is exposed by the API.
+ */
+export interface DeepgramCreatedKey {
+  api_key_id: string;
+  key: string;
+  comment?: string;
+  scopes?: string[];
+  tags?: string[];
+  expiration_date?: string;
+}
+
+/* ---------- members ---------- */
 
 /**
  * Represents a member of a Deepgram Project.
@@ -71,45 +120,95 @@ export interface DeepgramKey {
 export interface DeepgramMember {
   member_id: string;
   email: string;
-  role: string;
-  invited?: boolean;
+  first_name?: string;
+  last_name?: string;
+  scopes?: string[];
 }
 
 export type DeepgramScope = string;
+
+/* ---------- invitations ---------- */
 
 /**
  * Represents an invitation to join a Deepgram Project.
  */
 export interface DeepgramInvitation {
-  invitation_id: string;
-  project_id: string;
   email: string;
-  status?: string;
-  created?: string;
+  scope: string;
 }
 
+/* ---------- requests ---------- */
+
 /**
- * Represents a usage request log.
+ * Represents a usage request log entry.
  */
 export interface DeepgramRequest {
   request_id: string;
-  project_id: string;
-  model_id?: string;
+  project_uuid?: string;
   created?: string;
+  path?: string;
+  api_key_id?: string;
+  response?: Record<string, unknown> | null;
+  code?: number;
+  deployment?: string;
+  callback?: string | null;
 }
 
-export interface DeepgramUsageField {
-  field: string;
-  description?: string;
+/* ---------- usage ---------- */
+
+/**
+ * A model entry returned by the usage fields endpoint.
+ */
+export interface DeepgramUsageFieldModel {
+  name: string;
+  language: string;
+  version: string;
+  model_id: string;
 }
 
 /**
- * Breakdown of usage statistics.
+ * Lists the features, models, tags and processing methods used by a project.
+ */
+export interface DeepgramUsageFields {
+  tags: string[];
+  models: DeepgramUsageFieldModel[];
+  processing_methods: string[];
+  features: string[];
+}
+
+/**
+ * Time resolution descriptor used by usage responses.
+ */
+export interface DeepgramUsageResolution {
+  units: string;
+  amount: number;
+}
+
+/**
+ * A single bucket of a usage breakdown response.
+ */
+export interface DeepgramUsageBreakdownResult {
+  hours?: number;
+  total_hours?: number;
+  agent_hours?: number;
+  tokens_in?: number;
+  tokens_out?: number;
+  tts_characters?: number;
+  requests?: number;
+  grouping?: Record<string, unknown>;
+}
+
+/**
+ * Breakdown of usage statistics over a date range.
  */
 export interface DeepgramUsageBreakdown {
-  total: number;
-  breakdown: Record<string, number>;
+  start: string;
+  end: string;
+  resolution: DeepgramUsageResolution;
+  results: DeepgramUsageBreakdownResult[];
 }
+
+/* ---------- purchases ---------- */
 
 /**
  * Represents a purchase or balance credit.
@@ -121,14 +220,26 @@ export interface DeepgramPurchase {
   created?: string;
 }
 
+/* ---------- balances ---------- */
+
 /**
- * Represents the current balance of a project.
+ * Represents an outstanding balance of a project.
  */
 export interface DeepgramBalance {
   balance_id: string;
-  project_id: string;
-  balance: number;
-  currency?: string;
+  amount: number;
+  units?: string;
+  purchase_order_id?: string;
+}
+
+/* ---------- temporary tokens ---------- */
+
+/**
+ * Response from granting a short-lived auth token (`POST /auth/grant`).
+ */
+export interface DeepgramGrantTokenResponse {
+  access_token: string;
+  expires_in: number;
 }
 
 /**
@@ -144,7 +255,10 @@ export interface UseDeepgramManagementReturn {
     list(): Promise<DeepgramProject[]>;
     get(id: string): Promise<DeepgramProject>;
     delete(id: string): Promise<void>;
-    patch(id: string, body: Record<string, unknown>): Promise<DeepgramProject>;
+    patch(
+      id: string,
+      body: Record<string, unknown>
+    ): Promise<DeepgramMessageResponse>;
     listModels(id: string): Promise<DeepgramListModelsResponse>;
     getModel(
       projectId: string,
@@ -156,7 +270,7 @@ export interface UseDeepgramManagementReturn {
     create(
       projectId: string,
       body: Record<string, unknown>
-    ): Promise<DeepgramKey>;
+    ): Promise<DeepgramCreatedKey>;
     get(projectId: string, keyId: string): Promise<DeepgramKey>;
     delete(projectId: string, keyId: string): Promise<void>;
   };
@@ -170,21 +284,21 @@ export interface UseDeepgramManagementReturn {
       projectId: string,
       memberId: string,
       body: Record<string, unknown>
-    ): Promise<DeepgramScope[]>;
+    ): Promise<DeepgramMessageResponse>;
   };
   invitations: {
     list(projectId: string): Promise<DeepgramInvitation[]>;
     create(
       projectId: string,
       body: Record<string, unknown>
-    ): Promise<DeepgramInvitation>;
-    delete(projectId: string, invitationId: string): Promise<void>;
-    leave(projectId: string): Promise<void>;
+    ): Promise<DeepgramMessageResponse>;
+    delete(projectId: string, email: string): Promise<void>;
+    leave(projectId: string): Promise<DeepgramMessageResponse>;
   };
   usage: {
     listRequests(projectId: string): Promise<DeepgramRequest[]>;
     getRequest(projectId: string, requestId: string): Promise<DeepgramRequest>;
-    listFields(projectId: string): Promise<DeepgramUsageField[]>;
+    listFields(projectId: string): Promise<DeepgramUsageFields>;
     getBreakdown(projectId: string): Promise<DeepgramUsageBreakdown>;
   };
   purchases: {
@@ -193,5 +307,8 @@ export interface UseDeepgramManagementReturn {
   balances: {
     list(projectId: string): Promise<DeepgramBalance[]>;
     get(projectId: string, balanceId: string): Promise<DeepgramBalance>;
+  };
+  auth: {
+    grant(body?: { ttl_seconds?: number }): Promise<DeepgramGrantTokenResponse>;
   };
 }

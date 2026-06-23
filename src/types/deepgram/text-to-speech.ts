@@ -127,9 +127,16 @@ export interface DeepgramTextToSpeechHttpOptions {
   /** @deprecated Use `container`. */
   format?: 'mp3' | 'wav' | 'opus' | 'pcm' | (string & {});
   bitRate?: DeepgramTextToSpeechBitRate;
+  /**
+   * Speaking rate multiplier (`0.7`–`1.5`). Adjusts the pace of generated
+   * speech while preserving natural prosody. Defaults to `1` server-side.
+   */
+  speed?: number;
   callback?: string;
   callbackMethod?: DeepgramTextToSpeechCallbackMethod;
   mipOptOut?: boolean;
+  /** Label(s) attached to the request for usage reporting/identification. */
+  tag?: string | string[];
   queryParams?: Record<string, string | number | boolean>;
 }
 
@@ -148,6 +155,11 @@ export interface DeepgramTextToSpeechStreamOptions {
   model?: DeepgramTextToSpeechModel | (string & {});
   encoding?: DeepgramTextToSpeechStreamEncoding;
   sampleRate?: DeepgramTextToSpeechSampleRate;
+  /**
+   * Speaking rate multiplier (`0.7`–`1.5`). Adjusts the pace of generated
+   * speech while preserving natural prosody. Defaults to `1` server-side.
+   */
+  speed?: number;
   mipOptOut?: boolean;
   /** Additional query parameters appended to the streaming URL. */
   queryParams?: Record<string, string | number | boolean>;
@@ -168,6 +180,10 @@ export interface UseDeepgramTextToSpeechOptions {
   sampleRate?: DeepgramTextToSpeechSampleRate;
   /** @deprecated Use `http.bitRate`. */
   bitRate?: DeepgramTextToSpeechBitRate;
+  /** @deprecated Use `http.speed` / `stream.speed`. */
+  speed?: number;
+  /** @deprecated Use `http.tag`. */
+  tag?: string | string[];
   /** @deprecated Use `http.container`. */
   container?: DeepgramTextToSpeechContainer;
   /** @deprecated Use `http.format`. */

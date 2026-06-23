@@ -40,7 +40,7 @@ export default function SpeechToText() {
     },
     onEnd: () => setLiveInterimTranscript(''),
     live: {
-      model: 'nova-2',
+      model: 'nova-3',
       interimResults: true,
       punctuate: true,
     },
@@ -50,7 +50,12 @@ export default function SpeechToText() {
     trackState: true,
     onBeforeTranscribe: () => setFileTranscript(''),
     onTranscribeSuccess: setFileTranscript,
-    prerecorded: { punctuate: true, summarize: 'v2' },
+    prerecorded: {
+      punctuate: true,
+      summarize: 'v2',
+      diarizeModel: 'latest',
+      detectEntities: true,
+    },
   });
 
   const isListening = liveState?.status === 'listening';

@@ -43,6 +43,7 @@ export function useDeepgramTextIntelligence({
     customIntentMode,
     sentiment,
     language,
+    tag,
     callback,
     callbackMethod,
   } = options;
@@ -73,6 +74,7 @@ export function useDeepgramTextIntelligence({
           intents,
           sentiment,
           language,
+          tag,
           custom_topic: customTopic,
           custom_topic_mode: customTopicMode,
           custom_intent: customIntent,
@@ -131,6 +133,7 @@ export function useDeepgramTextIntelligence({
       customIntentMode,
       sentiment,
       language,
+      tag,
       callback,
       callbackMethod,
       trackState,

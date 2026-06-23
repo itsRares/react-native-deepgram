@@ -85,6 +85,8 @@ export default function VoiceAgent() {
     injectUserMessage,
     sendFunctionCallResponse,
     updatePrompt,
+    updateListen,
+    updateThink,
     sendKeepAlive,
     state,
     conversation,
@@ -164,6 +166,16 @@ export default function VoiceAgent() {
   const applyPromptUpdate = () => {
     const trimmed = prompt.trim();
     if (trimmed) updatePrompt(trimmed);
+  };
+
+  const applyListenModel = () => {
+    const model = listenModel.trim();
+    if (model) updateListen({ provider: { type: 'deepgram', model } });
+  };
+
+  const applyThinkModel = () => {
+    const model = thinkModel.trim();
+    if (model) updateThink({ provider: { type: 'open_ai', model } });
   };
 
   const tone = state?.error
@@ -383,6 +395,14 @@ export default function VoiceAgent() {
             allowCustom
             customPlaceholder="Provider model id"
           />
+          <Button
+            title="Apply think model now"
+            variant="secondary"
+            size="sm"
+            onPress={applyThinkModel}
+            disabled={!connected}
+          />
+          <View style={{ height: spacing.md }} />
           <Field
             label="Greeting"
             value={greeting}
@@ -449,6 +469,14 @@ export default function VoiceAgent() {
             allowCustom
             customPlaceholder="ASR model id"
           />
+          <Button
+            title="Apply listen model now"
+            variant="secondary"
+            size="sm"
+            onPress={applyListenModel}
+            disabled={!connected}
+          />
+          <View style={{ height: spacing.md }} />
           <OptionSelect
             label="Input sample rate"
             value={inputSampleRate}

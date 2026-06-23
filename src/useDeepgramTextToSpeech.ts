@@ -223,6 +223,8 @@ export function useDeepgramTextToSpeech({
       container,
       format: options.http?.format ?? options.format,
       bitRate,
+      speed: options.http?.speed ?? options.speed,
+      tag: options.http?.tag ?? options.tag,
       callback: options.http?.callback ?? options.callback,
       callbackMethod: options.http?.callbackMethod ?? options.callbackMethod,
       mipOptOut: options.http?.mipOptOut ?? options.mipOptOut,
@@ -249,6 +251,7 @@ export function useDeepgramTextToSpeech({
       model,
       sampleRate,
       encoding,
+      speed: options.stream?.speed ?? options.speed,
       mipOptOut: options.stream?.mipOptOut ?? options.mipOptOut,
       queryParams: {
         ...(options.queryParams ?? {}),
@@ -290,6 +293,8 @@ export function useDeepgramTextToSpeech({
         );
         ensureQueryParam(httpParams, 'format', resolvedHttpOptions.format);
         ensureQueryParam(httpParams, 'bit_rate', resolvedHttpOptions.bitRate);
+        ensureQueryParam(httpParams, 'speed', resolvedHttpOptions.speed);
+        ensureQueryParam(httpParams, 'tag', resolvedHttpOptions.tag);
         ensureQueryParam(httpParams, 'callback', resolvedHttpOptions.callback);
         ensureQueryParam(
           httpParams,
@@ -461,6 +466,7 @@ export function useDeepgramTextToSpeech({
           'sample_rate',
           resolvedStreamOptions.sampleRate
         );
+        ensureQueryParam(wsParams, 'speed', resolvedStreamOptions.speed);
         ensureQueryParam(
           wsParams,
           'mip_opt_out',

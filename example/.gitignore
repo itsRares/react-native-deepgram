@@ -1,0 +1,7 @@
+# Native projects are generated on demand via Expo prebuild (CNG).
+# Regenerate with `yarn prebuild` (expo prebuild --clean) or `yarn ios` / `yarn android`.
+/ios/
+/android/
+
+# Expo
+.expo/

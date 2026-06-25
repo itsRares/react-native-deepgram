@@ -1,0 +1,27 @@
+# Belt-and-suspenders denylist.
+#
+# The authoritative publish allowlist is the "files" field in package.json.
+# This file is a defensive backstop so the example app — and in particular its
+# self-referential `example/node_modules/react-native-deepgram -> ../..`
+# symlink — can never leak into the published tarball (which breaks
+# patch-package and other tools that walk the package recursively), even if the
+# "files" allowlist is changed in the future.
+
+# Example app (local development only — never published)
+example
+
+# Local build output / caches
+android/build
+android/.gradle
+ios/build
+ios/generated/build
+.turbo
+coverage
+
+# Tests, mocks & fixtures
+**/__tests__
+**/__mocks__
+**/__fixtures__
+
+# Misc dev artifacts
+*.log

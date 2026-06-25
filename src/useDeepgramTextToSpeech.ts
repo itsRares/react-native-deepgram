@@ -480,11 +480,12 @@ export function useDeepgramTextToSpeech({
         ws.current = new (WebSocket as any)(url, undefined, {
           headers: { Authorization: getAuthorizationHeader(apiKey) },
         });
+        const socket = ws.current as WebSocket;
 
         // Ensure WebSocket receives binary data as ArrayBuffer
-        ws.current.binaryType = 'arraybuffer';
+        socket.binaryType = 'arraybuffer';
 
-        ws.current.onopen = () => {
+        socket.onopen = () => {
           if (autoPlayAudio) {
             NativePlayer.startPlayer(
               Number(resolvedStreamOptions.sampleRate) ||
@@ -499,7 +500,7 @@ export function useDeepgramTextToSpeech({
           }
         };
 
-        ws.current.onmessage = (ev) => {
+        socket.onmessage = (ev) => {
           if (ev.data instanceof ArrayBuffer) {
             if (autoPlayAudio) {
               NativePlayer.feedAudio(ev.data);
@@ -569,7 +570,7 @@ export function useDeepgramTextToSpeech({
           }
         };
 
-        ws.current.onerror = (err) => {
+        socket.onerror = (err) => {
           onStreamErrorRef.current(err);
           if (trackState) {
             setInternalState({
@@ -578,7 +579,7 @@ export function useDeepgramTextToSpeech({
             });
           }
         };
-        ws.current.onclose = () => {
+        socket.onclose = () => {
           if (!streamEndFiredRef.current) {
             streamEndFiredRef.current = true;
             onStreamEndRef.current();

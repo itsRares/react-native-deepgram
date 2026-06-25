@@ -711,6 +711,7 @@ const {
 | `punctuate` | `boolean` | `false` | Auto-insert punctuation/capitalisation. |
 | `smartFormat` | `boolean` | `false` | Apply Deepgram smart formatting. |
 | `numerals` | `boolean` | `false` | Convert spoken numbers to digits. |
+| `measurements` | `boolean` | `false` | Convert measurements to abbreviations. |
 | `dictation` | `boolean` | `false` | Dictation features. |
 | `fillerWords` | `boolean` | `false` | Include "um"/"uh". |
 | `profanityFilter` | `boolean` | `false` | Remove profanity. |

@@ -273,6 +273,7 @@ export function useDeepgramSpeechToText({
               language_hint: merged.languageHint,
               profanity_filter: merged.profanityFilter,
               mip_opt_out: merged.mipOptOut,
+              measurements: merged.measurements,
               tag: merged.tag,
             }
           : {
@@ -291,6 +292,7 @@ export function useDeepgramSpeechToText({
               keywords,
               language: merged.language,
               mip_opt_out: merged.mipOptOut,
+              measurements: merged.measurements,
               model: merged.model,
               multichannel: merged.multichannel,
               numerals: merged.numerals,
@@ -327,8 +329,9 @@ export function useDeepgramSpeechToText({
         ws.current = new (WebSocket as any)(url, undefined, {
           headers: { Authorization: `Token ${apiKey}` },
         });
+        const socket = ws.current as WebSocket;
 
-        ws.current.onopen = () => {
+        socket.onopen = () => {
           onStartRef.current();
           if (trackState) {
             setInternalState({ status: 'listening', error: null });
@@ -360,7 +363,7 @@ export function useDeepgramSpeechToText({
           }
         });
 
-        ws.current.onmessage = (ev: any) => {
+        socket.onmessage = (ev: any) => {
           if (typeof ev.data === 'string') {
             try {
               const msg = JSON.parse(ev.data);
@@ -409,7 +412,7 @@ export function useDeepgramSpeechToText({
           }
         };
 
-        ws.current.onerror = (err: any) => {
+        socket.onerror = (err: any) => {
           onErrorRef.current(err);
           if (trackState) {
             setInternalState({
@@ -418,7 +421,7 @@ export function useDeepgramSpeechToText({
             });
           }
         };
-        ws.current.onclose = () => {
+        socket.onclose = () => {
           closeResources();
           fireEnd();
         };

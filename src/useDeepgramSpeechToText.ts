@@ -273,6 +273,7 @@ export function useDeepgramSpeechToText({
               language_hint: merged.languageHint,
               profanity_filter: merged.profanityFilter,
               mip_opt_out: merged.mipOptOut,
+              measurements: merged.measurements,
               tag: merged.tag,
             }
           : {
@@ -291,6 +292,7 @@ export function useDeepgramSpeechToText({
               keywords,
               language: merged.language,
               mip_opt_out: merged.mipOptOut,
+              measurements: merged.measurements,
               model: merged.model,
               multichannel: merged.multichannel,
               numerals: merged.numerals,

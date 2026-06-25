@@ -259,16 +259,33 @@ RCT_EXPORT_MODULE();
 
 - (void)deactivateAudioSession {
   DGLogDebug(@"[Deepgram] deactivateAudioSession: begin");
+  if (!self.audioSessionConfigured) {
+    DGLogDebug(@"[Deepgram] deactivateAudioSession: skipped (not configured)");
+    return;
+  }
+
   NSError *error = nil;
   // Use NotifyOthersOnDeactivation so other audio sessions (expo-av, etc.)
   // know they can resume.
-  if (![[AVAudioSession sharedInstance]
-            setActive:NO
-          withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation
-                error:&error] &&
-      error) {
-    DGLogError(@"[Deepgram] Failed to deactivate audio session: %@",
-               error.localizedDescription ?: error);
+  BOOL success = NO;
+  @try {
+    success = [[AVAudioSession sharedInstance]
+                  setActive:NO
+                withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation
+                      error:&error];
+  }
+  @catch (NSException *e) {
+    DGLogWarn(@"[Deepgram] deactivateAudioSession threw exception: %@",
+              e.reason ?: e);
+    self.audioSessionConfigured = NO;
+    return;
+  }
+
+  if (!success && error) {
+    // Deactivation can legitimately fail during competing audio-route
+    // transitions; treat as a warning rather than an error.
+    DGLogWarn(@"[Deepgram] Failed to deactivate audio session: %@",
+              error.localizedDescription ?: error);
   }
   self.audioSessionConfigured = NO;
 }

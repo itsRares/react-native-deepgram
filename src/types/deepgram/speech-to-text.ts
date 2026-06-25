@@ -148,6 +148,8 @@ export type DeepgramLiveListenOptions = {
   languageHint?: string | string[];
   /** Opt out of the Model Improvement Program. */
   mipOptOut?: boolean;
+  /** Convert spoken measurements into abbreviated forms. */
+  measurements?: boolean;
   /** Model to use for live transcription. */
   model?: DeepgramLiveListenModel;
   /** Transcribe each channel independently. */

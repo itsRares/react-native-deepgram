@@ -8,7 +8,7 @@ export async function askMicPermission(): Promise<boolean> {
 
   return (
     (await PermissionsAndroid.request(
-      PermissionsAndroid.PERMISSIONS.RECORD_AUDIO
+      PermissionsAndroid.PERMISSIONS.RECORD_AUDIO!
     )) === PermissionsAndroid.RESULTS.GRANTED
   );
 }

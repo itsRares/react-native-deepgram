@@ -562,7 +562,7 @@ export function useDeepgramVoiceAgent({
         if (factor > 1 && int16.length >= factor) {
           const downsampled = new Int16Array(Math.floor(int16.length / factor));
           for (let i = 0; i < downsampled.length; i++) {
-            downsampled[i] = int16[i * factor];
+            downsampled[i] = int16[i * factor] ?? 0;
           }
           int16 = downsampled;
         }
@@ -855,7 +855,7 @@ export function useDeepgramVoiceAgent({
       } else if (Array.isArray(chunk)) {
         const uint = new Uint8Array(chunk.length);
         for (let i = 0; i < chunk.length; i++) {
-          uint[i] = chunk[i];
+          uint[i] = chunk[i] ?? 0;
         }
         payload = uint.buffer;
       }

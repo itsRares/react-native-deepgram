@@ -12,6 +12,7 @@ type CachedToken = { header: string; expiresAt: number };
 
 let cachedToken: CachedToken | null = null;
 let inflight: Promise<string> | null = null;
+let tokenEpoch = 0;
 
 const withScheme = (raw: string, defaultScheme: 'Token' | 'Bearer'): string => {
   const trimmed = raw.trim();
@@ -36,6 +37,8 @@ export const hasAuthConfigured = (): boolean =>
 
 export const clearCachedAuthToken = (): void => {
   cachedToken = null;
+  inflight = null;
+  tokenEpoch += 1;
 };
 
 export const resolveAuthHeader = async (): Promise<string> => {
@@ -47,6 +50,7 @@ export const resolveAuthHeader = async (): Promise<string> => {
     }
     // Single-flight: concurrent callers share one in-flight token refresh.
     if (!inflight) {
+      const epoch = tokenEpoch;
       inflight = (async () => {
         const result = await getToken();
         const token = result?.token;
@@ -59,18 +63,24 @@ export const resolveAuthHeader = async (): Promise<string> => {
             ? result.expiresInSeconds
             : DEFAULT_TOKEN_TTL_SECONDS;
         const header = withScheme(token, 'Bearer');
-        // Refresh at 80% of the TTL to absorb clock skew / latency.
-        cachedToken = {
-          header,
-          expiresAt: Date.now() + ttlSeconds * REFRESH_RATIO * 1000,
-        };
+        // Refresh at 80% of the TTL to absorb clock skew / latency. Skip the
+        // write if the cache was cleared (re-configure/logout) mid-flight.
+        if (epoch === tokenEpoch) {
+          cachedToken = {
+            header,
+            expiresAt: Date.now() + ttlSeconds * REFRESH_RATIO * 1000,
+          };
+        }
         return header;
       })();
     }
+    const current = inflight;
     try {
-      return await inflight;
+      return await current;
     } finally {
-      inflight = null;
+      if (inflight === current) {
+        inflight = null;
+      }
     }
   }
 

@@ -5,6 +5,7 @@ export { useDeepgramTextToSpeech } from './useDeepgramTextToSpeech';
 export { useDeepgramVoiceAgent } from './useDeepgramVoiceAgent';
 export { Deepgram } from './NativeDeepgram';
 import type { DeepgramGetToken } from './helpers';
+import { clearCachedAuthToken } from './helpers';
 export {
   arrayBufferToBase64,
   createAudioPlayerController,
@@ -56,4 +57,5 @@ export const configure = (opts: DeepgramConfigureOptions) => {
   g.__DEEPGRAM_BASE_WSS__ = opts.baseWss;
   g.__DEEPGRAM_AGENT_URL__ = opts.agentUrl;
   g.__DEEPGRAM_GET_TOKEN__ = opts.getToken;
+  clearCachedAuthToken();
 };

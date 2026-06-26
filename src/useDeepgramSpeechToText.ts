@@ -261,7 +261,7 @@ export function useDeepgramSpeechToText({
   );
 
   const handleDisconnect = useCallback(
-    (event?: { code?: number }) => {
+    (event?: { code?: number }, failureError?: Error) => {
       const cfg = reconnectConfigRef.current;
       const shouldReconnect =
         !userClosedRef.current &&
@@ -310,6 +310,8 @@ export function useDeepgramSpeechToText({
         if (trackState) {
           setInternalState({ status: 'error', error: err });
         }
+      } else if (failureError && trackState) {
+        setInternalState({ status: 'error', error: failureError });
       }
 
       fireEnd();
@@ -418,9 +420,11 @@ export function useDeepgramSpeechToText({
           handleDisconnect(event);
         };
       })
-      .catch(() => {
+      .catch((err) => {
         if (generation !== wsGenerationRef.current) return;
-        handleDisconnect();
+        const authError = err instanceof Error ? err : new Error(String(err));
+        onErrorRef.current(authError);
+        handleDisconnect(undefined, authError);
       });
   }, [closeResources, emitTranscript, fireEnd, handleDisconnect, trackState]);
 

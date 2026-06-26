@@ -404,7 +404,7 @@ export function useDeepgramTextToSpeech({
         // LRU touch: re-insert to mark as most-recently-used.
         cache.delete(cacheKey);
         cache.set(cacheKey, cached);
-        return cached;
+        return { data: cached.data.slice(0), mimeType: cached.mimeType };
       }
 
       const authHeader = await resolveAuthHeader();
@@ -434,7 +434,7 @@ export function useDeepgramTextToSpeech({
         deriveTtsMimeType(merged.encoding, merged.container);
 
       const result: DeepgramTextToSpeechBytes = { data, mimeType };
-      cache.set(cacheKey, result);
+      cache.set(cacheKey, { data: data.slice(0), mimeType });
       while (cache.size > TTS_BYTES_CACHE_MAX) {
         const oldest = cache.keys().next().value;
         if (oldest === undefined) break;

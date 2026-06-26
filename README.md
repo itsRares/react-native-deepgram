@@ -1470,6 +1470,9 @@ closeStreamGracefully(); // finish remaining audio then close
 
 ### One-shot HTTP TTS as MP3
 
+`synthesize` plays the audio through the device speaker **and** resolves with
+the buffer:
+
 ```tsx
 const { synthesize } = useDeepgramTextToSpeech({
   options: {
@@ -1483,7 +1486,36 @@ const { synthesize } = useDeepgramTextToSpeech({
 });
 
 const buffer = await synthesize('Hello from Deepgram.');
-// `buffer` is an ArrayBuffer of MP3 bytes — write to disk, upload, etc.
+// `buffer` is an ArrayBuffer of MP3 bytes — also played out loud.
+```
+
+### Save TTS to a file without playing it
+
+Use `synthesizeToBytes` when you only want the bytes (to cache, upload, or write
+to disk). Unlike `synthesize`, it **does not** play the audio, and identical
+prompts are served from an in-memory LRU cache:
+
+```tsx
+import { arrayBufferToBase64 } from 'react-native-deepgram';
+import * as FileSystem from 'expo-file-system';
+
+const { synthesizeToBytes } = useDeepgramTextToSpeech({
+  options: {
+    http: {
+      model: 'aura-2-asteria-en',
+      encoding: 'mp3',
+      bitRate: 48000,
+      container: 'none',
+    },
+  },
+});
+
+const { data, mimeType } = await synthesizeToBytes('Hello from Deepgram.');
+const uri = `${FileSystem.documentDirectory}greeting.mp3`;
+await FileSystem.writeAsStringAsync(uri, arrayBufferToBase64(data), {
+  encoding: FileSystem.EncodingType.Base64,
+});
+// `uri` now points to a saved MP3 file; `mimeType` is "audio/mpeg".
 ```
 
 ### Run text intelligence on a transcript

@@ -952,7 +952,7 @@ export function useDeepgramVoiceAgent({
   );
 
   const handleAgentDisconnect = useCallback(
-    (event?: { code?: number }) => {
+    (event?: { code?: number }, failureError?: Error) => {
       const cfg = reconnectConfigRef.current;
       const shouldReconnect =
         !userDisconnectedRef.current &&
@@ -1012,6 +1012,7 @@ export function useDeepgramVoiceAgent({
         setInternalState((prev) => ({
           ...prev,
           connectionState: 'disconnected',
+          error: failureError ? failureError.message : prev.error,
         }));
       }
 
@@ -1088,8 +1089,9 @@ export function useDeepgramVoiceAgent({
       })
       .catch((err) => {
         if (generation !== wsGenerationRef.current) return;
-        onErrorRef.current?.(err);
-        handleAgentDisconnect();
+        const authError = err instanceof Error ? err : new Error(String(err));
+        onErrorRef.current?.(authError);
+        handleAgentDisconnect(undefined, authError);
       });
   }, [
     autoPlayAudio,

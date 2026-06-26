@@ -77,6 +77,30 @@ export type DeepgramActiveAudioRoute =
   | 'bluetooth'
   | 'wired';
 
+/**
+ * A single selectable audio output device reported by
+ * {@link DeepgramNative.getAudioDevices} and the `DeepgramAudioDevices` change
+ * event.
+ *
+ * Unlike the coarse {@link DeepgramAudioRoute} categories, each connected
+ * Bluetooth headset is reported as its own device, so a UI can list (and let
+ * the user pick) between several of them by name.
+ */
+export interface DeepgramAudioDevice {
+  /**
+   * Stable platform identifier for the device. On iOS this is the audio port
+   * `UID`; on Android it is the `AudioDeviceInfo` id (as a string). Pass this
+   * value to {@link DeepgramNative.selectAudioDevice}.
+   */
+  id: string;
+  /** Human-readable name, e.g. `"AirPods Pro"`, `"Speaker"`, `"Earpiece"`. */
+  name: string;
+  /** Coarse category the device belongs to. */
+  type: DeepgramActiveAudioRoute;
+  /** Whether this device is the one audio is currently routed through. */
+  selected: boolean;
+}
+
 interface DeepgramNative {
   startRecording(options?: StartRecordingOptions): Promise<void>;
   stopRecording(): Promise<DeepgramRecordingResult | null>;
@@ -91,6 +115,8 @@ interface DeepgramNative {
   setMeteringEnabled?: (enabled: boolean, intervalMs?: number) => void;
   setAudioRoute?: (route: DeepgramAudioRoute) => Promise<void>;
   getAudioRoute?: () => Promise<DeepgramActiveAudioRoute>;
+  getAudioDevices?: () => Promise<DeepgramAudioDevice[]>;
+  selectAudioDevice?: (deviceId: string) => Promise<void>;
 }
 
 const LINKING_ERROR = `react-native-deepgram: Native code not linked—did you run “pod install” & rebuild?`;
@@ -158,5 +184,19 @@ export const Deepgram: DeepgramNative = {
       return NativeDeepgramModule.getAudioRoute();
     }
     return Promise.resolve('speaker' as DeepgramActiveAudioRoute);
+  },
+  getAudioDevices() {
+    if (typeof NativeDeepgramModule.getAudioDevices === 'function') {
+      return NativeDeepgramModule.getAudioDevices();
+    }
+    // Older native build without device enumeration — report nothing so
+    // callers can fall back to the coarse setAudioRoute() API.
+    return Promise.resolve([] as DeepgramAudioDevice[]);
+  },
+  selectAudioDevice(deviceId: string) {
+    if (typeof NativeDeepgramModule.selectAudioDevice === 'function') {
+      return NativeDeepgramModule.selectAudioDevice(deviceId);
+    }
+    return Promise.resolve();
   },
 };

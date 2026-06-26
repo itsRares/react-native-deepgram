@@ -62,6 +62,12 @@
 // so it survives playback/recording restarts.
 @property(atomic, copy) NSString *requestedAudioRoute;
 
+// User-requested specific output device, by audio port UID (from
+// `getAudioDevices`). Takes precedence over `requestedAudioRoute` when set so
+// the exact Bluetooth headset the user picked is re-pinned across (re)configs.
+// nil means "no specific device" (fall back to the coarse route).
+@property(atomic, copy) NSString *requestedDeviceId;
+
 // Playback / TTS (AVAudioEngine-based with echo cancellation)
 @property(nonatomic, strong) AVAudioEngine *audioEngine;
 @property(nonatomic, strong) AVAudioPlayerNode *playerNode;

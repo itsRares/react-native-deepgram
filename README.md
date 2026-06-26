@@ -403,6 +403,54 @@ const sub = addAudioRouteChangeListener((route) => {
 
 Routing is **best-effort and device-dependent**: the OS can override a request (a wired headset always wins), `bluetooth` only applies when a compatible headset is connected, and the routing APIs avoid fighting the active AEC session during a Voice Agent call. `DeepgramAudioRoute` is what you can *request* (`speaker` / `earpiece` / `bluetooth` / `auto`); `DeepgramActiveAudioRoute` is what can actually be *active* (`speaker` / `earpiece` / `bluetooth` / `wired`).
 
+#### Pick a specific device by name (multiple Bluetooth headsets)
+
+`setAudioRoute` targets a *category*. When several Bluetooth headsets are paired — or you simply want to show the user real device names — enumerate the outputs and select one by `id`.
+
+```ts
+import {
+  getAudioDevices,
+  selectAudioDevice,
+  addAudioDevicesChangeListener,
+} from 'react-native-deepgram';
+
+const devices = await getAudioDevices();
+// [{ id, name: 'AirPods Pro', type: 'bluetooth', selected: false }, …]
+
+// Route to a specific headset by its stable id:
+await selectAudioDevice(devices[0].id);
+
+// Re-render your picker whenever a headset connects/disconnects:
+const sub = addAudioDevicesChangeListener(({ devices, selectedId }) => {
+  console.log('outputs changed', devices, 'active:', selectedId);
+});
+// later: sub.remove();
+```
+
+| Export | Signature | Notes |
+| --- | --- | --- |
+| `getAudioDevices` | `() => Promise<DeepgramAudioDevice[]>` | Enumerate selectable outputs. Each device is `{ id, name, type, selected }`. |
+| `selectAudioDevice` | `(deviceId: string) => Promise<void>` | Route to a specific device by its `id`. Sticky across playback/recording restarts, like `setAudioRoute`. |
+| `addAudioDevicesChangeListener` | `(listener: (e: { devices: DeepgramAudioDevice[]; selectedId: string \| null }) => void) => AudioRouteSubscription` | Fires whenever the device list or the active selection changes. |
+
+A `DeepgramAudioDevice.id` is stable for the lifetime of a connection — the `AVAudioSession` port UID on iOS, the `AudioDeviceInfo` id on Android 12+. On **Android 11 and older**, individual Bluetooth headsets can't be distinguished, so a single coarse `bluetooth` entry is reported and `selectAudioDevice` accepts the route keyword (`'speaker'`, `'earpiece'`, `'bluetooth'`, `'wired'`).
+
+> #### ⚠️ Android 12+ needs the `BLUETOOTH_CONNECT` runtime permission
+>
+> The library already declares `BLUETOOTH_CONNECT` in its manifest (and the Expo config plugin merges it for you), but on Android 12 (API level 31) and above it is a **runtime** permission. **Your app must request it** before Bluetooth devices show up in `getAudioDevices()` or can be selected — without it, Android silently drops the Bluetooth route. Request it once, e.g. right before you start a call:
+>
+> ```ts
+> import { PermissionsAndroid, Platform } from 'react-native';
+>
+> if (Platform.OS === 'android' && Platform.Version >= 31) {
+>   await PermissionsAndroid.request(
+>     PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT
+>   );
+> }
+> ```
+>
+> iOS needs no extra permission for output routing beyond the microphone access you already request. The speaker/earpiece routes work on every platform without `BLUETOOTH_CONNECT`.
+
 ---
 
 ## Voice Agent (`useDeepgramVoiceAgent`)
@@ -1516,6 +1564,51 @@ function useAudioRoute() {
 > Routing is best-effort: the OS can override you (a wired headset always wins)
 > and `bluetooth` needs a connected headset. `getAudioRoute()` always reports the
 > route actually in use.
+
+### Show a device picker (multiple Bluetooth headsets)
+
+```tsx
+import { useEffect, useState } from 'react';
+import { PermissionsAndroid, Platform } from 'react-native';
+import {
+  getAudioDevices,
+  selectAudioDevice,
+  addAudioDevicesChangeListener,
+  type DeepgramAudioDevice,
+} from 'react-native-deepgram';
+
+function useAudioDevices() {
+  const [devices, setDevices] = useState<DeepgramAudioDevice[]>([]);
+
+  useEffect(() => {
+    let mounted = true;
+    // Android 12+: the app must hold BLUETOOTH_CONNECT for headsets to appear.
+    const ensurePermission = async () => {
+      if (Platform.OS === 'android' && Platform.Version >= 31) {
+        await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT
+        );
+      }
+    };
+    ensurePermission()
+      .then(getAudioDevices)
+      .then((list) => mounted && setDevices(list))
+      .catch(() => {});
+    const sub = addAudioDevicesChangeListener(({ devices }) => {
+      if (mounted) setDevices(devices);
+    });
+    return () => {
+      mounted = false;
+      sub.remove();
+    };
+  }, []);
+
+  return { devices, select: selectAudioDevice };
+}
+```
+
+> Each device carries `{ id, name, type, selected }`. Call `select(device.id)` to
+> route to it; the list re-renders automatically as headsets connect/disconnect.
 
 ### Voice Agent with a client-side function
 

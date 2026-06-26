@@ -118,6 +118,145 @@ internal class AudioRouteManager(
     return if (requestedRoute == ROUTE_EARPIECE) ROUTE_EARPIECE else ROUTE_SPEAKER
   }
 
+  /**
+   * Enumerate the output devices currently available for routing. On API 31+
+   * each connected Bluetooth headset is listed individually (with the system
+   * [AudioDeviceInfo.id] as a stable id), so a UI can present and pick between
+   * several of them by name. On older releases we report the coarse
+   * speaker/earpiece options plus whichever wired/Bluetooth category is
+   * connected (multiple Bluetooth devices can't be distinguished pre-31).
+   */
+  fun availableDevices(): List<RouteDevice> {
+    val manager = audioManager
+      ?: return listOf(RouteDevice(ROUTE_SPEAKER, "Speaker", ROUTE_SPEAKER, true))
+
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      availableDevicesApi31(manager)
+    } else {
+      availableDevicesLegacy(manager)
+    }
+  }
+
+  /**
+   * Route audio to a specific device. On API 31+ [id] is an
+   * [AudioDeviceInfo.id]; otherwise it is a coarse route keyword (the same
+   * values [setRoute] accepts). Throws [IllegalArgumentException] for an
+   * unknown id and [IllegalStateException] when AudioManager is unavailable.
+   */
+  fun selectDevice(id: String) {
+    val manager = audioManager
+      ?: throw IllegalStateException("AudioManager is unavailable")
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      val target = manager.availableCommunicationDevices.firstOrNull {
+        it.id.toString() == id
+      }
+      if (target != null) {
+        requestedRoute = displayTypeFor(target.type) ?: requestedRoute
+        if (!manager.setCommunicationDevice(target)) {
+          Log.w(TAG, "setCommunicationDevice(id=$id) returned false")
+        }
+        onRouteChange(currentRoute())
+        return
+      }
+    }
+
+    // Legacy build, or a coarse route keyword passed straight through.
+    setRoute(id)
+  }
+
+  @androidx.annotation.RequiresApi(Build.VERSION_CODES.S)
+  private fun availableDevicesApi31(manager: AudioManager): List<RouteDevice> {
+    val selectedId = manager.communicationDevice?.id
+    val seen = HashSet<Int>()
+    val result = ArrayList<RouteDevice>()
+    for (device in manager.availableCommunicationDevices) {
+      val type = displayTypeFor(device.type) ?: continue
+      if (!seen.add(device.id)) continue
+      result.add(
+        RouteDevice(
+          id = device.id.toString(),
+          name = deviceName(device),
+          type = type,
+          selected = selectedId != null && device.id == selectedId,
+        )
+      )
+    }
+
+    // Guarantee a speaker entry so the picker is never empty.
+    if (result.none { it.type == ROUTE_SPEAKER }) {
+      result.add(0, RouteDevice(ROUTE_SPEAKER, "Speaker", ROUTE_SPEAKER, false))
+    }
+
+    // When the system hasn't pinned a communication device yet, reflect the
+    // current route so exactly one entry is marked selected.
+    if (result.none { it.selected }) {
+      val active = currentRoute()
+      val idx = result.indexOfFirst { it.type == active }
+        .let { if (it >= 0) it else result.indexOfFirst { d -> d.type == ROUTE_SPEAKER } }
+      if (idx >= 0) result[idx] = result[idx].copy(selected = true)
+    }
+    return result
+  }
+
+  private fun availableDevicesLegacy(manager: AudioManager): List<RouteDevice> {
+    val active = currentRoute()
+    val result = ArrayList<RouteDevice>()
+    result.add(RouteDevice(ROUTE_SPEAKER, "Speaker", ROUTE_SPEAKER, active == ROUTE_SPEAKER))
+    result.add(RouteDevice(ROUTE_EARPIECE, "Earpiece", ROUTE_EARPIECE, active == ROUTE_EARPIECE))
+
+    var hasWired = false
+    var hasBluetooth = false
+    for (device in manager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
+      when (device.type) {
+        AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+        AudioDeviceInfo.TYPE_WIRED_HEADSET,
+        AudioDeviceInfo.TYPE_USB_HEADSET,
+        AudioDeviceInfo.TYPE_USB_DEVICE -> hasWired = true
+        AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> hasBluetooth = true
+      }
+    }
+    if (hasWired) {
+      result.add(RouteDevice(ROUTE_WIRED, "Wired headset", ROUTE_WIRED, active == ROUTE_WIRED))
+    }
+    if (hasBluetooth) {
+      result.add(RouteDevice(ROUTE_BLUETOOTH, "Bluetooth", ROUTE_BLUETOOTH, active == ROUTE_BLUETOOTH))
+    }
+    return result
+  }
+
+  /** Human-readable label for a device, with friendly built-in names. */
+  private fun deviceName(device: AudioDeviceInfo): String = when (device.type) {
+    AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "Speaker"
+    AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> "Earpiece"
+    else -> device.productName?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+      ?: defaultNameForType(device.type)
+  }
+
+  private fun defaultNameForType(type: Int): String = when (displayTypeFor(type)) {
+    ROUTE_BLUETOOTH -> "Bluetooth"
+    ROUTE_WIRED -> "Wired headset"
+    ROUTE_EARPIECE -> "Earpiece"
+    else -> "Speaker"
+  }
+
+  /**
+   * Strict device-type mapper for enumeration: returns null for types we don't
+   * surface as selectable outputs (unlike [mapDeviceType], which defaults to
+   * speaker for the coarse `currentRoute()` read).
+   */
+  private fun displayTypeFor(type: Int): String? = when (type) {
+    AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> ROUTE_SPEAKER
+    AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> ROUTE_EARPIECE
+    AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+    AudioDeviceInfo.TYPE_BLE_HEADSET -> ROUTE_BLUETOOTH
+    AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+    AudioDeviceInfo.TYPE_WIRED_HEADSET,
+    AudioDeviceInfo.TYPE_USB_HEADSET,
+    AudioDeviceInfo.TYPE_USB_DEVICE -> ROUTE_WIRED
+    else -> null
+  }
+
   private fun applyRouteApi31(manager: AudioManager, route: String) {
     when (route) {
       ROUTE_SPEAKER ->
@@ -209,3 +348,15 @@ internal class AudioRouteManager(
     const val ROUTE_AUTO = "auto"
   }
 }
+
+/**
+ * A single selectable output device surfaced to JS. [id] is an
+ * [AudioDeviceInfo.id] on API 31+ and a coarse route keyword on older releases;
+ * pass it back to [AudioRouteManager.selectDevice].
+ */
+internal data class RouteDevice(
+  val id: String,
+  val name: String,
+  val type: String,
+  val selected: Boolean,
+)

@@ -12,6 +12,7 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.ReadableMap
+import com.facebook.react.bridge.WritableNativeArray
 import com.facebook.react.bridge.WritableNativeMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
 
@@ -55,7 +56,11 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
   private val routeManager = AudioRouteManager(
     context = reactContext,
     mainHandler = mainHandler,
-    onRouteChange = { route -> sendRouteChange(route) },
+    onRouteChange = { route ->
+      sendRouteChange(route)
+      // Keep the richer device-centric listeners in sync from the same trigger.
+      sendAudioDevices()
+    },
   )
 
   override fun getName() = NAME
@@ -264,6 +269,34 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun getAudioDevices(promise: Promise) {
+    try {
+      promise.resolve(buildDevicesArray())
+    } catch (e: Exception) {
+      Log.e(TAG, "getAudioDevices error", e)
+      promise.reject("playback_error", e)
+    }
+  }
+
+  @ReactMethod
+  fun selectAudioDevice(deviceId: String?, promise: Promise) {
+    try {
+      if (deviceId.isNullOrEmpty()) {
+        promise.reject("invalid_data", "A deviceId is required")
+        return
+      }
+      routeManager.selectDevice(deviceId)
+      promise.resolve(null)
+    } catch (e: IllegalArgumentException) {
+      Log.e(TAG, "selectAudioDevice invalid id", e)
+      promise.reject("invalid_data", e)
+    } catch (e: Exception) {
+      Log.e(TAG, "selectAudioDevice error", e)
+      promise.reject("playback_error", e)
+    }
+  }
+
+  @ReactMethod
   fun feedAudio(base64Audio: String) {
     player.feedAudio(base64Audio)
   }
@@ -376,6 +409,56 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     } catch (e: Exception) {
       // Catalyst tearing down or JS bundle not ready — drop silently.
       Log.w(TAG, "sendRouteChange emit failed", e)
+    }
+  }
+
+  /**
+   * Build the `WritableArray` of selectable output devices for JS. Each entry
+   * is `{ id, name, type, selected }`. A fresh array is created per call since
+   * a `WritableArray` is consumed when sent across the bridge.
+   */
+  private fun buildDevicesArray(): WritableNativeArray {
+    val array = WritableNativeArray()
+    for (device in routeManager.availableDevices()) {
+      val map = WritableNativeMap()
+      map.putString("id", device.id)
+      map.putString("name", device.name)
+      map.putString("type", device.type)
+      map.putBoolean("selected", device.selected)
+      array.pushMap(map)
+    }
+    return array
+  }
+
+  /**
+   * Emit the current device list to JS as the `DeepgramAudioDevices` event.
+   * Payload: `{ devices: Array<{ id, name, type, selected }>, selectedId:
+   * string | null }`.
+   */
+  private fun sendAudioDevices() {
+    if (!reactContext.hasActiveReactInstance()) return
+    val devices = routeManager.availableDevices()
+    val array = WritableNativeArray()
+    var selectedId: String? = null
+    for (device in devices) {
+      if (device.selected) selectedId = device.id
+      val map = WritableNativeMap()
+      map.putString("id", device.id)
+      map.putString("name", device.name)
+      map.putString("type", device.type)
+      map.putBoolean("selected", device.selected)
+      array.pushMap(map)
+    }
+    val payload = WritableNativeMap()
+    payload.putArray("devices", array)
+    if (selectedId != null) payload.putString("selectedId", selectedId) else payload.putNull("selectedId")
+    try {
+      reactContext
+        .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+        .emit("DeepgramAudioDevices", payload)
+    } catch (e: Exception) {
+      // Catalyst tearing down or JS bundle not ready — drop silently.
+      Log.w(TAG, "sendAudioDevices emit failed", e)
     }
   }
 

@@ -10,14 +10,16 @@ import {
 import {
   useDeepgramVoiceAgent,
   createAgentSettings,
-  setAudioRoute,
   getAudioRoute,
+  getAudioDevices,
+  selectAudioDevice,
   addAudioRouteChangeListener,
+  addAudioDevicesChangeListener,
   DeepgramError,
 } from 'react-native-deepgram';
 import type {
-  DeepgramAudioRoute,
   DeepgramActiveAudioRoute,
+  DeepgramAudioDevice,
 } from 'react-native-deepgram';
 import OptionSelect from './components/OptionSelect';
 import Button from './components/Button';
@@ -49,16 +51,12 @@ const SAMPLE_RATE_OPTIONS = [
   { label: '8 kHz (lower quality)', value: '8000' },
 ];
 
-const ROUTE_OPTIONS: {
-  label: string;
-  value: DeepgramAudioRoute;
-  icon: string;
-}[] = [
-  { label: 'Speaker', value: 'speaker', icon: '🔊' },
-  { label: 'Earpiece', value: 'earpiece', icon: '📞' },
-  { label: 'Bluetooth', value: 'bluetooth', icon: '🎧' },
-  { label: 'Auto', value: 'auto', icon: '🔀' },
-];
+const DEVICE_ICONS: Record<DeepgramActiveAudioRoute, string> = {
+  speaker: '🔊',
+  earpiece: '📞',
+  bluetooth: '🎧',
+  wired: '🔌',
+};
 
 const ROUTE_LABELS: Record<DeepgramActiveAudioRoute, string> = {
   speaker: 'Speaker',
@@ -83,6 +81,7 @@ export default function VoiceAgent() {
   const [reconnectAttempt, setReconnectAttempt] = useState<number | null>(null);
   const [activeRoute, setActiveRoute] =
     useState<DeepgramActiveAudioRoute>('speaker');
+  const [devices, setDevices] = useState<DeepgramAudioDevice[]>([]);
   const [errorCode, setErrorCode] = useState<string | null>(null);
 
   const agentSettings = useMemo(
@@ -182,20 +181,32 @@ export default function VoiceAgent() {
     }
   }, [conversation?.length]);
 
-  // Reflect and observe the active audio output route.
+  // Reflect and observe the active audio output route and device list.
   useEffect(() => {
     let mounted = true;
+    const loadDevices = () => {
+      getAudioDevices()
+        .then((list) => {
+          if (mounted) setDevices(list);
+        })
+        .catch(() => {});
+    };
     getAudioRoute()
       .then((route) => {
         if (mounted) setActiveRoute(route);
       })
       .catch(() => {});
-    const sub = addAudioRouteChangeListener((route) => {
+    loadDevices();
+    const routeSub = addAudioRouteChangeListener((route) => {
       if (mounted) setActiveRoute(route);
+    });
+    const deviceSub = addAudioDevicesChangeListener(({ devices: list }) => {
+      if (mounted) setDevices(list);
     });
     return () => {
       mounted = false;
-      sub.remove();
+      routeSub.remove();
+      deviceSub.remove();
     };
   }, []);
 
@@ -209,10 +220,15 @@ export default function VoiceAgent() {
     }
   };
 
-  const changeRoute = async (route: DeepgramAudioRoute) => {
+  const chooseDevice = async (deviceId: string) => {
     try {
-      await setAudioRoute(route);
-      setActiveRoute(await getAudioRoute());
+      await selectAudioDevice(deviceId);
+      const [list, route] = await Promise.all([
+        getAudioDevices(),
+        getAudioRoute(),
+      ]);
+      setDevices(list);
+      setActiveRoute(route);
     } catch (err) {
       setErrorCode(err instanceof DeepgramError ? err.code : 'unknown');
     }
@@ -498,21 +514,30 @@ export default function VoiceAgent() {
             <Text style={styles.routePill}>{ROUTE_LABELS[activeRoute]}</Text>
           }
         >
-          <View style={styles.routeRow}>
-            {ROUTE_OPTIONS.map((opt) => (
-              <Button
-                key={opt.value}
-                title={opt.label}
-                variant={activeRoute === opt.value ? 'primary' : 'secondary'}
-                size="sm"
-                iconLeft={opt.icon}
-                onPress={() => changeRoute(opt.value)}
-              />
-            ))}
+          <View style={styles.deviceList}>
+            {devices.length === 0 ? (
+              <Text style={styles.routeHint}>
+                No output devices detected yet.
+              </Text>
+            ) : (
+              devices.map((device) => (
+                <Button
+                  key={device.id}
+                  title={device.name}
+                  variant={device.selected ? 'primary' : 'secondary'}
+                  size="sm"
+                  fullWidth
+                  iconLeft={DEVICE_ICONS[device.type]}
+                  onPress={() => chooseDevice(device.id)}
+                />
+              ))
+            )}
           </View>
           <Text style={styles.routeHint}>
-            Best-effort & device-dependent — the OS may override (a wired
-            headset always wins) and Bluetooth needs a connected headset.
+            Pair a Bluetooth headset in system settings to see it listed by
+            name. The OS may override (a wired headset always wins). On Android
+            12+ the app must hold the Bluetooth permission for headsets to
+            appear.
           </Text>
         </Card>
 
@@ -907,9 +932,7 @@ const styles = StyleSheet.create({
     flex: 1,
     marginRight: spacing.md,
   },
-  routeRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+  deviceList: {
     gap: spacing.sm,
   },
   routeHint: {

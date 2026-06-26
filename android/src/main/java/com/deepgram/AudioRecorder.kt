@@ -8,7 +8,12 @@ import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
+import android.net.Uri
 import android.util.Log
+import java.io.File
+import java.io.RandomAccessFile
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 /**
  * Microphone capture. Records 16 kHz PCM16 mono and streams the raw bytes back
@@ -51,6 +56,20 @@ internal class AudioRecorder(
   private var meteringIntervalMs: Long = 100L
   private var lastMeterEmit: Long = 0L
 
+  // Record-to-file. When [start] is given a destination path the recording loop
+  // tees the same PCM it streams to JS into a WAV file; the RIFF/`data` sizes
+  // are patched into the header on stop. Writes happen on the recording thread
+  // (single producer) and finalization runs after it joins, so no lock needed.
+  @Volatile
+  private var fileOutput: RandomAccessFile? = null
+  private var fileDataBytes: Long = 0L
+  private var recordFilePath: String? = null
+
+  /** `file://` URI of the most recently completed record-to-file session. */
+  @Volatile
+  var lastRecordingUri: String? = null
+    private set
+
   private var acousticEchoCanceler: AcousticEchoCanceler? = null
   private var noiseSuppressor: NoiseSuppressor? = null
   private var automaticGainControl: AutomaticGainControl? = null
@@ -82,7 +101,9 @@ internal class AudioRecorder(
    * `AudioRecord` init, `SecurityException` for a missing permission, or the
    * original exception otherwise.
    */
-  fun start(enableVoiceProcessing: Boolean) {
+  fun start(enableVoiceProcessing: Boolean, recordToFilePath: String? = null) {
+    lastRecordingUri = null
+
     // Voice Agent / duplex usage: route capture through the telephony stack so
     // the platform's hardware AEC engages with the active playback signal as
     // its reference. VOICE_RECOGNITION explicitly disables AEC/NS/AGC and is
@@ -120,6 +141,13 @@ internal class AudioRecorder(
         throw InitializationException("AudioRecord initialization failed")
       }
 
+      // Open the WAV target before we start capturing so a file-system failure
+      // aborts the whole start (mapped to "start_error") instead of silently
+      // dropping the recording.
+      if (recordToFilePath != null) {
+        openRecordingFile(recordToFilePath)
+      }
+
       enableAudioEffects(recorder)
       recorder.startRecording()
       isActive = true
@@ -132,6 +160,7 @@ internal class AudioRecorder(
       audioRecord = null
       releaseAudioEffects()
       restoreAudioModeIfNeeded()
+      discardRecordingFile()
       throw e
     } catch (e: InitializationException) {
       throw e
@@ -141,6 +170,7 @@ internal class AudioRecorder(
       audioRecord = null
       releaseAudioEffects()
       restoreAudioModeIfNeeded()
+      discardRecordingFile()
       throw e
     }
   }
@@ -156,6 +186,12 @@ internal class AudioRecorder(
       }
     }
     recordingThread = null
+
+    // The recording thread has joined, so no writer can race the finalize.
+    val finalizedUri = finalizeRecordingFile()
+    if (finalizedUri != null) {
+      lastRecordingUri = finalizedUri
+    }
 
     try {
       audioRecord?.stop()
@@ -297,6 +333,7 @@ internal class AudioRecorder(
           val read = recorder.read(buffer, 0, buffer.size)
           if (read > 0) {
             onAudioChunk(buffer, read)
+            writeRecordingFile(buffer, read)
             emitAudioLevelIfNeeded(buffer, read)
           } else if (read < 0) {
             // ERROR_INVALID_OPERATION / ERROR_BAD_VALUE / ERROR_DEAD_OBJECT —
@@ -341,6 +378,114 @@ internal class AudioRecorder(
     val rms = Math.sqrt(sumSquares / sampleCount)
     onAudioLevel(if (rms > 1.0) 1.0 else rms)
   }
+
+  /**
+   * Open [path] (with or without a `file://` scheme) and write a placeholder
+   * WAV header. Throws if the file cannot be created so [start] can surface the
+   * failure as "start_error".
+   */
+  private fun openRecordingFile(path: String) {
+    val clean = if (path.startsWith("file://")) {
+      Uri.parse(path).path ?: path.removePrefix("file://")
+    } else {
+      path
+    }
+    val file = File(clean)
+    file.parentFile?.let { if (!it.exists()) it.mkdirs() }
+
+    val raf = RandomAccessFile(file, "rw")
+    try {
+      raf.setLength(0)
+      raf.write(buildWavHeader(0))
+    } catch (e: Exception) {
+      try { raf.close() } catch (_: Exception) {}
+      throw e
+    }
+    fileOutput = raf
+    fileDataBytes = 0L
+    recordFilePath = file.absolutePath
+    Log.i(TAG, "record-to-file: writing to ${file.absolutePath}")
+  }
+
+  /** Append captured PCM to the open WAV file. Stops teeing on a write error. */
+  private fun writeRecordingFile(buffer: ByteArray, length: Int) {
+    val out = fileOutput ?: return
+    try {
+      out.write(buffer, 0, length)
+      fileDataBytes += length
+    } catch (e: Exception) {
+      Log.w(TAG, "record-to-file write failed", e)
+      discardRecordingFile()
+    }
+  }
+
+  /**
+   * Patch the RIFF/`data` sizes into the header, close the file and return its
+   * `file://` URI. Returns null when no record-to-file session was active.
+   */
+  private fun finalizeRecordingFile(): String? {
+    val out = fileOutput ?: return null
+    val path = recordFilePath
+    val dataBytes = fileDataBytes
+    fileOutput = null
+    fileDataBytes = 0L
+    recordFilePath = null
+
+    try {
+      out.seek(4)
+      out.write(intToLittleEndian((36 + dataBytes).toInt()))
+      out.seek(40)
+      out.write(intToLittleEndian(dataBytes.toInt()))
+      out.close()
+    } catch (e: Exception) {
+      Log.w(TAG, "record-to-file finalize failed", e)
+      try { out.close() } catch (_: Exception) {}
+    }
+
+    return path?.let { Uri.fromFile(File(it)).toString() }
+  }
+
+  /** Close and delete any partially written file without producing a URI. */
+  private fun discardRecordingFile() {
+    val out = fileOutput
+    val path = recordFilePath
+    fileOutput = null
+    fileDataBytes = 0L
+    recordFilePath = null
+
+    if (out != null) {
+      try { out.close() } catch (_: Exception) {}
+    }
+    if (path != null) {
+      try { File(path).delete() } catch (_: Exception) {}
+    }
+  }
+
+  private fun buildWavHeader(dataBytes: Int): ByteArray {
+    val channels = 1
+    val bitsPerSample = 16
+    val byteRate = RECORD_SAMPLE_RATE * channels * bitsPerSample / 8
+    val blockAlign = channels * bitsPerSample / 8
+
+    return ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN).apply {
+      put("RIFF".toByteArray(Charsets.US_ASCII))
+      putInt(36 + dataBytes)
+      put("WAVE".toByteArray(Charsets.US_ASCII))
+      put("fmt ".toByteArray(Charsets.US_ASCII))
+      putInt(16) // PCM fmt chunk size
+      putShort(1) // PCM
+      putShort(channels.toShort())
+      putInt(RECORD_SAMPLE_RATE)
+      putInt(byteRate)
+      putShort(blockAlign.toShort())
+      putShort(bitsPerSample.toShort())
+      put("data".toByteArray(Charsets.US_ASCII))
+      putInt(dataBytes)
+    }.array()
+  }
+
+  private fun intToLittleEndian(value: Int): ByteArray =
+    ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(value).array()
 
   companion object {
     private const val TAG = "DeepgramRecorder"

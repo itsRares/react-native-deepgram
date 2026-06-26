@@ -154,6 +154,11 @@
     return NO;
   }
 
+  // Honor any user-requested output route across (re)configurations. This only
+  // re-pins the speaker/earpiece override; it never rebuilds the category, so
+  // it cannot recurse back into configureAudioSession.
+  [self reapplyOutputOverrideOnly];
+
   return YES;
 }
 
@@ -201,8 +206,17 @@
 
     // Input-safe options for PlayAndRecord. DefaultToSpeaker + HFP are valid
     // here; A2DP/AirPlay are intentionally excluded (see rule 1 above).
-    AVAudioSessionCategoryOptions recordOptions =
-        AVAudioSessionCategoryOptionDefaultToSpeaker | [self bluetoothHFPOption];
+    //
+    // When the user has explicitly requested the earpiece, omit
+    // DefaultToSpeaker: the output override below can only choose between the
+    // speaker and "none", and "none" still resolves to the loud speaker while
+    // DefaultToSpeaker is set. Dropping it lets the built-in receiver become
+    // the default output. (VoiceChat / AEC attempts never carry this option,
+    // so they are unaffected.)
+    AVAudioSessionCategoryOptions recordOptions = [self bluetoothHFPOption];
+    if (![self.requestedAudioRoute isEqualToString:@"earpiece"]) {
+      recordOptions |= AVAudioSessionCategoryOptionDefaultToSpeaker;
+    }
 
 #if !TARGET_OS_SIMULATOR
     // Preferred: hardware AEC via VoiceChat (device only). VoiceChat mode
@@ -317,6 +331,11 @@
       reasonValue
           ? (AVAudioSessionRouteChangeReason)reasonValue.unsignedIntegerValue
           : AVAudioSessionRouteChangeReasonUnknown;
+
+  // Surface the route change to JS regardless of our internal active state so
+  // listeners observe headphone plug/unplug and Bluetooth connect/disconnect
+  // even while idle.
+  [self emitRouteChange];
 
   // Headphones / Bluetooth headset unplugged — pause playback so we don't
   // surprise the user by suddenly blasting through the loud speaker.
@@ -433,6 +452,152 @@
       }
     }
   }
+}
+
+- (NSString *)currentAudioRouteString {
+  AVAudioSession *session = [AVAudioSession sharedInstance];
+  AVAudioSessionPortDescription *output =
+      session.currentRoute.outputs.firstObject;
+  if (!output) {
+    // No active output yet — report the route the session would use.
+    return @"speaker";
+  }
+  AVAudioSessionPort portType = output.portType;
+  if ([portType isEqualToString:AVAudioSessionPortBuiltInSpeaker]) {
+    return @"speaker";
+  }
+  if ([portType isEqualToString:AVAudioSessionPortBuiltInReceiver]) {
+    return @"earpiece";
+  }
+  if ([portType isEqualToString:AVAudioSessionPortBluetoothHFP] ||
+      [portType isEqualToString:AVAudioSessionPortBluetoothA2DP] ||
+      [portType isEqualToString:AVAudioSessionPortBluetoothLE]) {
+    return @"bluetooth";
+  }
+  // Headphones / USB / HDMI / car audio / line-out — wired-style outputs that
+  // can't be selected explicitly (the OS routes to them automatically).
+  return @"wired";
+}
+
+- (void)emitRouteChange {
+  if (!self.hasListeners) {
+    return;
+  }
+  NSString *route = [self currentAudioRouteString];
+  DGLogDebug(@"[Deepgram] emitRouteChange: %@", route);
+  [self sendEventWithName:@"DeepgramRouteChange" body:@{@"route" : route}];
+}
+
+/**
+ * Prefer a connected Bluetooth HFP input. Output follows the negotiated HFP
+ * route, so selecting the BT input is what actually moves call audio onto the
+ * headset. No-op when no HFP device is present.
+ */
+- (void)preferBluetoothInputIfAvailable {
+  AVAudioSession *session = [AVAudioSession sharedInstance];
+  for (AVAudioSessionPortDescription *input in session.availableInputs) {
+    if ([input.portType isEqualToString:AVAudioSessionPortBluetoothHFP]) {
+      NSError *error = nil;
+      if (![session setPreferredInput:input error:&error] || error) {
+        DGLogWarn(@"[Deepgram] preferBluetoothInput failed: %@",
+                  error.localizedDescription ?: error);
+      }
+      return;
+    }
+  }
+}
+
+/**
+ * Release any previously preferred input (e.g. a Bluetooth HFP device) so the
+ * OS is free to resolve the default route again. Used when the requested route
+ * is no longer `bluetooth`.
+ */
+- (void)clearPreferredInput {
+  AVAudioSession *session = [AVAudioSession sharedInstance];
+  if (!session.preferredInput) {
+    return;
+  }
+  NSError *error = nil;
+  if (![session setPreferredInput:nil error:&error] || error) {
+    DGLogWarn(@"[Deepgram] clearPreferredInput failed: %@",
+              error.localizedDescription ?: error);
+  }
+}
+
+- (void)reapplyOutputOverrideOnly {
+  AVAudioSession *session = [AVAudioSession sharedInstance];
+  // Output overrides and input preferences only apply to PlayAndRecord;
+  // Playback already routes to the speaker by default and has no input to pin.
+  if (![session.category isEqualToString:AVAudioSessionCategoryPlayAndRecord]) {
+    return;
+  }
+
+  NSString *route = self.requestedAudioRoute ?: @"auto";
+  AVAudioSessionPortOverride override =
+      [route isEqualToString:@"speaker"] ? AVAudioSessionPortOverrideSpeaker
+                                         : AVAudioSessionPortOverrideNone;
+  NSError *error = nil;
+  if (![session overrideOutputAudioPort:override error:&error] || error) {
+    DGLogWarn(@"[Deepgram] reapplyOutputOverrideOnly failed: %@",
+              error.localizedDescription ?: error);
+  }
+
+  // Re-pin (or release) the preferred input so a `bluetooth` request actually
+  // follows the headset across (re)configurations, while every other route
+  // — including `auto` — drops a stale Bluetooth preference.
+  if ([route isEqualToString:@"bluetooth"]) {
+    [self preferBluetoothInputIfAvailable];
+  } else {
+    [self clearPreferredInput];
+  }
+}
+
+- (BOOL)applyRequestedAudioRoute:(NSError **)outError {
+  AVAudioSession *session = [AVAudioSession sharedInstance];
+  NSString *route = self.requestedAudioRoute ?: @"auto";
+
+  // Nothing to override until a PlayAndRecord session is active; the request is
+  // stored and applied automatically on the next (re)configuration via
+  // reapplyOutputOverrideOnly (and the DefaultToSpeaker rule for earpiece).
+  if (!self.audioSessionConfigured ||
+      ![session.category isEqualToString:AVAudioSessionCategoryPlayAndRecord]) {
+    return YES;
+  }
+
+  BOOL aecActive = self.engineCaptureActive || self.voiceProcessingRequested;
+
+  // In the AEC / VoiceChat path DefaultToSpeaker is never part of the category,
+  // so the output override alone selects speaker vs. earpiece — reconfiguring
+  // there risks disturbing VPIO. Only the non-AEC PlayAndRecord ladder carries
+  // DefaultToSpeaker, so `earpiece` needs a category rebuild to drop it.
+  if (!aecActive && [route isEqualToString:@"earpiece"]) {
+    NSError *cfgError = nil;
+    if (![self configureAudioSession:&cfgError]) {
+      if (outError) {
+        *outError = cfgError;
+      }
+      return NO;
+    }
+  }
+
+  AVAudioSessionPortOverride override =
+      [route isEqualToString:@"speaker"] ? AVAudioSessionPortOverrideSpeaker
+                                         : AVAudioSessionPortOverrideNone;
+  NSError *ovError = nil;
+  if (![session overrideOutputAudioPort:override error:&ovError] || ovError) {
+    if (outError) {
+      *outError = ovError;
+    }
+    return NO;
+  }
+
+  if ([route isEqualToString:@"bluetooth"]) {
+    [self preferBluetoothInputIfAvailable];
+  } else {
+    [self clearPreferredInput];
+  }
+
+  return YES;
 }
 
 @end

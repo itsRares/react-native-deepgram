@@ -52,7 +52,20 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     onForegroundServiceRelease = { stopForegroundAudioServiceIfInactive() },
   )
 
+  private val routeManager = AudioRouteManager(
+    context = reactContext,
+    mainHandler = mainHandler,
+    onRouteChange = { route -> sendRouteChange(route) },
+  )
+
   override fun getName() = NAME
+
+  override fun initialize() {
+    super.initialize()
+    // Observe route changes (headphone plug/unplug, Bluetooth connect) for the
+    // module's lifetime so `DeepgramRouteChange` fires even while idle.
+    routeManager.start()
+  }
 
   // -------------------------------------------------------------------
   // Audio focus (AudioFocusManager.Listener)
@@ -127,8 +140,10 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
         it.getBoolean("enableVoiceProcessing")
     } ?: false
 
+    val recordToFilePath = resolveRecordToFilePath(options)
+
     try {
-      recorder.start(enableVoiceProcessing)
+      recorder.start(enableVoiceProcessing, recordToFilePath)
       promise.resolve(null)
     } catch (e: SecurityException) {
       promise.reject("permission_denied", e)
@@ -139,11 +154,40 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     }
   }
 
+  /**
+   * Resolve the WAV destination for a record-to-file session, or null when the
+   * caller did not request one. A caller-supplied `path` wins; otherwise we
+   * generate an app-specific cache path so the result is a shareable file URI.
+   */
+  private fun resolveRecordToFilePath(options: ReadableMap?): String? {
+    val rtf = options?.takeIf { it.hasKey("recordToFile") && !it.isNull("recordToFile") }
+      ?.getMap("recordToFile")
+      ?: return null
+
+    val enabled = rtf.hasKey("enabled") && !rtf.isNull("enabled") && rtf.getBoolean("enabled")
+    if (!enabled) return null
+
+    val custom = if (rtf.hasKey("path") && !rtf.isNull("path")) rtf.getString("path") else null
+    if (!custom.isNullOrEmpty()) return custom
+
+    return java.io.File(
+      reactContext.cacheDir,
+      "deepgram-recording-${System.currentTimeMillis()}.wav"
+    ).absolutePath
+  }
+
   @ReactMethod
   fun stopRecording(promise: Promise) {
     try {
       recorder.stop()
-      promise.resolve(null)
+      val uri = recorder.lastRecordingUri
+      if (uri != null) {
+        val map = WritableNativeMap()
+        map.putString("recordingUri", uri)
+        promise.resolve(map)
+      } else {
+        promise.resolve(null)
+      }
     } catch (e: Exception) {
       Log.e(TAG, "stopRecording error", e)
       promise.reject("stop_error", e)
@@ -191,6 +235,34 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     recorder.setMetering(enabled, intervalMs.toLong())
   }
 
+  // -------------------------------------------------------------------
+  // Audio route / output device control
+  // -------------------------------------------------------------------
+
+  @ReactMethod
+  fun setAudioRoute(route: String, promise: Promise) {
+    try {
+      routeManager.setRoute(route)
+      promise.resolve(null)
+    } catch (e: IllegalArgumentException) {
+      Log.e(TAG, "setAudioRoute invalid route", e)
+      promise.reject("invalid_data", e)
+    } catch (e: Exception) {
+      Log.e(TAG, "setAudioRoute error", e)
+      promise.reject("playback_error", e)
+    }
+  }
+
+  @ReactMethod
+  fun getAudioRoute(promise: Promise) {
+    try {
+      promise.resolve(routeManager.currentRoute())
+    } catch (e: Exception) {
+      Log.e(TAG, "getAudioRoute error", e)
+      promise.reject("playback_error", e)
+    }
+  }
+
   @ReactMethod
   fun feedAudio(base64Audio: String) {
     player.feedAudio(base64Audio)
@@ -226,6 +298,12 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
   }
 
   override fun invalidate() {
+    try {
+      routeManager.stop()
+    } catch (e: Exception) {
+      Log.w(TAG, "Error stopping route observation on invalidate", e)
+    }
+
     try {
       recorder.stop(false)
     } catch (e: Exception) {
@@ -278,6 +356,26 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     } catch (e: Exception) {
       // Catalyst tearing down or JS bundle not ready — drop silently.
       Log.w(TAG, "sendAudioLevel emit failed", e)
+    }
+  }
+
+  /**
+   * Emit the active audio output route to JS as the `DeepgramRouteChange`
+   * event. Uses a single shared event name on both platforms (unlike the
+   * microphone PCM event). Payload: `{ route: 'speaker' | 'earpiece' |
+   * 'bluetooth' | 'wired' }`.
+   */
+  private fun sendRouteChange(route: String) {
+    if (!reactContext.hasActiveReactInstance()) return
+    val map = WritableNativeMap()
+    map.putString("route", route)
+    try {
+      reactContext
+        .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+        .emit("DeepgramRouteChange", map)
+    } catch (e: Exception) {
+      // Catalyst tearing down or JS bundle not ready — drop silently.
+      Log.w(TAG, "sendRouteChange emit failed", e)
     }
   }
 

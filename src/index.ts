@@ -4,6 +4,16 @@ export { useDeepgramManagement } from './useDeepgramManagement';
 export { useDeepgramTextToSpeech } from './useDeepgramTextToSpeech';
 export { useDeepgramVoiceAgent } from './useDeepgramVoiceAgent';
 export { Deepgram } from './NativeDeepgram';
+export type {
+  DeepgramAudioRoute,
+  DeepgramActiveAudioRoute,
+} from './NativeDeepgram';
+export {
+  setAudioRoute,
+  getAudioRoute,
+  addAudioRouteChangeListener,
+} from './audioRoute';
+export type { AudioRouteSubscription } from './audioRoute';
 import type { DeepgramGetToken } from './helpers';
 import { clearCachedAuthToken } from './helpers';
 export {
@@ -13,6 +23,7 @@ export {
   createAgentSettings,
 } from './helpers';
 export type { DeepgramGetToken, DeepgramTokenResult } from './helpers';
+export { DeepgramError } from './types/errors';
 export type * from './types';
 
 /**

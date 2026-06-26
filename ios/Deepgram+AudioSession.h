@@ -25,4 +25,9 @@
 - (void)handleMediaServicesReset:(NSNotification *)note;
 - (void)handleAudioInterruption:(NSNotification *)note;
 
+- (BOOL)applyRequestedAudioRoute:(NSError **)outError;
+- (void)reapplyOutputOverrideOnly;
+- (NSString *)currentAudioRouteString;
+- (void)emitRouteChange;
+
 @end

@@ -1,5 +1,26 @@
 import { NativeModules } from 'react-native';
 
+/**
+ * Options for persisting the captured microphone audio to a file while it is
+ * simultaneously streamed to Deepgram.
+ */
+export interface RecordToFileOptions {
+  /** Enable writing the live microphone capture to a file. */
+  enabled: boolean;
+  /**
+   * Absolute destination path (with or without a `file://` prefix). When
+   * omitted, the native module writes to an app-specific location and returns
+   * the generated `file://` URI from {@link DeepgramNative.stopRecording}.
+   */
+  path?: string;
+  /**
+   * Container format for the recording. Only uncompressed `wav` (16 kHz PCM16
+   * mono) is currently supported; this mirrors the audio that is streamed to
+   * Deepgram.
+   */
+  format?: 'wav';
+}
+
 export interface StartRecordingOptions {
   /**
    * When `true`, the native module configures the platform's hardware echo
@@ -13,11 +34,52 @@ export interface StartRecordingOptions {
    * handling and prefer the unprocessed signal.
    */
   enableVoiceProcessing?: boolean;
+  /**
+   * When provided with `enabled: true`, the native module tees every captured
+   * PCM buffer into an audio file alongside the live Deepgram stream. The
+   * resulting `file://` URI is returned when recording stops via
+   * {@link DeepgramNative.stopRecording}.
+   */
+  recordToFile?: RecordToFileOptions;
 }
+
+/**
+ * Resolved value of {@link DeepgramNative.stopRecording}. Contains the captured
+ * file URI when `recordToFile` was enabled for the session; otherwise `null`.
+ */
+export interface DeepgramRecordingResult {
+  /** `file://` URI of the recorded audio file, when one was produced. */
+  recordingUri?: string;
+}
+
+/**
+ * Preferred audio output route requested via {@link DeepgramNative.setAudioRoute}.
+ *
+ * - `speaker` — force the loudspeaker.
+ * - `earpiece` — force the phone earpiece/receiver (quiet, held-to-ear).
+ * - `bluetooth` — prefer a connected Bluetooth headset (HFP) when available.
+ * - `auto` — clear any override and let the OS pick the default route.
+ *
+ * Routing is best-effort: the operating system can override a request (e.g. a
+ * wired headset always wins) and availability is device-dependent.
+ */
+export type DeepgramAudioRoute = 'speaker' | 'earpiece' | 'bluetooth' | 'auto';
+
+/**
+ * Actual audio output route reported by {@link DeepgramNative.getAudioRoute} and
+ * the `onRouteChange` listener. `wired` covers headphones / USB / HDMI / car
+ * audio, none of which can be selected explicitly (the OS routes to them
+ * automatically when connected).
+ */
+export type DeepgramActiveAudioRoute =
+  | 'speaker'
+  | 'earpiece'
+  | 'bluetooth'
+  | 'wired';
 
 interface DeepgramNative {
   startRecording(options?: StartRecordingOptions): Promise<void>;
-  stopRecording(): Promise<void>;
+  stopRecording(): Promise<DeepgramRecordingResult | null>;
   startAudio(): Promise<void>;
   stopAudio(): Promise<void>;
   playAudioChunk(chunk: string): Promise<void>;
@@ -27,6 +89,8 @@ interface DeepgramNative {
   stopPlayer(): void;
   startPlayer(sampleRate: number, channels?: number): void;
   setMeteringEnabled?: (enabled: boolean, intervalMs?: number) => void;
+  setAudioRoute?: (route: DeepgramAudioRoute) => Promise<void>;
+  getAudioRoute?: () => Promise<DeepgramActiveAudioRoute>;
 }
 
 const LINKING_ERROR = `react-native-deepgram: Native code not linked—did you run “pod install” & rebuild?`;
@@ -80,5 +144,19 @@ export const Deepgram: DeepgramNative = {
     if (typeof NativeDeepgramModule.setMeteringEnabled === 'function') {
       return NativeDeepgramModule.setMeteringEnabled(enabled, intervalMs);
     }
+  },
+  setAudioRoute(route: DeepgramAudioRoute) {
+    if (typeof NativeDeepgramModule.setAudioRoute === 'function') {
+      return NativeDeepgramModule.setAudioRoute(route);
+    }
+    // Older native build without route control — treat as a no-op so callers
+    // don't have to feature-detect.
+    return Promise.resolve();
+  },
+  getAudioRoute() {
+    if (typeof NativeDeepgramModule.getAudioRoute === 'function') {
+      return NativeDeepgramModule.getAudioRoute();
+    }
+    return Promise.resolve('speaker' as DeepgramActiveAudioRoute);
   },
 };

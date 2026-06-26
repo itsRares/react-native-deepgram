@@ -8,6 +8,7 @@ import {
   hasAuthConfigured,
 } from './helpers';
 import { getAgentUrl } from './constants';
+import { toDeepgramError } from './types';
 import type {
   DeepgramVoiceAgentSettings,
   DeepgramVoiceAgentSettingsMessage,
@@ -654,7 +655,7 @@ export function useDeepgramVoiceAgent({
       try {
         socket.send(chunk);
       } catch (err) {
-        onErrorRef.current?.(err);
+        onErrorRef.current?.(toDeepgramError(err));
       }
     },
     [downsampleFactor]
@@ -862,14 +863,14 @@ export function useDeepgramVoiceAgent({
                   );
                 }
 
-                onErrorRef.current?.(new Error(errorMsg));
+                onErrorRef.current?.(toDeepgramError(new Error(errorMsg)));
               }
               break;
             default:
               break;
           }
         } catch (err) {
-          onErrorRef.current?.(err);
+          onErrorRef.current?.(toDeepgramError(err));
         }
         return;
       }
@@ -902,7 +903,7 @@ export function useDeepgramVoiceAgent({
         socket.send(JSON.stringify(message));
         return true;
       } catch (err) {
-        onErrorRef.current?.(err);
+        onErrorRef.current?.(toDeepgramError(err));
         return false;
       }
     },
@@ -944,7 +945,7 @@ export function useDeepgramVoiceAgent({
         socket.send(payload);
         return true;
       } catch (err) {
-        onErrorRef.current?.(err);
+        onErrorRef.current?.(toDeepgramError(err));
         return false;
       }
     },
@@ -1007,7 +1008,7 @@ export function useDeepgramVoiceAgent({
             error: err.message,
           }));
         }
-        onErrorRef.current?.(err);
+        onErrorRef.current?.(toDeepgramError(err));
       } else if (trackState) {
         setInternalState((prev) => ({
           ...prev,
@@ -1080,7 +1081,7 @@ export function useDeepgramVoiceAgent({
         socket.onmessage = handleSocketMessage;
         socket.onerror = (err: any) => {
           if (generation !== wsGenerationRef.current) return;
-          onErrorRef.current?.(err);
+          onErrorRef.current?.(toDeepgramError(err));
         };
         socket.onclose = (event: any) => {
           if (generation !== wsGenerationRef.current) return;
@@ -1089,7 +1090,7 @@ export function useDeepgramVoiceAgent({
       })
       .catch((err) => {
         if (generation !== wsGenerationRef.current) return;
-        const authError = err instanceof Error ? err : new Error(String(err));
+        const authError = toDeepgramError(err);
         onErrorRef.current?.(authError);
         handleAgentDisconnect(undefined, authError);
       });

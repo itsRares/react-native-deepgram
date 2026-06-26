@@ -14,7 +14,7 @@ yarn add react-native-deepgram
 | | |
 | --- | --- |
 | 🗣️ **Voice Agent** | Full-duplex agents over Deepgram's WebSocket. Hardware AEC on iOS (VPIO) and Android (`VOICE_COMMUNICATION` + `MODE_IN_COMMUNICATION`). Function calling, prompt updates, latency telemetry. |
-| 🎙️ **Speech-to-Text** | Live PCM streaming over WebSocket on STT v1 *or* Flux v2 (`flux-general-en`). File transcription with summarisation, topics, intents, entities. |
+| 🎙️ **Speech-to-Text** | Live PCM streaming over WebSocket on STT v1 *or* Flux v2 (`flux-general-en`). File transcription with summarisation, topics, intents, entities. Optionally record the mic to a WAV file while you stream. |
 | 🔊 **Text-to-Speech** | One-shot HTTP synthesis or low-latency WebSocket streaming with `Speak` / `Flush` / `Clear` / `Close` controls. |
 | 🧠 **Text Intelligence** | Summaries, topics, intents, sentiment over text or URLs. |
 | 🛠️ **Management API** | Typed wrapper for projects, models, keys, usage, balances, members, invitations, scopes, purchases, and temporary tokens. |
@@ -311,6 +311,26 @@ For tuning details, see [Audio session, AEC & background](#audio-session-aec--ba
 | `useDeepgramTextIntelligence` | Summaries, topics, intents, sentiment | `https://api.deepgram.com/v1/read` |
 | `useDeepgramManagement` | Projects / keys / usage REST API | `https://api.deepgram.com/v1` |
 
+### 5. Typed errors
+
+Every error the hooks surface — mic-permission denials, native start/stop failures, fetch and WebSocket errors — is normalized to a `DeepgramError` with a typed `code`, so you can branch on a stable enum instead of string-matching messages. The original failure is preserved on `cause`.
+
+```ts
+import { DeepgramError, type DeepgramErrorCode } from 'react-native-deepgram';
+
+useDeepgramSpeechToText({
+  onError: (err) => {
+    if (err instanceof DeepgramError && err.code === 'permission_denied') {
+      promptForMicAccess();
+    }
+  },
+});
+```
+
+The `code` is one of the native reject codes (or `'unknown'` when it can't be mapped):
+
+`permission_denied` · `init_failed` · `start_error` · `stop_error` · `audio_start_error` · `audio_stop_error` · `stop_player_error` · `invalid_data` · `playback_error`
+
 ---
 
 ## Audio session, AEC & background
@@ -354,6 +374,34 @@ The native modules handle the awkward edge cases for you:
 - **Bluetooth on iOS 17+** — uses `AllowBluetoothHFP` when available, with a deprecation-safe fallback for older toolchains.
 - **iOS 17+ permission API** — `requestMicPermission` calls `AVAudioApplication.requestRecordPermissionWithCompletionHandler` when available, falling back to `AVAudioSession` on older OS versions.
 - **Bounded playback queue (Android)** — if JS feeds audio faster than the device can play it, the oldest chunks are dropped at ~1.5 MB so you never OOM mid-call.
+
+### Output route control
+
+For call-style UX (Voice Agent, TTS playback) you can steer audio to the speaker, the earpiece, or a connected Bluetooth headset. These are top-level exports that act on the shared audio session, independent of any hook.
+
+```ts
+import {
+  setAudioRoute,
+  getAudioRoute,
+  addAudioRouteChangeListener,
+} from 'react-native-deepgram';
+
+await setAudioRoute('speaker'); // 'speaker' | 'earpiece' | 'bluetooth' | 'auto'
+const active = await getAudioRoute(); // 'speaker' | 'earpiece' | 'bluetooth' | 'wired'
+
+const sub = addAudioRouteChangeListener((route) => {
+  console.log('audio now playing through', route);
+});
+// later: sub.remove();
+```
+
+| Export | Signature | Notes |
+| --- | --- | --- |
+| `setAudioRoute` | `(route: DeepgramAudioRoute) => Promise<void>` | Request a preferred output. The override is sticky across playback/recording restarts until you change it or pass `'auto'`. |
+| `getAudioRoute` | `() => Promise<DeepgramActiveAudioRoute>` | The route the system is *actually* using right now. |
+| `addAudioRouteChangeListener` | `(listener: (route: DeepgramActiveAudioRoute) => void) => AudioRouteSubscription` | Fires on headphone plug/unplug, Bluetooth connect/disconnect, and speaker↔earpiece switches. |
+
+Routing is **best-effort and device-dependent**: the OS can override a request (a wired headset always wins), `bluetooth` only applies when a compatible headset is connected, and the routing APIs avoid fighting the active AEC session during a Voice Agent call. `DeepgramAudioRoute` is what you can *request* (`speaker` / `earpiece` / `bluetooth` / `auto`); `DeepgramActiveAudioRoute` is what can actually be *active* (`speaker` / `earpiece` / `bluetooth` / `wired`).
 
 ---
 
@@ -676,7 +724,7 @@ const {
   // File transcription
   transcribeFile,
   // Reactive state (opt-in)
-  state, transcript, interimTranscript, isPaused, audioLevel,
+  state, transcript, interimTranscript, isPaused, audioLevel, recordingUri,
 } = useDeepgramSpeechToText(props);
 ```
 
@@ -690,6 +738,7 @@ const {
 | `prerecorded` | `DeepgramPrerecordedOptions` | Default options merged into every file transcription. |
 | `reconnect` | `DeepgramReconnectOptions` | Auto-reconnect config for the live socket. Disabled unless `reconnect.enabled` is `true`. |
 | `metering` | `{ enabled?: boolean; intervalMs?: number }` | Microphone audio-level (VU meter) events. Disabled by default; set `enabled: true` to emit a normalized RMS level (~10 Hz, tune with `intervalMs`). |
+| `recordToFile` | `{ enabled?: boolean; path?: string; format?: 'wav' }` | Persist the captured mic audio to a WAV file while it streams. Disabled by default. Omit `path` to let the native module pick an app-specific location. |
 
 **Live streaming callbacks**
 
@@ -700,6 +749,7 @@ const {
 | `onTranscript` | `(transcript: string, event?: DeepgramTranscriptEvent) => void` | Every transcript update (partial and final). |
 | `onError` | `(error: unknown) => void` | A streaming error occurs. |
 | `onAudioLevel` | `(level: number) => void` | A new mic audio level (`0..1` normalized RMS) is available. Requires `metering.enabled`. |
+| `onRecordingComplete` | `(uri: string) => void` | A `recordToFile` session finished; receives the `file://` URI of the saved WAV. Requires `recordToFile.enabled`. |
 | `onReconnecting` | `(attempt: number) => void` | A reconnect attempt begins (1-based attempt number). Requires `reconnect.enabled`. |
 | `onReconnected` | `() => void` | The live socket successfully reconnects. |
 | `onEnd` | `() => void` | The socket closes (manual stop, or after reconnect attempts are exhausted). |
@@ -736,6 +786,7 @@ const {
 | `state` | `{ status: 'idle' \| 'loading' \| 'listening' \| 'transcribing' \| 'error'; error: Error \| null }` | `trackState: true` |
 | `isPaused` | `boolean` | `trackState: true` |
 | `audioLevel` | `number` (0..1 normalized RMS) | `trackState: true` + `metering.enabled` |
+| `recordingUri` | `string` (last saved `file://` WAV) | `trackState: true` + `recordToFile.enabled` |
 | `transcript` | `string` | `trackTranscript: true` |
 | `interimTranscript` | `string` | `trackTranscript: true` |
 
@@ -1406,6 +1457,66 @@ const pick = async () => {
 };
 ```
 
+### Record the mic to a file while transcribing
+
+Persist the captured audio to a WAV file *and* get the live transcript at the
+same time. The `file://` URI arrives via `onRecordingComplete` (and, with
+`trackState`, as `recordingUri`) once `stopListening()` finishes writing.
+
+```tsx
+import { useDeepgramSpeechToText } from 'react-native-deepgram';
+
+const { startListening, stopListening, recordingUri } =
+  useDeepgramSpeechToText({
+    trackState: true,
+    recordToFile: { enabled: true }, // omit `path` to use an app-specific file
+    onTranscript: (text) => console.log(text),
+    onRecordingComplete: (uri) => {
+      console.log('saved recording at', uri); // file:///.../deepgram-….wav
+    },
+  });
+
+// start, talk, then:
+stopListening(); // onRecordingComplete fires with the finalized WAV
+```
+
+> Want a specific destination? Pass a `path` (with or without a `file://`
+> prefix) — e.g. from `expo-file-system`'s `documentDirectory`. Only
+> uncompressed `wav` is supported today.
+
+### Route call audio to the speaker, earpiece, or Bluetooth
+
+```tsx
+import { useEffect, useState } from 'react';
+import {
+  setAudioRoute,
+  getAudioRoute,
+  addAudioRouteChangeListener,
+} from 'react-native-deepgram';
+
+function useAudioRoute() {
+  const [route, setRoute] = useState('speaker');
+
+  useEffect(() => {
+    getAudioRoute().then(setRoute).catch(() => {});
+    const sub = addAudioRouteChangeListener(setRoute);
+    return () => sub.remove();
+  }, []);
+
+  return {
+    route, // the route currently in use
+    toSpeaker: () => setAudioRoute('speaker'),
+    toEarpiece: () => setAudioRoute('earpiece'),
+    toBluetooth: () => setAudioRoute('bluetooth'),
+    auto: () => setAudioRoute('auto'),
+  };
+}
+```
+
+> Routing is best-effort: the OS can override you (a wired headset always wins)
+> and `bluetooth` needs a connected headset. `getAudioRoute()` always reports the
+> route actually in use.
+
 ### Voice Agent with a client-side function
 
 ```tsx
@@ -1541,6 +1652,29 @@ const newKey = await dg.keys.create('project_id', {
 });
 console.log('temp token =', newKey.key);
 ```
+
+### Handle errors by typed code
+
+```tsx
+import { useDeepgramVoiceAgent, DeepgramError } from 'react-native-deepgram';
+
+useDeepgramVoiceAgent({
+  onError: (err) => {
+    const code = err instanceof DeepgramError ? err.code : 'unknown';
+    switch (code) {
+      case 'permission_denied':
+        return promptForMicAccess();
+      case 'playback_error':
+        return toast('Audio output failed — check the route and volume.');
+      default:
+        return console.error('Deepgram error', code, err);
+    }
+  },
+});
+```
+
+> `DeepgramError.code` is a `DeepgramErrorCode | 'unknown'`, and the underlying
+> failure is always kept on `DeepgramError.cause`.
 
 ---
 
@@ -1685,6 +1819,10 @@ If the app gets into a weird state, `yarn example:clean` wipes the generated nat
 - ✅ Hardware echo cancellation (iOS VPIO + Android `VOICE_COMMUNICATION`)
 - ✅ Background-audio support (iOS `UIBackgroundModes` + Android foreground service)
 - ✅ iOS 17+ permission API (`AVAudioApplication`) and Bluetooth option (`AllowBluetoothHFP`)
+- ✅ Microphone audio-level / metering events
+- ✅ Record the microphone to a WAV file while streaming
+- ✅ Audio output route control (speaker / earpiece / Bluetooth) with route-change events
+- ✅ Typed error codes (`DeepgramError` / `DeepgramErrorCode`)
 - 🚧 Detox E2E tests for the example app
 
 ---

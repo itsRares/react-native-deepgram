@@ -6,6 +6,7 @@ import type {
 } from './types';
 import { getBaseUrl } from './constants';
 import { buildParams, resolveAuthHeader } from './helpers';
+import { toDeepgramError } from './types';
 
 export function useDeepgramTextIntelligence({
   onBeforeAnalyze = () => {},
@@ -113,11 +114,12 @@ export function useDeepgramTextIntelligence({
         }
       } catch (err: any) {
         if (err.name === 'AbortError') return;
-        onAnalyzeErrorRef.current(err);
+        const dgError = toDeepgramError(err);
+        onAnalyzeErrorRef.current(dgError);
         if (trackState) {
           setInternalState({
             status: 'error',
-            error: err instanceof Error ? err : new Error(String(err)),
+            error: dgError,
           });
         }
       }

@@ -4,13 +4,17 @@ import {
   Animated,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   View,
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
-import { useDeepgramSpeechToText } from 'react-native-deepgram';
+import * as FileSystem from 'expo-file-system';
+import { DeepgramError, useDeepgramSpeechToText } from 'react-native-deepgram';
 import Button from './components/Button';
 import Card from './components/Card';
+import Field from './components/Field';
+import OptionSelect from './components/OptionSelect';
 import StatusBadge from './components/StatusBadge';
 import { colors, radius, spacing, type } from './theme';
 
@@ -21,6 +25,23 @@ export default function SpeechToText() {
   const [pickedFileName, setPickedFileName] = useState<string | null>(null);
   const [reconnectAttempt, setReconnectAttempt] = useState<number | null>(null);
 
+  // Record-to-file is opt-in: the user chooses whether to save and where.
+  const [recordEnabled, setRecordEnabled] = useState(false);
+  const [recordFolder, setRecordFolder] = useState<'documents' | 'cache'>(
+    'documents'
+  );
+  const [recordFileName, setRecordFileName] = useState(
+    'deepgram-recording.wav'
+  );
+
+  const recordDir =
+    recordFolder === 'cache'
+      ? FileSystem.cacheDirectory
+      : FileSystem.documentDirectory;
+  const safeRecordName =
+    recordFileName.trim().replace(/[/\\]/g, '') || 'deepgram-recording.wav';
+  const recordPath = `${recordDir ?? ''}${safeRecordName}`;
+
   const {
     startListening,
     stopListening,
@@ -29,10 +50,12 @@ export default function SpeechToText() {
     state: liveState,
     isPaused,
     audioLevel,
+    recordingUri,
   } = useDeepgramSpeechToText({
     trackState: true,
     reconnect: { enabled: true },
     metering: { enabled: true },
+    recordToFile: { enabled: recordEnabled, path: recordPath },
     onBeforeStart: () => {
       setLiveTranscript('');
       setLiveInterimTranscript('');
@@ -58,6 +81,9 @@ export default function SpeechToText() {
     onEnd: () => {
       setLiveInterimTranscript('');
       setReconnectAttempt(null);
+    },
+    onRecordingComplete: (uri) => {
+      console.log('Saved mic recording to', uri);
     },
     live: {
       model: 'nova-3',
@@ -275,6 +301,21 @@ export default function SpeechToText() {
                 🎚 Live level
               </Text>
             </View>
+            <View
+              style={[
+                styles.capabilityChip,
+                recordEnabled && styles.capabilityChipActive,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.capabilityChipText,
+                  recordEnabled && styles.capabilityChipTextActive,
+                ]}
+              >
+                💾 Record to file
+              </Text>
+            </View>
           </View>
 
           <View style={styles.heroActions}>
@@ -308,6 +349,57 @@ export default function SpeechToText() {
           </View>
         </View>
 
+        {/* Record-to-file: opt in and choose where to save */}
+        <Card
+          title="Record to file"
+          subtitle="Optionally save the mic audio to a WAV while you stream"
+        >
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>Save this session to a file</Text>
+            <Switch
+              value={recordEnabled}
+              onValueChange={setRecordEnabled}
+              disabled={sessionActive}
+              thumbColor={recordEnabled ? colors.success : '#888'}
+              trackColor={{
+                false: colors.surfaceMuted,
+                true: colors.accentMuted,
+              }}
+            />
+          </View>
+
+          {recordEnabled ? (
+            <>
+              <OptionSelect
+                label="Destination folder"
+                value={recordFolder}
+                onChange={(v) =>
+                  setRecordFolder(v === 'cache' ? 'cache' : 'documents')
+                }
+                options={[
+                  { label: 'App documents', value: 'documents' },
+                  { label: 'App cache', value: 'cache' },
+                ]}
+              />
+              <Field
+                label="File name"
+                value={recordFileName}
+                onChangeText={setRecordFileName}
+                editable={!sessionActive}
+                autoCapitalize="none"
+                autoCorrect={false}
+                placeholder="deepgram-recording.wav"
+                hint={`Saves to: ${recordPath}`}
+              />
+            </>
+          ) : (
+            <Text style={styles.recordHint}>
+              Off by default — turn this on to keep a copy of the audio. You
+              pick the folder and file name before you start listening.
+            </Text>
+          )}
+        </Card>
+
         {isReconnecting ? (
           <View style={styles.reconnectBanner}>
             <Text style={styles.reconnectText}>
@@ -318,7 +410,22 @@ export default function SpeechToText() {
 
         {liveState?.error ? (
           <View style={styles.errorBanner}>
-            <Text style={styles.errorText}>⚠ {liveState.error.message}</Text>
+            <Text style={styles.errorText}>
+              ⚠{' '}
+              {liveState.error instanceof DeepgramError
+                ? `[${liveState.error.code}] `
+                : ''}
+              {liveState.error.message}
+            </Text>
+          </View>
+        ) : null}
+
+        {recordingUri && !sessionActive ? (
+          <View style={styles.recordingBanner}>
+            <Text style={styles.recordingBannerTitle}>💾 Recording saved</Text>
+            <Text style={styles.recordingBannerPath} numberOfLines={1}>
+              {recordingUri}
+            </Text>
           </View>
         ) : null}
 
@@ -524,6 +631,39 @@ const styles = StyleSheet.create({
   errorText: {
     color: colors.danger,
     ...type.smallMedium,
+  },
+  recordingBanner: {
+    backgroundColor: '#10241c',
+    borderColor: colors.success,
+    borderWidth: 1,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  recordingBannerTitle: {
+    color: colors.success,
+    ...type.smallMedium,
+    marginBottom: 2,
+  },
+  recordingBannerPath: {
+    ...type.mono,
+    color: colors.textMuted,
+  },
+  switchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.md,
+  },
+  switchLabel: {
+    ...type.body,
+    color: colors.text,
+    flex: 1,
+    marginRight: spacing.md,
+  },
+  recordHint: {
+    ...type.small,
+    color: colors.textDim,
   },
   transcript: {
     ...type.body,

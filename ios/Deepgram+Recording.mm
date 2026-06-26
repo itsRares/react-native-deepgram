@@ -57,6 +57,37 @@ void DGHandleInputBuffer(
   }
 }
 
+/**
+ * Build a canonical 44-byte little-endian WAV/RIFF header for `dataBytes` of
+ * uncompressed PCM. Apple platforms are little-endian so the integer fields are
+ * written directly. Used both for the placeholder header (dataBytes = 0) and to
+ * patch the real sizes when recording stops.
+ */
+static NSData *DGMakeWavHeader(uint32_t sampleRate, uint16_t channels,
+                               uint16_t bitsPerSample, uint32_t dataBytes) {
+  uint32_t byteRate = sampleRate * channels * (bitsPerSample / 8);
+  uint16_t blockAlign = (uint16_t)(channels * (bitsPerSample / 8));
+  uint32_t chunkSize = 36 + dataBytes;
+  uint32_t subchunk1Size = 16;
+  uint16_t audioFormat = 1; // PCM
+
+  NSMutableData *header = [NSMutableData dataWithCapacity:44];
+  [header appendBytes:"RIFF" length:4];
+  [header appendBytes:&chunkSize length:4];
+  [header appendBytes:"WAVE" length:4];
+  [header appendBytes:"fmt " length:4];
+  [header appendBytes:&subchunk1Size length:4];
+  [header appendBytes:&audioFormat length:2];
+  [header appendBytes:&channels length:2];
+  [header appendBytes:&sampleRate length:4];
+  [header appendBytes:&byteRate length:4];
+  [header appendBytes:&blockAlign length:2];
+  [header appendBytes:&bitsPerSample length:2];
+  [header appendBytes:"data" length:4];
+  [header appendBytes:&dataBytes length:4];
+  return header;
+}
+
 @implementation Deepgram (Recording)
 
 - (void)emitPCMChunk:(NSData *)chunk sampleRate:(int)sampleRate {
@@ -164,6 +195,19 @@ void DGHandleInputBuffer(
   // throttled and gated independently and never alters the PCM payload.
   [self emitAudioLevelForPCM:pcmData];
 
+  // Tee the captured PCM to the WAV file. On a write failure (e.g. disk full)
+  // we stop teeing but keep streaming so transcription is unaffected.
+  if (self.recordToFileEnabled && self.recordFileHandle) {
+    @try {
+      [self.recordFileHandle writeData:pcmData];
+      self.recordFileDataBytes += (unsigned long long)pcmData.length;
+    } @catch (NSException *e) {
+      DGLogWarn(
+          @"[Deepgram] appendPCMDataAndEmitIfNeeded: file write failed %@", e);
+      self.recordToFileEnabled = NO;
+    }
+  }
+
   if (!self.pendingPCMBuffer) {
     DGLogDebug(
         @"[Deepgram] appendPCMDataAndEmitIfNeeded: allocate pending buffer");
@@ -232,9 +276,140 @@ void DGHandleInputBuffer(
   [self maybeDeactivateAudioSession];
 }
 
-/* ================================================================== */
-/*  1.  MICROPHONE CAPTURE (16 kHz PCM16 emission)                     */
-/* ================================================================== */
+- (BOOL)beginRecordingToFileIfRequested:(NSDictionary *)options
+                                  error:(NSError **)outError {
+  if (![options isKindOfClass:[NSDictionary class]]) {
+    return YES; // nothing requested
+  }
+  id enabledRaw = options[@"enabled"];
+  BOOL enabled =
+      [enabledRaw isKindOfClass:[NSNumber class]] && [enabledRaw boolValue];
+  if (!enabled) {
+    return YES;
+  }
+
+  // Close any stale handle from a previous, incompletely stopped session.
+  [self discardRecordingFile];
+
+  // Resolve the destination path. A caller-supplied `path` (with or without a
+  // file:// scheme) wins; otherwise write to an app-specific temporary file.
+  NSString *path = nil;
+  id rawPath = options[@"path"];
+  if ([rawPath isKindOfClass:[NSString class]] &&
+      [(NSString *)rawPath length] > 0) {
+    NSString *candidate = (NSString *)rawPath;
+    if ([candidate hasPrefix:@"file://"]) {
+      NSURL *url = [NSURL URLWithString:candidate];
+      candidate = url.path ?: [candidate substringFromIndex:7];
+    }
+    path = candidate;
+  } else {
+    NSString *name =
+        [NSString stringWithFormat:@"deepgram-recording-%.0f.wav",
+                                   [[NSDate date] timeIntervalSince1970] * 1000];
+    path = [NSTemporaryDirectory() stringByAppendingPathComponent:name];
+  }
+
+  NSFileManager *fm = [NSFileManager defaultManager];
+  NSString *dir = [path stringByDeletingLastPathComponent];
+  NSError *dirError = nil;
+  if (dir.length > 0 && ![fm fileExistsAtPath:dir]) {
+    [fm createDirectoryAtPath:dir
+        withIntermediateDirectories:YES
+                         attributes:nil
+                              error:&dirError];
+  }
+
+  // (Re)create the file and write the placeholder header (data size = 0).
+  NSData *header = DGMakeWavHeader((uint32_t)MAX(1, self.currentSampleRate), 1,
+                                   16, 0);
+  if (![fm createFileAtPath:path contents:header attributes:nil]) {
+    if (outError) {
+      *outError = DGNativeError(
+          @"DeepgramRecordToFile", -1,
+          [NSString stringWithFormat:@"Unable to create recording file at %@",
+                                     path]);
+    }
+    return NO;
+  }
+
+  NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
+  if (!handle) {
+    if (outError) {
+      *outError = DGNativeError(
+          @"DeepgramRecordToFile", -2,
+          [NSString stringWithFormat:@"Unable to open recording file at %@",
+                                     path]);
+    }
+    return NO;
+  }
+  [handle seekToEndOfFile];
+
+  self.recordFilePath = path;
+  self.recordFileHandle = handle;
+  self.recordFileDataBytes = 0;
+  self.recordToFileEnabled = YES;
+  DGLogDebug(@"[Deepgram] beginRecordingToFile: writing to %@", path);
+  return YES;
+}
+
+- (NSString *)finishRecordingToFile {
+  NSFileHandle *handle = self.recordFileHandle;
+  NSString *path = self.recordFilePath;
+  self.recordToFileEnabled = NO;
+  self.recordFileHandle = nil;
+  self.recordFilePath = nil;
+
+  if (!handle || path.length == 0) {
+    self.recordFileDataBytes = 0;
+    return nil;
+  }
+
+  uint32_t dataBytes = (uint32_t)self.recordFileDataBytes;
+  self.recordFileDataBytes = 0;
+
+  @try {
+    // Rewrite the full header now that the final size and sample rate are known.
+    NSData *header =
+        DGMakeWavHeader((uint32_t)MAX(1, self.currentSampleRate), 1, 16,
+                        dataBytes);
+    [handle seekToFileOffset:0];
+    [handle writeData:header];
+    [handle closeFile];
+  } @catch (NSException *e) {
+    DGLogWarn(@"[Deepgram] finishRecordingToFile: header patch failed %@", e);
+    @try {
+      [handle closeFile];
+    } @catch (__unused NSException *ignored) {
+    }
+  }
+
+  NSString *uri = [[NSURL fileURLWithPath:path] absoluteString];
+  DGLogDebug(@"[Deepgram] finishRecordingToFile: %@ (%u data bytes)", uri,
+             (unsigned int)dataBytes);
+  return uri;
+}
+
+- (void)discardRecordingFile {
+  NSFileHandle *handle = self.recordFileHandle;
+  NSString *path = self.recordFilePath;
+  self.recordToFileEnabled = NO;
+  self.recordFileHandle = nil;
+  self.recordFilePath = nil;
+  self.recordFileDataBytes = 0;
+
+  if (handle) {
+    @try {
+      [handle closeFile];
+    } @catch (__unused NSException *e) {
+    }
+  }
+  if (path.length > 0) {
+    [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
+  }
+}
+
+
 
 /**
  * Engine-based microphone capture path used when the JS side opts in to

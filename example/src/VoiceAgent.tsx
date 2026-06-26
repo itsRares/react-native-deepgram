@@ -10,6 +10,14 @@ import {
 import {
   useDeepgramVoiceAgent,
   createAgentSettings,
+  setAudioRoute,
+  getAudioRoute,
+  addAudioRouteChangeListener,
+  DeepgramError,
+} from 'react-native-deepgram';
+import type {
+  DeepgramAudioRoute,
+  DeepgramActiveAudioRoute,
 } from 'react-native-deepgram';
 import OptionSelect from './components/OptionSelect';
 import Button from './components/Button';
@@ -41,6 +49,24 @@ const SAMPLE_RATE_OPTIONS = [
   { label: '8 kHz (lower quality)', value: '8000' },
 ];
 
+const ROUTE_OPTIONS: {
+  label: string;
+  value: DeepgramAudioRoute;
+  icon: string;
+}[] = [
+  { label: 'Speaker', value: 'speaker', icon: '🔊' },
+  { label: 'Earpiece', value: 'earpiece', icon: '📞' },
+  { label: 'Bluetooth', value: 'bluetooth', icon: '🎧' },
+  { label: 'Auto', value: 'auto', icon: '🔀' },
+];
+
+const ROUTE_LABELS: Record<DeepgramActiveAudioRoute, string> = {
+  speaker: 'Speaker',
+  earpiece: 'Earpiece',
+  bluetooth: 'Bluetooth',
+  wired: 'Wired',
+};
+
 export default function VoiceAgent() {
   const [language, setLanguage] = useState('en');
   const [listenModel, setListenModel] = useState('nova-3');
@@ -55,6 +81,9 @@ export default function VoiceAgent() {
   const [temperature, setTemperature] = useState('0.7');
   const [customMessage, setCustomMessage] = useState('');
   const [reconnectAttempt, setReconnectAttempt] = useState<number | null>(null);
+  const [activeRoute, setActiveRoute] =
+    useState<DeepgramActiveAudioRoute>('speaker');
+  const [errorCode, setErrorCode] = useState<string | null>(null);
 
   const agentSettings = useMemo(
     () =>
@@ -109,6 +138,9 @@ export default function VoiceAgent() {
     onReconnected: () => {
       setReconnectAttempt(null);
     },
+    onError: (err) => {
+      setErrorCode(err instanceof DeepgramError ? err.code : 'unknown');
+    },
   });
 
   const connectionState = state?.connectionState ?? 'idle';
@@ -150,12 +182,39 @@ export default function VoiceAgent() {
     }
   }, [conversation?.length]);
 
+  // Reflect and observe the active audio output route.
+  useEffect(() => {
+    let mounted = true;
+    getAudioRoute()
+      .then((route) => {
+        if (mounted) setActiveRoute(route);
+      })
+      .catch(() => {});
+    const sub = addAudioRouteChangeListener((route) => {
+      if (mounted) setActiveRoute(route);
+    });
+    return () => {
+      mounted = false;
+      sub.remove();
+    };
+  }, []);
+
   const startAgent = async () => {
     try {
       setReconnectAttempt(null);
+      setErrorCode(null);
       await connect();
     } catch (err) {
       console.error('Start agent failed', err);
+    }
+  };
+
+  const changeRoute = async (route: DeepgramAudioRoute) => {
+    try {
+      await setAudioRoute(route);
+      setActiveRoute(await getAudioRoute());
+    } catch (err) {
+      setErrorCode(err instanceof DeepgramError ? err.code : 'unknown');
     }
   };
 
@@ -369,7 +428,10 @@ export default function VoiceAgent() {
 
         {state?.error ? (
           <View style={styles.errorBanner}>
-            <Text style={styles.errorText}>⚠ {state.error}</Text>
+            <Text style={styles.errorText}>
+              ⚠ {errorCode ? `[${errorCode}] ` : ''}
+              {state.error}
+            </Text>
           </View>
         ) : null}
         {state?.warning ? (
@@ -426,6 +488,32 @@ export default function VoiceAgent() {
               })
             )}
           </ScrollView>
+        </Card>
+
+        {/* Audio output route */}
+        <Card
+          title="Audio output"
+          subtitle="Route the agent's voice to a device"
+          right={
+            <Text style={styles.routePill}>{ROUTE_LABELS[activeRoute]}</Text>
+          }
+        >
+          <View style={styles.routeRow}>
+            {ROUTE_OPTIONS.map((opt) => (
+              <Button
+                key={opt.value}
+                title={opt.label}
+                variant={activeRoute === opt.value ? 'primary' : 'secondary'}
+                size="sm"
+                iconLeft={opt.icon}
+                onPress={() => changeRoute(opt.value)}
+              />
+            ))}
+          </View>
+          <Text style={styles.routeHint}>
+            Best-effort & device-dependent — the OS may override (a wired
+            headset always wins) and Bluetooth needs a connected headset.
+          </Text>
         </Card>
 
         {/* Send a manual message */}
@@ -818,5 +906,24 @@ const styles = StyleSheet.create({
     color: colors.text,
     flex: 1,
     marginRight: spacing.md,
+  },
+  routeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  routeHint: {
+    ...type.small,
+    color: colors.textDim,
+    marginTop: spacing.md,
+  },
+  routePill: {
+    ...type.smallMedium,
+    color: colors.accent,
+    backgroundColor: colors.accentMuted,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: radius.pill,
+    overflow: 'hidden',
   },
 });

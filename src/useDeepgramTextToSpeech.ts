@@ -17,6 +17,7 @@ import type {
 } from './types';
 import { getBaseUrl, getBaseWss } from './constants';
 import { buildParams, arrayBufferToBase64, resolveAuthHeader } from './helpers';
+import { toDeepgramError } from './types';
 
 const DEFAULT_TTS_MODEL = 'aura-2-asteria-en';
 const DEFAULT_TTS_SAMPLE_RATE = 24_000;
@@ -359,14 +360,15 @@ export function useDeepgramTextToSpeech({
           throw err;
         }
 
-        onSynthesizeErrorRef.current(err);
+        const dgError = toDeepgramError(err);
+        onSynthesizeErrorRef.current(dgError);
         if (trackState) {
           setInternalState({
             status: 'error',
-            error: err instanceof Error ? err : new Error(String(err)),
+            error: dgError,
           });
         }
-        throw err;
+        throw dgError;
       }
     },
     [resolvedHttpOptions, trackState]
@@ -473,11 +475,12 @@ export function useDeepgramTextToSpeech({
         ws.current.send(JSON.stringify(normalizedMessage));
         return true;
       } catch (err) {
-        onStreamErrorRef.current(err);
+        const dgError = toDeepgramError(err);
+        onStreamErrorRef.current(dgError);
         if (trackState) {
           setInternalState({
             status: 'error',
-            error: err instanceof Error ? err : new Error(String(err)),
+            error: dgError,
           });
         }
         return false;
@@ -637,13 +640,14 @@ export function useDeepgramTextToSpeech({
                   const code =
                     err && typeof err.code === 'string' ? err.code : undefined;
 
-                  onStreamErrorRef.current(
+                  const dgError = toDeepgramError(
                     new Error(description ?? code ?? 'TTS error')
                   );
+                  onStreamErrorRef.current(dgError);
                   if (trackState) {
                     setInternalState({
                       status: 'error',
-                      error: new Error(description ?? code ?? 'TTS error'),
+                      error: dgError,
                     });
                   }
                   break;
@@ -659,11 +663,12 @@ export function useDeepgramTextToSpeech({
         };
 
         socket.onerror = (err) => {
-          onStreamErrorRef.current(err);
+          const dgError = toDeepgramError(err);
+          onStreamErrorRef.current(dgError);
           if (trackState) {
             setInternalState({
               status: 'error',
-              error: err instanceof Error ? err : new Error(String(err)),
+              error: dgError,
             });
           }
         };
@@ -675,15 +680,16 @@ export function useDeepgramTextToSpeech({
           closeStream();
         };
       } catch (err) {
-        onStreamErrorRef.current(err);
+        const dgError = toDeepgramError(err);
+        onStreamErrorRef.current(dgError);
         if (trackState) {
           setInternalState({
             status: 'error',
-            error: err instanceof Error ? err : new Error(String(err)),
+            error: dgError,
           });
         }
         closeStream();
-        throw err;
+        throw dgError;
       }
     },
     [resolvedStreamOptions, sendText, autoPlayAudio, closeStream, trackState]
@@ -697,11 +703,12 @@ export function useDeepgramTextToSpeech({
         onStreamEndRef.current();
       }
     } catch (err) {
-      onStreamErrorRef.current(err);
+      const dgError = toDeepgramError(err);
+      onStreamErrorRef.current(dgError);
       if (trackState) {
         setInternalState({
           status: 'error',
-          error: err instanceof Error ? err : new Error(String(err)),
+          error: dgError,
         });
       }
     }

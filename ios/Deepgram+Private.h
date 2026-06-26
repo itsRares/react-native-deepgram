@@ -46,6 +46,22 @@
 @property(atomic, assign) NSTimeInterval meteringIntervalSeconds;
 @property(atomic, assign) NSTimeInterval lastMeterEmitTime;
 
+// Record-to-file. When `recordToFileEnabled` is YES the shared
+// capture sink tees every captured 16 kHz PCM16 mono buffer into a WAV file
+// alongside the live Deepgram stream. The RIFF/`data` sizes (and the final
+// sample rate) are patched into the 44-byte header when recording stops.
+// Writes happen on the capture thread (single producer); finalization runs
+// after the capture queue/engine has been stopped, so no lock is required.
+@property(nonatomic, strong) NSFileHandle *recordFileHandle;
+@property(nonatomic, copy) NSString *recordFilePath;
+@property(atomic, assign) BOOL recordToFileEnabled;
+@property(atomic, assign) unsigned long long recordFileDataBytes;
+
+// User-requested audio output route: `speaker` / `earpiece` / `bluetooth` /
+// `auto` (nil means `auto`). Re-applied after every session (re)configuration
+// so it survives playback/recording restarts.
+@property(atomic, copy) NSString *requestedAudioRoute;
+
 // Playback / TTS (AVAudioEngine-based with echo cancellation)
 @property(nonatomic, strong) AVAudioEngine *audioEngine;
 @property(nonatomic, strong) AVAudioPlayerNode *playerNode;

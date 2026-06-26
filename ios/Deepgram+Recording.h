@@ -18,6 +18,11 @@
 - (BOOL)startEngineCaptureAndReturnError:(NSError **)outError;
 - (void)stopEngineCapture;
 
+- (BOOL)beginRecordingToFileIfRequested:(nullable NSDictionary *)options
+                                  error:(NSError *_Nullable *_Nullable)outError;
+- (nullable NSString *)finishRecordingToFile;
+- (void)discardRecordingFile;
+
 @end
 
 /**

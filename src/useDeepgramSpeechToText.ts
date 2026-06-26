@@ -12,6 +12,7 @@ import type {
 } from './types';
 import { getBaseUrl, getBaseWss, getV2BaseWss } from './constants';
 import { buildParams, resolveAuthHeader, hasAuthConfigured } from './helpers';
+import { toDeepgramError } from './types';
 
 const DEFAULT_SAMPLE_RATE = 16_000;
 const BASE_NATIVE_SAMPLE_RATE = 16_000;
@@ -85,6 +86,8 @@ export function useDeepgramSpeechToText({
   trackTranscript = false,
   metering = {},
   onAudioLevel = () => {},
+  recordToFile = {},
+  onRecordingComplete = () => {},
   reconnect = {},
   onReconnecting = () => {},
   onReconnected = () => {},
@@ -145,6 +148,10 @@ export function useDeepgramSpeechToText({
 
   const onAudioLevelRef = useRef(onAudioLevel);
   onAudioLevelRef.current = onAudioLevel;
+  const onRecordingCompleteRef = useRef(onRecordingComplete);
+  onRecordingCompleteRef.current = onRecordingComplete;
+  const recordToFileRef = useRef(recordToFile);
+  recordToFileRef.current = recordToFile;
   const meteringEnabled = metering.enabled === true;
   const meteringIntervalMs =
     typeof metering.intervalMs === 'number' && metering.intervalMs > 0
@@ -156,6 +163,9 @@ export function useDeepgramSpeechToText({
     useState('');
   const [internalIsPaused, setInternalIsPaused] = useState(false);
   const [internalAudioLevel, setInternalAudioLevel] = useState(0);
+  const [internalRecordingUri, setInternalRecordingUri] = useState<
+    string | undefined
+  >(undefined);
 
   const endFiredRef = useRef(false);
 
@@ -179,7 +189,17 @@ export function useDeepgramSpeechToText({
       meterSub.current = null;
     }
     Deepgram.setMeteringEnabled?.(false, 0);
-    Deepgram.stopRecording().catch(() => {});
+    Deepgram.stopRecording()
+      .then((result) => {
+        const uri = result?.recordingUri;
+        if (uri) {
+          onRecordingCompleteRef.current?.(uri);
+          if (trackState) {
+            setInternalRecordingUri(uri);
+          }
+        }
+      })
+      .catch(() => {});
     nativeInputSampleRateRef.current = BASE_NATIVE_SAMPLE_RATE;
     targetSampleRateRef.current = DEFAULT_SAMPLE_RATE;
     downsampleFactorRef.current = 1;
@@ -303,15 +323,20 @@ export function useDeepgramSpeechToText({
       closeResources();
 
       if (exhausted) {
-        const err = new Error(
-          `Deepgram reconnect failed after ${cfg.maxRetries} attempts`
+        const err = toDeepgramError(
+          new Error(
+            `Deepgram reconnect failed after ${cfg.maxRetries} attempts`
+          )
         );
         onErrorRef.current(err);
         if (trackState) {
           setInternalState({ status: 'error', error: err });
         }
       } else if (failureError && trackState) {
-        setInternalState({ status: 'error', error: failureError });
+        setInternalState({
+          status: 'error',
+          error: toDeepgramError(failureError),
+        });
       }
 
       fireEnd();
@@ -374,14 +399,15 @@ export function useDeepgramSpeechToText({
                 if (msg.type === 'Error') {
                   const description =
                     msg.description || 'Deepgram stream error';
-                  onErrorRef.current(new Error(description));
+                  const streamError = toDeepgramError(new Error(description));
+                  onErrorRef.current(streamError);
                   // Fatal stream error: tear down without auto-reconnecting.
                   userClosedRef.current = true;
                   closeResources();
                   if (trackState) {
                     setInternalState({
                       status: 'error',
-                      error: new Error(description),
+                      error: streamError,
                     });
                   }
                   fireEnd();
@@ -412,7 +438,7 @@ export function useDeepgramSpeechToText({
 
         socket.onerror = (err: any) => {
           if (generation !== wsGenerationRef.current) return;
-          onErrorRef.current(err);
+          onErrorRef.current(toDeepgramError(err));
         };
 
         socket.onclose = (event: any) => {
@@ -422,7 +448,7 @@ export function useDeepgramSpeechToText({
       })
       .catch((err) => {
         if (generation !== wsGenerationRef.current) return;
-        const authError = err instanceof Error ? err : new Error(String(err));
+        const authError = toDeepgramError(err);
         onErrorRef.current(authError);
         handleDisconnect(undefined, authError);
       });
@@ -449,7 +475,21 @@ export function useDeepgramSpeechToText({
         const granted = await askMicPermission();
         if (!granted) throw new Error('Microphone permission denied');
 
-        await Deepgram.startRecording();
+        const rtf = recordToFileRef.current;
+        if (trackState) {
+          setInternalRecordingUri(undefined);
+        }
+        await Deepgram.startRecording(
+          rtf.enabled === true
+            ? {
+                recordToFile: {
+                  enabled: true,
+                  path: rtf.path,
+                  format: rtf.format,
+                },
+              }
+            : undefined
+        );
 
         if (!hasAuthConfigured()) throw new Error('Deepgram API key missing');
 
@@ -613,11 +653,12 @@ export function useDeepgramSpeechToText({
           );
         }
       } catch (err) {
-        onErrorRef.current(err);
+        const dgError = toDeepgramError(err);
+        onErrorRef.current(dgError);
         if (trackState) {
           setInternalState({
             status: 'error',
-            error: err instanceof Error ? err : new Error(String(err)),
+            error: dgError,
           });
         }
         closeResources();
@@ -639,11 +680,12 @@ export function useDeepgramSpeechToText({
       closeResources();
       fireEnd();
     } catch (err) {
-      onErrorRef.current(err);
+      const dgError = toDeepgramError(err);
+      onErrorRef.current(dgError);
       if (trackState) {
         setInternalState({
           status: 'error',
-          error: err instanceof Error ? err : new Error(String(err)),
+          error: dgError,
         });
       }
     }
@@ -841,11 +883,12 @@ export function useDeepgramSpeechToText({
           throw new Error('No transcript present in Deepgram response');
         }
       } catch (err) {
-        onTranscribeErrorRef.current(err);
+        const dgError = toDeepgramError(err);
+        onTranscribeErrorRef.current(dgError);
         if (trackState) {
           setInternalState({
             status: 'error',
-            error: err instanceof Error ? err : new Error(String(err)),
+            error: dgError,
           });
         }
       }
@@ -872,6 +915,9 @@ export function useDeepgramSpeechToText({
           state: internalState,
           isPaused: internalIsPaused,
           ...(meteringEnabled ? { audioLevel: internalAudioLevel } : {}),
+          ...(internalRecordingUri !== undefined
+            ? { recordingUri: internalRecordingUri }
+            : {}),
         }
       : {}),
     ...(trackTranscript

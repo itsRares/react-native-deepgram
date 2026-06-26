@@ -50,7 +50,7 @@ RCT_EXPORT_MODULE();
 }
 
 - (NSArray<NSString *> *)supportedEvents {
-  return @[ @"DeepgramAudioPCM", @"DeepgramAudioLevel" ];
+  return @[ @"DeepgramAudioPCM", @"DeepgramAudioLevel", @"DeepgramRouteChange" ];
 }
 
 - (void)startObserving {
@@ -174,6 +174,16 @@ RCT_EXPORT_METHOD(startRecording : (NSDictionary *)options resolver : (
     self.voiceProcessingRequested = enableVoiceProcessing;
     self.audioQueueCaptureRequested = !enableVoiceProcessing;
 
+    NSDictionary *recordToFileOptions = nil;
+    if ([options isKindOfClass:[NSDictionary class]]) {
+      id rtf = options[@"recordToFile"];
+      if ([rtf isKindOfClass:[NSDictionary class]]) {
+        recordToFileOptions = (NSDictionary *)rtf;
+      }
+    }
+    // Drop any file left open by a previous, incompletely stopped session.
+    [self discardRecordingFile];
+
     self.currentSampleRate = 16000;
     DGLogDebug(@"[Deepgram] startRecording: targetSampleRate=%d vp=%@",
                self.currentSampleRate, enableVoiceProcessing ? @"YES" : @"NO");
@@ -195,11 +205,26 @@ RCT_EXPORT_METHOD(startRecording : (NSDictionary *)options resolver : (
       [self stopEngineCapture];
       self.pendingPCMBuffer = [[NSMutableData alloc] init];
 
+      // Open the WAV target before capture starts so the first buffers are
+      // teed to disk and any file-open failure is surfaced before the mic opens.
+      NSError *fileError = nil;
+      if (![self beginRecordingToFileIfRequested:recordToFileOptions
+                                           error:&fileError]) {
+        DGLogError(@"[Deepgram] startRecording: record-to-file failed %@",
+                   fileError);
+        self.voiceProcessingRequested = NO;
+        [self maybeDeactivateAudioSession];
+        DGRejectPromise(reject, @"start_error", fileError.localizedDescription,
+                        fileError);
+        return;
+      }
+
       NSError *engineError = nil;
       if (![self startEngineCaptureAndReturnError:&engineError]) {
         NSString *message = engineError.localizedDescription
                                 ?: @"Failed to start engine capture";
         DGLogError(@"[Deepgram] startRecording: %@", message);
+        [self discardRecordingFile];
         self.voiceProcessingRequested = NO;
         [self maybeDeactivateAudioSession];
         DGRejectPromise(reject, @"start_error", message, engineError);
@@ -319,11 +344,25 @@ RCT_EXPORT_METHOD(startRecording : (NSDictionary *)options resolver : (
       }
     }
 
+    // Open the WAV target before capture starts so the first buffers are teed
+    // to disk and any file-open failure is surfaced before the mic opens.
+    NSError *fileError = nil;
+    if (![self beginRecordingToFileIfRequested:recordToFileOptions
+                                         error:&fileError]) {
+      DGLogError(@"[Deepgram] startRecording: record-to-file failed %@",
+                 fileError);
+      [self cleanupRecordingQueue];
+      DGRejectPromise(reject, @"start_error", fileError.localizedDescription,
+                      fileError);
+      return;
+    }
+
     status = AudioQueueStart(_recordState.queue, NULL);
     if (status != noErr) {
       NSError *error = DGOSStatusError(@"AudioQueueStart", status);
       NSString *message = error.localizedDescription;
       DGLogError(@"[Deepgram] startRecording: %@", message);
+      [self discardRecordingFile];
       [self cleanupRecordingQueue];
       DGRejectPromise(reject, @"start_error", message, error);
       return;
@@ -351,12 +390,14 @@ RCT_EXPORT_METHOD(stopRecording : (RCTPromiseResolveBlock)
     [self flushPendingPCM];
     self.pendingPCMBuffer = nil;
     self.voiceProcessingRequested = NO;
+    NSString *recordingUri = [self finishRecordingToFile];
     [self maybeDeactivateAudioSession];
     DGLogDebug(@"[Deepgram] stopRecording: finished");
     if (resolve)
-      resolve(nil);
+      resolve(recordingUri ? @{@"recordingUri" : recordingUri} : nil);
   } @catch (NSException *e) {
     DGLogError(@"[Deepgram] stopRecording: exception %@", e);
+    [self discardRecordingFile];
     DGRejectPromise(reject, @"stop_error", e.reason, nil);
   }
 }
@@ -582,6 +623,66 @@ RCT_EXPORT_METHOD(setMeteringEnabled : (BOOL)enabled intervalMs : (nonnull NSNum
 }
 
 /**
+ * Request a preferred audio output route (`speaker` / `earpiece` / `bluetooth`
+ * / `auto`). Best-effort and device-dependent: the OS may override the request
+ * (a wired headset always wins) and `bluetooth` only applies when a compatible
+ * headset is connected. The override is sticky for the audio session and is
+ * re-applied after every (re)configuration until cleared with `auto`.
+ */
+RCT_EXPORT_METHOD(setAudioRoute : (NSString *)route resolver : (
+    RCTPromiseResolveBlock)resolve rejecter : (RCTPromiseRejectBlock)reject) {
+  @try {
+    NSString *normalized = route.length ? route : @"auto";
+    if (![normalized isEqualToString:@"speaker"] &&
+        ![normalized isEqualToString:@"earpiece"] &&
+        ![normalized isEqualToString:@"bluetooth"] &&
+        ![normalized isEqualToString:@"auto"]) {
+      if (reject) {
+        reject(@"invalid_data",
+               [NSString stringWithFormat:@"Unknown audio route '%@'", route],
+               nil);
+      }
+      return;
+    }
+
+    self.requestedAudioRoute = normalized;
+    DGLogDebug(@"[Deepgram] setAudioRoute: %@", normalized);
+
+    NSError *error = nil;
+    if (![self applyRequestedAudioRoute:&error]) {
+      DGRejectPromise(reject, @"playback_error",
+                      error.localizedDescription
+                          ?: @"Failed to apply the requested audio route",
+                      error);
+      return;
+    }
+
+    if (resolve) {
+      resolve(nil);
+    }
+  } @catch (NSException *e) {
+    DGRejectPromise(reject, @"playback_error", e.reason ?: @"setAudioRoute failed",
+                    nil);
+  }
+}
+
+/**
+ * Resolve the audio output route the system is currently using. Reflects the
+ * *actual* route (which may differ from the last `setAudioRoute` request, e.g.
+ * after the user plugs in headphones). One of `speaker` / `earpiece` /
+ * `bluetooth` / `wired`.
+ */
+RCT_EXPORT_METHOD(getAudioRoute : (RCTPromiseResolveBlock)resolve rejecter : (
+    RCTPromiseRejectBlock)reject) {
+  @try {
+    resolve([self currentAudioRouteString]);
+  } @catch (NSException *e) {
+    DGRejectPromise(reject, @"playback_error", e.reason ?: @"getAudioRoute failed",
+                    nil);
+  }
+}
+
+/**
  * Play a single audio chunk (base64-encoded PCM).
  * This is used for one-shot TTS playback (HTTP mode).
  */
@@ -692,6 +793,8 @@ RCT_EXPORT_METHOD(playAudioChunk : (NSString *)b64 resolver : (
   } @catch (NSException *e) {
     DGLogError(@"[Deepgram] invalidate: cleanupRecordingQueue exception %@", e);
   }
+
+  [self discardRecordingFile];
 
   self.pendingPCMBuffer = nil;
 

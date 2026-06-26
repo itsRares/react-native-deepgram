@@ -414,6 +414,35 @@ export type UseDeepgramSpeechToTextProps = {
   onAudioLevel?: (level: number) => void;
 
   /**
+   * Persist the captured microphone audio to a file while it is simultaneously
+   * streamed to Deepgram. The resulting `file://` URI is delivered via
+   * {@link onRecordingComplete} and
+   * {@link UseDeepgramSpeechToTextReturn.recordingUri} (when `trackState` is on)
+   * once {@link UseDeepgramSpeechToTextReturn.stopListening} completes.
+   */
+  recordToFile?: {
+    /** Enable writing the live capture to a file. @default false */
+    enabled?: boolean;
+    /**
+     * Absolute destination path (with or without a `file://` prefix). When
+     * omitted, the native module writes to an app-specific location and reports
+     * the generated `file://` URI.
+     */
+    path?: string;
+    /**
+     * Container format. Only uncompressed `wav` (16 kHz PCM16 mono, mirroring
+     * the streamed audio) is currently supported.
+     */
+    format?: 'wav';
+  };
+  /**
+   * Called once a record-to-file session finishes (after `stopListening`) with
+   * the `file://` URI of the captured WAV. Only invoked when
+   * `recordToFile.enabled` is true and a file was produced.
+   */
+  onRecordingComplete?: (uri: string) => void;
+
+  /**
    * Auto-reconnect configuration for the live streaming socket. Disabled by
    * default; set `reconnect.enabled` to opt in.
    */
@@ -458,6 +487,12 @@ export type UseDeepgramSpeechToTextReturn = {
    * `metering.intervalMs` while listening.
    */
   audioLevel?: number;
+  /**
+   * `file://` URI of the most recent record-to-file capture. Only returned when
+   * `trackState` is on; populated once `stopListening` completes for a session
+   * started with `recordToFile.enabled`.
+   */
+  recordingUri?: string;
   /** Final accumulated transcript (only returned when trackTranscript is enabled) */
   transcript?: string;
   /** Interim/partial transcript (only returned when trackTranscript is enabled for live) */

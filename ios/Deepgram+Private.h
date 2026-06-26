@@ -37,6 +37,15 @@
 @property(atomic, assign) BOOL hasListeners;
 @property(atomic, assign) BOOL appIsActive;
 
+// Microphone metering (audio-level events). Purely additive — when
+// `meteringEnabled` is YES the recording sink computes a normalized RMS
+// amplitude (0..1) and emits a `DeepgramAudioLevel` event at most once per
+// `meteringIntervalSeconds`. `lastMeterEmitTime` is a CACurrentMediaTime()
+// timestamp used to throttle emission.
+@property(atomic, assign) BOOL meteringEnabled;
+@property(atomic, assign) NSTimeInterval meteringIntervalSeconds;
+@property(atomic, assign) NSTimeInterval lastMeterEmitTime;
+
 // Playback / TTS (AVAudioEngine-based with echo cancellation)
 @property(nonatomic, strong) AVAudioEngine *audioEngine;
 @property(nonatomic, strong) AVAudioPlayerNode *playerNode;

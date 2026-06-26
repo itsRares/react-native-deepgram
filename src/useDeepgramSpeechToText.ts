@@ -11,7 +11,7 @@ import type {
   UseDeepgramSpeechToTextReturn,
 } from './types';
 import { getBaseUrl, getBaseWss, getV2BaseWss } from './constants';
-import { buildParams } from './helpers';
+import { buildParams, resolveAuthHeader, hasAuthConfigured } from './helpers';
 
 const DEFAULT_SAMPLE_RATE = 16_000;
 const BASE_NATIVE_SAMPLE_RATE = 16_000;
@@ -37,6 +37,12 @@ const AUDIO_EVENT = Platform.select({
   android: 'AudioChunk',
   default: 'DeepgramAudioPCM',
 }) as string;
+const AUDIO_LEVEL_EVENT = Platform.select({
+  ios: 'DeepgramAudioLevel',
+  android: 'AudioLevel',
+  default: 'DeepgramAudioLevel',
+}) as string;
+const DEFAULT_METERING_INTERVAL_MS = 100;
 
 const computeDownsampleFactor = (
   target: number | undefined,
@@ -77,6 +83,8 @@ export function useDeepgramSpeechToText({
   prerecorded = {},
   trackState = false,
   trackTranscript = false,
+  metering = {},
+  onAudioLevel = () => {},
   reconnect = {},
   onReconnecting = () => {},
   onReconnected = () => {},
@@ -90,6 +98,9 @@ export function useDeepgramSpeechToText({
   });
   const ws = useRef<WebSocket | null>(null);
   const audioSub = useRef<ReturnType<NativeEventEmitter['addListener']> | null>(
+    null
+  );
+  const meterSub = useRef<ReturnType<NativeEventEmitter['addListener']> | null>(
     null
   );
   const apiVersionRef = useRef<'v1' | 'v2'>('v1');
@@ -132,10 +143,19 @@ export function useDeepgramSpeechToText({
   onReconnectedRef.current = onReconnected;
   reconnectConfigRef.current = { ...DEFAULT_RECONNECT, ...reconnect };
 
+  const onAudioLevelRef = useRef(onAudioLevel);
+  onAudioLevelRef.current = onAudioLevel;
+  const meteringEnabled = metering.enabled === true;
+  const meteringIntervalMs =
+    typeof metering.intervalMs === 'number' && metering.intervalMs > 0
+      ? metering.intervalMs
+      : DEFAULT_METERING_INTERVAL_MS;
+
   const [internalTranscript, setInternalTranscript] = useState('');
   const [internalInterimTranscript, setInternalInterimTranscript] =
     useState('');
   const [internalIsPaused, setInternalIsPaused] = useState(false);
+  const [internalAudioLevel, setInternalAudioLevel] = useState(0);
 
   const endFiredRef = useRef(false);
 
@@ -154,6 +174,11 @@ export function useDeepgramSpeechToText({
       audioSub.current.remove();
       audioSub.current = null;
     }
+    if (meterSub.current) {
+      meterSub.current.remove();
+      meterSub.current = null;
+    }
+    Deepgram.setMeteringEnabled?.(false, 0);
     Deepgram.stopRecording().catch(() => {});
     nativeInputSampleRateRef.current = BASE_NATIVE_SAMPLE_RATE;
     targetSampleRateRef.current = DEFAULT_SAMPLE_RATE;
@@ -174,6 +199,7 @@ export function useDeepgramSpeechToText({
     if (trackState) {
       setInternalState((prev) => ({ ...prev, status: 'idle' }));
       setInternalIsPaused(false);
+      setInternalAudioLevel(0);
     }
     if (trackTranscript) {
       setInternalTranscript('');
@@ -292,96 +318,110 @@ export function useDeepgramSpeechToText({
   );
 
   const connectSocket = useCallback(() => {
-    const apiKey = (globalThis as any).__DEEPGRAM_API_KEY__;
     const isV2 = apiVersionRef.current === 'v2';
     const generation = wsGenerationRef.current + 1;
     wsGenerationRef.current = generation;
 
-    let socket: WebSocket;
-    try {
-      socket = new (WebSocket as any)(liveUrlRef.current, undefined, {
-        headers: { Authorization: `Token ${apiKey}` },
-      });
-    } catch {
-      handleDisconnect();
-      return;
-    }
-    ws.current = socket;
+    resolveAuthHeader()
+      .then((authHeader) => {
+        // A newer connection attempt superseded this one while the auth token
+        // was resolving — abandon this stale socket setup.
+        if (generation !== wsGenerationRef.current) {
+          return;
+        }
 
-    socket.onopen = () => {
-      if (generation !== wsGenerationRef.current) return;
-      const wasReconnecting = reconnectingRef.current;
-      reconnectingRef.current = false;
-      reconnectAttemptRef.current = 0;
-      onStartRef.current();
-      if (wasReconnecting) {
-        onReconnectedRef.current();
-      }
-      if (trackState) {
-        setInternalState({ status: 'listening', error: null });
-      }
-    };
-
-    socket.onmessage = (ev: any) => {
-      if (generation !== wsGenerationRef.current) return;
-      if (typeof ev.data === 'string') {
+        let socket: WebSocket;
         try {
-          const msg = JSON.parse(ev.data);
-          if (isV2) {
-            // Flux (v2) message envelope reference:
-            // https://developers.deepgram.com/reference/speech-to-text-api/listen-flux
-            // - "Connected"        — handshake ack (no transcript)
-            // - "TurnInfo"         — carries transcript + an `event` field
-            //   ("Update" | "StartOfTurn" | "EagerEndOfTurn"
-            //    | "TurnResumed" | "EndOfTurn")
-            // - "ConfigureSuccess" / "ConfigureFailure"
-            // - "Error"            — fatal stream error
-            if (msg.type === 'Error') {
-              const description = msg.description || 'Deepgram stream error';
-              onErrorRef.current(new Error(description));
-              // Fatal stream error: tear down without auto-reconnecting.
-              userClosedRef.current = true;
-              closeResources();
-              if (trackState) {
-                setInternalState({
-                  status: 'error',
-                  error: new Error(description),
-                });
+          socket = new (WebSocket as any)(liveUrlRef.current, undefined, {
+            headers: { Authorization: authHeader },
+          });
+        } catch {
+          handleDisconnect();
+          return;
+        }
+        ws.current = socket;
+
+        socket.onopen = () => {
+          if (generation !== wsGenerationRef.current) return;
+          const wasReconnecting = reconnectingRef.current;
+          reconnectingRef.current = false;
+          reconnectAttemptRef.current = 0;
+          onStartRef.current();
+          if (wasReconnecting) {
+            onReconnectedRef.current();
+          }
+          if (trackState) {
+            setInternalState({ status: 'listening', error: null });
+          }
+        };
+
+        socket.onmessage = (ev: any) => {
+          if (generation !== wsGenerationRef.current) return;
+          if (typeof ev.data === 'string') {
+            try {
+              const msg = JSON.parse(ev.data);
+              if (isV2) {
+                // Flux (v2) message envelope reference:
+                // https://developers.deepgram.com/reference/speech-to-text-api/listen-flux
+                // - "Connected"        — handshake ack (no transcript)
+                // - "TurnInfo"         — carries transcript + an `event` field
+                //   ("Update" | "StartOfTurn" | "EagerEndOfTurn"
+                //    | "TurnResumed" | "EndOfTurn")
+                // - "ConfigureSuccess" / "ConfigureFailure"
+                // - "Error"            — fatal stream error
+                if (msg.type === 'Error') {
+                  const description =
+                    msg.description || 'Deepgram stream error';
+                  onErrorRef.current(new Error(description));
+                  // Fatal stream error: tear down without auto-reconnecting.
+                  userClosedRef.current = true;
+                  closeResources();
+                  if (trackState) {
+                    setInternalState({
+                      status: 'error',
+                      error: new Error(description),
+                    });
+                  }
+                  fireEnd();
+                  return;
+                }
+
+                if (msg.type !== 'TurnInfo') {
+                  return;
+                }
+
+                const transcript = msg.transcript;
+                if (typeof transcript === 'string' && transcript.length > 0) {
+                  const isFinal = msg.event === 'EndOfTurn';
+                  emitTranscript(transcript, isFinal, msg);
+                }
+                return;
               }
-              fireEnd();
-              return;
-            }
 
-            if (msg.type !== 'TurnInfo') {
-              return;
-            }
-
-            const transcript = msg.transcript;
-            if (typeof transcript === 'string' && transcript.length > 0) {
-              const isFinal = msg.event === 'EndOfTurn';
-              emitTranscript(transcript, isFinal, msg);
-            }
-            return;
+              const transcript = msg.channel?.alternatives?.[0]?.transcript;
+              if (typeof transcript === 'string') {
+                const isFinal =
+                  msg.is_final === true || msg.speech_final === true;
+                emitTranscript(transcript, Boolean(isFinal), msg);
+              }
+            } catch {}
           }
+        };
 
-          const transcript = msg.channel?.alternatives?.[0]?.transcript;
-          if (typeof transcript === 'string') {
-            const isFinal = msg.is_final === true || msg.speech_final === true;
-            emitTranscript(transcript, Boolean(isFinal), msg);
-          }
-        } catch {}
-      }
-    };
+        socket.onerror = (err: any) => {
+          if (generation !== wsGenerationRef.current) return;
+          onErrorRef.current(err);
+        };
 
-    socket.onerror = (err: any) => {
-      if (generation !== wsGenerationRef.current) return;
-      onErrorRef.current(err);
-    };
-
-    socket.onclose = (event: any) => {
-      if (generation !== wsGenerationRef.current) return;
-      handleDisconnect(event);
-    };
+        socket.onclose = (event: any) => {
+          if (generation !== wsGenerationRef.current) return;
+          handleDisconnect(event);
+        };
+      })
+      .catch(() => {
+        if (generation !== wsGenerationRef.current) return;
+        handleDisconnect();
+      });
   }, [closeResources, emitTranscript, fireEnd, handleDisconnect, trackState]);
 
   connectSocketRef.current = connectSocket;
@@ -407,8 +447,11 @@ export function useDeepgramSpeechToText({
 
         await Deepgram.startRecording();
 
-        const apiKey = (globalThis as any).__DEEPGRAM_API_KEY__;
-        if (!apiKey) throw new Error('Deepgram API key missing');
+        if (!hasAuthConfigured()) throw new Error('Deepgram API key missing');
+
+        if (meteringEnabled) {
+          Deepgram.setMeteringEnabled?.(true, meteringIntervalMs);
+        }
 
         const requestedVersion: 'v1' | 'v2' =
           overrideOptions.apiVersion ?? live.apiVersion ?? 'v1';
@@ -549,6 +592,22 @@ export function useDeepgramSpeechToText({
             ws.current.send(chunk);
           }
         });
+
+        if (meteringEnabled) {
+          meterSub.current = getEmitter().addListener(
+            AUDIO_LEVEL_EVENT,
+            (ev: any) => {
+              const level =
+                typeof ev?.level === 'number' && Number.isFinite(ev.level)
+                  ? ev.level
+                  : 0;
+              if (trackState) {
+                setInternalAudioLevel(level);
+              }
+              onAudioLevelRef.current(level);
+            }
+          );
+        }
       } catch (err) {
         onErrorRef.current(err);
         if (trackState) {
@@ -560,7 +619,14 @@ export function useDeepgramSpeechToText({
         closeResources();
       }
     },
-    [connectSocket, live, trackState, closeResources]
+    [
+      connectSocket,
+      live,
+      trackState,
+      closeResources,
+      meteringEnabled,
+      meteringIntervalMs,
+    ]
   );
 
   const stopListening = useCallback(() => {
@@ -640,8 +706,7 @@ export function useDeepgramSpeechToText({
         setInternalState({ status: 'transcribing', error: null });
       }
       try {
-        const apiKey = (globalThis as any).__DEEPGRAM_API_KEY__;
-        if (!apiKey) throw new Error('Deepgram API key missing');
+        const authHeader = await resolveAuthHeader();
 
         const merged: DeepgramPrerecordedOptions = {
           ...prerecorded,
@@ -725,7 +790,7 @@ export function useDeepgramSpeechToText({
         const url = params ? `${baseUrl}?${params}` : baseUrl;
 
         const headers: Record<string, string> = {
-          Authorization: `Token ${apiKey}`,
+          Authorization: authHeader,
         };
 
         let body: FormData | string;
@@ -798,7 +863,13 @@ export function useDeepgramSpeechToText({
     transcribeFile,
     pause,
     resume,
-    ...(trackState ? { state: internalState, isPaused: internalIsPaused } : {}),
+    ...(trackState
+      ? {
+          state: internalState,
+          isPaused: internalIsPaused,
+          ...(meteringEnabled ? { audioLevel: internalAudioLevel } : {}),
+        }
+      : {}),
     ...(trackTranscript
       ? {
           transcript: internalTranscript,

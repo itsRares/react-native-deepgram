@@ -28,9 +28,11 @@ export default function SpeechToText() {
     resume,
     state: liveState,
     isPaused,
+    audioLevel,
   } = useDeepgramSpeechToText({
     trackState: true,
     reconnect: { enabled: true },
+    metering: { enabled: true },
     onBeforeStart: () => {
       setLiveTranscript('');
       setLiveInterimTranscript('');
@@ -107,6 +109,21 @@ export default function SpeechToText() {
     loop.start();
     return () => loop.stop();
   }, [isCapturing, pulse]);
+
+  // Mic level meter
+  const levelAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(levelAnim, {
+      toValue: isCapturing ? Math.min(1, Math.max(0, audioLevel ?? 0)) : 0,
+      duration: 90,
+      useNativeDriver: false,
+    }).start();
+  }, [audioLevel, isCapturing, levelAnim]);
+  const meterWidth = levelAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0%', '100%'],
+    extrapolate: 'clamp',
+  });
 
   const pickAndTranscribe = async () => {
     try {
@@ -216,6 +233,14 @@ export default function SpeechToText() {
                 : 'Tap start and speak to see live transcripts.'}
           </Text>
 
+          {isCapturing ? (
+            <View style={styles.meterTrack}>
+              <Animated.View
+                style={[styles.meterFill, { width: meterWidth }]}
+              />
+            </View>
+          ) : null}
+
           <View style={styles.capabilityRow}>
             <View style={styles.capabilityChip}>
               <Text style={styles.capabilityChipText}>⏸ Pause / resume</Text>
@@ -233,6 +258,21 @@ export default function SpeechToText() {
                 ]}
               >
                 ↻ Auto-reconnect
+              </Text>
+            </View>
+            <View
+              style={[
+                styles.capabilityChip,
+                isCapturing && styles.capabilityChipActive,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.capabilityChipText,
+                  isCapturing && styles.capabilityChipTextActive,
+                ]}
+              >
+                🎚 Live level
               </Text>
             </View>
           </View>
@@ -414,6 +454,19 @@ const styles = StyleSheet.create({
     marginTop: 4,
     marginBottom: spacing.lg,
     textAlign: 'center',
+  },
+  meterTrack: {
+    width: '70%',
+    height: 8,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceMuted,
+    overflow: 'hidden',
+    marginBottom: spacing.lg,
+  },
+  meterFill: {
+    height: '100%',
+    borderRadius: radius.pill,
+    backgroundColor: colors.accent,
   },
   heroActions: { width: '100%' },
   heroButtonRow: {

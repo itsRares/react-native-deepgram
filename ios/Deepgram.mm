@@ -50,7 +50,7 @@ RCT_EXPORT_MODULE();
 }
 
 - (NSArray<NSString *> *)supportedEvents {
-  return @[ @"DeepgramAudioPCM" ];
+  return @[ @"DeepgramAudioPCM", @"DeepgramAudioLevel" ];
 }
 
 - (void)startObserving {
@@ -560,6 +560,25 @@ RCT_EXPORT_METHOD(setAudioConfig : (nonnull NSNumber *)
   DGLogDebug(@"[Deepgram] setAudioConfig: sampleRate=%@ channels=%@",
              sampleRate, channels);
   [self startPlayer:sampleRate channels:channels];
+}
+
+/**
+ * Enable / disable microphone audio-level (metering) events. When enabled the
+ * module emits `DeepgramAudioLevel` events with a normalized RMS amplitude
+ * (0..1) at most once per `intervalMs` (default 100 ms). Purely additive — the
+ * mic capture path and PCM emission are unaffected.
+ */
+RCT_EXPORT_METHOD(setMeteringEnabled : (BOOL)enabled intervalMs : (nonnull NSNumber *)
+                      intervalMs) {
+  double ms = [intervalMs doubleValue];
+  if (ms <= 0) {
+    ms = 100.0; // sensible ~10 Hz default
+  }
+  self.meteringEnabled = enabled;
+  self.meteringIntervalSeconds = ms / 1000.0;
+  self.lastMeterEmitTime = 0;
+  DGLogDebug(@"[Deepgram] setMeteringEnabled: enabled=%@ intervalMs=%.0f",
+             enabled ? @"YES" : @"NO", ms);
 }
 
 /**

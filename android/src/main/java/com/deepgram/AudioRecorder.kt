@@ -27,6 +27,7 @@ internal class AudioRecorder(
   private val onAudioChunk: (ByteArray, Int) -> Unit,
   private val onForegroundServiceRequest: () -> Unit,
   private val onForegroundServiceRelease: () -> Unit,
+  private val onAudioLevel: (Double) -> Unit = {},
 ) {
   /** Thrown when AudioRecord fails to initialize (mapped to "init_failed"). */
   class InitializationException(message: String) : Exception(message)
@@ -38,6 +39,17 @@ internal class AudioRecorder(
   @Volatile
   private var audioRecord: AudioRecord? = null
   private var recordingThread: Thread? = null
+
+  // Microphone metering (audio-level events). Purely additive — when
+  // [meteringEnabled] is true the recording loop computes a normalized RMS
+  // amplitude (0..1) over the same PCM that feeds transcription and forwards it
+  // via [onAudioLevel], throttled to [meteringIntervalMs].
+  @Volatile
+  private var meteringEnabled: Boolean = false
+
+  @Volatile
+  private var meteringIntervalMs: Long = 100L
+  private var lastMeterEmit: Long = 0L
 
   private var acousticEchoCanceler: AcousticEchoCanceler? = null
   private var noiseSuppressor: NoiseSuppressor? = null
@@ -165,6 +177,18 @@ internal class AudioRecorder(
     onForegroundServiceRelease()
   }
 
+  /**
+   * Enable / disable microphone audio-level metering. When enabled the
+   * recording loop emits a normalized RMS amplitude (0..1) via [onAudioLevel]
+   * at most once per [intervalMs] (clamped to a sane minimum). Safe to call
+   * before or during recording.
+   */
+  fun setMetering(enabled: Boolean, intervalMs: Long) {
+    meteringEnabled = enabled
+    meteringIntervalMs = if (intervalMs > 0) intervalMs else 100L
+    lastMeterEmit = 0L
+  }
+
   private fun applyVoiceCommunicationMode() {
     if (voiceProcessingActive) return
     try {
@@ -273,6 +297,7 @@ internal class AudioRecorder(
           val read = recorder.read(buffer, 0, buffer.size)
           if (read > 0) {
             onAudioChunk(buffer, read)
+            emitAudioLevelIfNeeded(buffer, read)
           } else if (read < 0) {
             // ERROR_INVALID_OPERATION / ERROR_BAD_VALUE / ERROR_DEAD_OBJECT —
             // bail rather than spin in a tight loop.
@@ -285,6 +310,36 @@ internal class AudioRecorder(
       }
     }, "Deepgram-Recording")
     recordingThread?.start()
+  }
+
+  /**
+   * Compute a normalized RMS amplitude (0..1) over a PCM16 little-endian buffer
+   * and forward it via [onAudioLevel], throttled to [meteringIntervalMs]. No-op
+   * unless metering is enabled.
+   */
+  private fun emitAudioLevelIfNeeded(buffer: ByteArray, length: Int) {
+    if (!meteringEnabled || length < 2) return
+
+    val now = System.currentTimeMillis()
+    if (lastMeterEmit != 0L && now - lastMeterEmit < meteringIntervalMs) return
+    lastMeterEmit = now
+
+    var sumSquares = 0.0
+    var sampleCount = 0
+    var i = 0
+    while (i + 1 < length) {
+      val lo = buffer[i].toInt() and 0xFF
+      val hi = buffer[i + 1].toInt() // signed high byte → sign-extends sample
+      val sample = (hi shl 8) or lo
+      val norm = sample / 32768.0
+      sumSquares += norm * norm
+      sampleCount++
+      i += 2
+    }
+    if (sampleCount == 0) return
+
+    val rms = Math.sqrt(sumSquares / sampleCount)
+    onAudioLevel(if (rms > 1.0) 1.0 else rms)
   }
 
   companion object {

@@ -253,6 +253,30 @@ configure({
 
 `baseUrl`/`baseWss` **must include the version segment** (`/v1`). Flux v2 endpoints are derived automatically by swapping the trailing `/v1` for `/v2`. See Deepgram's [custom endpoints reference](https://developers.deepgram.com/reference/custom-endpoints).
 
+#### Ephemeral / scoped tokens (keep your API key off-device)
+
+Instead of shipping a long-lived `apiKey`, you can hand `configure` a `getToken` provider that returns a short-lived Deepgram token minted by your backend (which proxies Deepgram's [`/v1/auth/grant`](https://developers.deepgram.com/reference/token-based-auth-api/grant-token)). The SDK caches the token, refreshes it before it expires, and de-duplicates concurrent refreshes — so a burst of requests never triggers multiple grants.
+
+```ts
+configure({
+  // No raw apiKey on the device. `getToken` takes precedence when provided.
+  getToken: async () => {
+    const res = await fetch('https://your-backend.example.com/deepgram-token');
+    const { access_token, expires_in } = await res.json();
+    return { token: access_token, expiresInSeconds: expires_in };
+  },
+});
+```
+
+| Field | Type | Description |
+| ----- | ---- | ----------- |
+| `token` | `string` | The short-lived token. Sent as `Authorization: Bearer <token>`. |
+| `expiresInSeconds` | `number` (optional) | TTL hint used to refresh ahead of expiry. Defaults to `30`. |
+
+- When both `getToken` and `apiKey` are set, `getToken` wins; the API key is the fallback.
+- The token only needs to be valid at connection time — live STT / Voice Agent sockets keep running after it expires.
+- **Exception:** the Management API (`useDeepgramManagement`) cannot authenticate with temporary tokens, so it always uses the configured `apiKey`.
+
 ### 2. Hooks return reactive state — opt in
 
 Every hook supports `track*` flags that turn on a reactive return value. Without them, the hook stays event-driven (callbacks only) so it never causes unnecessary re-renders.
@@ -652,7 +676,7 @@ const {
   // File transcription
   transcribeFile,
   // Reactive state (opt-in)
-  state, transcript, interimTranscript, isPaused,
+  state, transcript, interimTranscript, isPaused, audioLevel,
 } = useDeepgramSpeechToText(props);
 ```
 
@@ -665,6 +689,7 @@ const {
 | `live` | `DeepgramLiveListenOptions` | Default options merged into every live stream. |
 | `prerecorded` | `DeepgramPrerecordedOptions` | Default options merged into every file transcription. |
 | `reconnect` | `DeepgramReconnectOptions` | Auto-reconnect config for the live socket. Disabled unless `reconnect.enabled` is `true`. |
+| `metering` | `{ enabled?: boolean; intervalMs?: number }` | Microphone audio-level (VU meter) events. Disabled by default; set `enabled: true` to emit a normalized RMS level (~10 Hz, tune with `intervalMs`). |
 
 **Live streaming callbacks**
 
@@ -674,6 +699,7 @@ const {
 | `onStart` | `() => void` | The WebSocket opens. |
 | `onTranscript` | `(transcript: string, event?: DeepgramTranscriptEvent) => void` | Every transcript update (partial and final). |
 | `onError` | `(error: unknown) => void` | A streaming error occurs. |
+| `onAudioLevel` | `(level: number) => void` | A new mic audio level (`0..1` normalized RMS) is available. Requires `metering.enabled`. |
 | `onReconnecting` | `(attempt: number) => void` | A reconnect attempt begins (1-based attempt number). Requires `reconnect.enabled`. |
 | `onReconnected` | `() => void` | The live socket successfully reconnects. |
 | `onEnd` | `() => void` | The socket closes (manual stop, or after reconnect attempts are exhausted). |
@@ -709,6 +735,7 @@ const {
 | ------ | ---- | -------- |
 | `state` | `{ status: 'idle' \| 'loading' \| 'listening' \| 'transcribing' \| 'error'; error: Error \| null }` | `trackState: true` |
 | `isPaused` | `boolean` | `trackState: true` |
+| `audioLevel` | `number` (0..1 normalized RMS) | `trackState: true` + `metering.enabled` |
 | `transcript` | `string` | `trackTranscript: true` |
 | `interimTranscript` | `string` | `trackTranscript: true` |
 
@@ -961,7 +988,7 @@ closeStreamGracefully();
 ```ts
 const {
   // HTTP synthesis
-  synthesize,
+  synthesize, synthesizeToBytes,
   // Streaming
   startStreaming, sendText, sendMessage,
   flushStream, clearStream,
@@ -1010,6 +1037,7 @@ const {
 | Method | Signature | Description |
 | ------ | --------- | ----------- |
 | `synthesize` | `(text: string) => Promise<ArrayBuffer>` | Single-shot REST call; resolves with the full audio buffer. |
+| `synthesizeToBytes` | `(text: string, options?: DeepgramTextToSpeechHttpOptions) => Promise<{ data: ArrayBuffer; mimeType: string }>` | Like `synthesize` but **does not play** the audio — returns the raw bytes + MIME type for saving/caching. Results are cached in-memory (LRU) keyed by text + format, so repeated identical prompts skip the network. Pass `options` to override the format per call. |
 
 **Streaming**
 

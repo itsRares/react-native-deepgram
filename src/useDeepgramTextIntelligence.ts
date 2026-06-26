@@ -5,7 +5,7 @@ import type {
   DeepgramTextIntelligenceInput,
 } from './types';
 import { getBaseUrl } from './constants';
-import { buildParams } from './helpers';
+import { buildParams, resolveAuthHeader } from './helpers';
 
 export function useDeepgramTextIntelligence({
   onBeforeAnalyze = () => {},
@@ -57,8 +57,7 @@ export function useDeepgramTextIntelligence({
       }
 
       try {
-        const apiKey = (globalThis as any).__DEEPGRAM_API_KEY__;
-        if (!apiKey) throw new Error('Deepgram API key missing');
+        const authHeader = await resolveAuthHeader();
 
         const { text, url: sourceUrl } = input;
 
@@ -93,7 +92,7 @@ export function useDeepgramTextIntelligence({
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Token ${apiKey}`,
+            'Authorization': authHeader,
           },
           body: JSON.stringify({
             ...(text ? { text } : {}),

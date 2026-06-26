@@ -97,11 +97,72 @@ void DGHandleInputBuffer(
   });
 }
 
+/**
+ * Compute a normalized RMS amplitude (0..1) over a PCM16 buffer and emit it as
+ * a `DeepgramAudioLevel` event, throttled to `meteringIntervalSeconds`. No-op
+ * unless metering is enabled and JS listeners are attached. Called from the
+ * shared capture sink so both the AudioQueue (STT) and AVAudioEngine (Voice
+ * Agent) paths are metered with identical semantics.
+ */
+- (void)emitAudioLevelForPCM:(NSData *)pcmData {
+  if (!self.meteringEnabled || !self.hasListeners) {
+    return;
+  }
+  if (!pcmData || pcmData.length < sizeof(int16_t)) {
+    return;
+  }
+
+  // Throttle to the configured interval (default ~100 ms / 10 Hz).
+  NSTimeInterval now = [NSProcessInfo processInfo].systemUptime;
+  NSTimeInterval interval =
+      self.meteringIntervalSeconds > 0 ? self.meteringIntervalSeconds : 0.1;
+  NSTimeInterval last = self.lastMeterEmitTime;
+  if (last > 0 && (now - last) < interval) {
+    return;
+  }
+  self.lastMeterEmitTime = now;
+
+  const int16_t *samples = (const int16_t *)pcmData.bytes;
+  NSUInteger count = pcmData.length / sizeof(int16_t);
+  if (count == 0) {
+    return;
+  }
+
+  double sumSquares = 0.0;
+  for (NSUInteger i = 0; i < count; i++) {
+    double s = (double)samples[i] / 32768.0;
+    sumSquares += s * s;
+  }
+  double level = sqrt(sumSquares / (double)count);
+  if (level > 1.0) {
+    level = 1.0;
+  }
+
+  __weak __typeof(self) weakSelf = self;
+  dispatch_queue_t queue = self.emitterQueue ?: dispatch_get_main_queue();
+  dispatch_async(queue, ^{
+    __typeof(self) strongSelf = weakSelf;
+    if (!strongSelf || !strongSelf.hasListeners) {
+      return;
+    }
+    if (!strongSelf.bridge || !strongSelf.callableJSModules) {
+      return;
+    }
+    [strongSelf sendEventWithName:@"DeepgramAudioLevel"
+                             body:@{@"level" : @(level)}];
+  });
+}
+
 - (void)appendPCMDataAndEmitIfNeeded:(NSData *)pcmData {
   if (!pcmData || pcmData.length == 0) {
     DGLogDebug(@"[Deepgram] appendPCMDataAndEmitIfNeeded: empty PCM, skipping");
     return;
   }
+
+  // Audio-level metering is computed on the same captured PCM that feeds the
+  // transcription stream, so it reflects exactly what Deepgram receives. It is
+  // throttled and gated independently and never alters the PCM payload.
+  [self emitAudioLevelForPCM:pcmData];
 
   if (!self.pendingPCMBuffer) {
     DGLogDebug(

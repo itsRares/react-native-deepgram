@@ -396,6 +396,24 @@ export type UseDeepgramSpeechToTextProps = {
   trackTranscript?: boolean;
 
   /**
+   * Microphone audio-level (metering) configuration. When enabled the native
+   * module emits a normalized RMS amplitude (0..1) while recording, surfaced
+   * via {@link UseDeepgramSpeechToTextReturn.audioLevel} (when `trackState` is
+   * on) and the {@link onAudioLevel} callback. Disabled by default.
+   */
+  metering?: {
+    /** Enable audio-level events while listening. @default false */
+    enabled?: boolean;
+    /** Minimum interval between level events, in ms. @default 100 */
+    intervalMs?: number;
+  };
+  /**
+   * Called with the latest microphone audio level (normalized RMS, 0..1) while
+   * listening. Only invoked when `metering.enabled` is true.
+   */
+  onAudioLevel?: (level: number) => void;
+
+  /**
    * Auto-reconnect configuration for the live streaming socket. Disabled by
    * default; set `reconnect.enabled` to opt in.
    */
@@ -434,6 +452,12 @@ export type UseDeepgramSpeechToTextReturn = {
   };
   /** Whether streaming is currently paused (only returned when trackState is enabled) */
   isPaused?: boolean;
+  /**
+   * Latest microphone audio level (normalized RMS, 0..1). Only returned when
+   * both `trackState` and `metering.enabled` are on; updates at most once per
+   * `metering.intervalMs` while listening.
+   */
+  audioLevel?: number;
   /** Final accumulated transcript (only returned when trackTranscript is enabled) */
   transcript?: string;
   /** Interim/partial transcript (only returned when trackTranscript is enabled for live) */

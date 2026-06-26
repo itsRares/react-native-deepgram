@@ -288,6 +288,18 @@ export type DeepgramTextToSpeechStreamResponseMessage =
   | ({ type: string } & Record<string, unknown>);
 
 /**
+ * Synthesized audio returned by `synthesizeToBytes`: the raw audio bytes plus
+ * the MIME type describing their container/encoding (from the response
+ * `Content-Type`, or derived from the requested format).
+ */
+export type DeepgramTextToSpeechBytes = {
+  /** The synthesized audio as raw bytes. */
+  data: ArrayBuffer;
+  /** MIME type describing the audio container/encoding (e.g. `audio/mpeg`). */
+  mimeType: string;
+};
+
+/**
  * Props for the `useDeepgramTextToSpeech` hook.
  */
 export type UseDeepgramTextToSpeechProps = {
@@ -339,6 +351,17 @@ export type UseDeepgramTextToSpeechProps = {
 export type UseDeepgramTextToSpeechReturn = {
   /** One-shot HTTP request that resolves when the full audio is ready. */
   synthesize: (text: string) => Promise<ArrayBuffer>;
+  /**
+   * Synthesize speech and return the raw audio bytes (plus MIME type) without
+   * playing them — useful for persisting/caching audio. Results are cached
+   * in-memory (LRU) keyed by the text + resolved format, so repeated identical
+   * prompts avoid a duplicate network request. Pass `options` to override the
+   * hook's HTTP format per call.
+   */
+  synthesizeToBytes: (
+    text: string,
+    options?: DeepgramTextToSpeechHttpOptions
+  ) => Promise<DeepgramTextToSpeechBytes>;
   /** Opens a WebSocket and begins streaming audio chunks in real-time. */
   startStreaming: (text: string) => Promise<void>;
   /** Send arbitrary control messages to the active WebSocket stream. */

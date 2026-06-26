@@ -116,6 +116,13 @@ export default function TextToSpeech() {
   >([]);
   const [streamAutoFlush, setStreamAutoFlush] = useState(true);
 
+  const [bytesResult, setBytesResult] = useState<{
+    size: number;
+    mimeType: string;
+    ms: number;
+  } | null>(null);
+  const [isFetchingBytes, setIsFetchingBytes] = useState(false);
+
   const [httpModel, setHttpModel] = useState('aura-2-asteria-en');
   const [httpEncoding, setHttpEncoding] = useState('linear16');
   const [httpSampleRate, setHttpSampleRate] = useState('16000');
@@ -165,7 +172,11 @@ export default function TextToSpeech() {
     | DeepgramTextToSpeechSampleRate
     | undefined;
 
-  const { synthesize, state: httpState } = useDeepgramTextToSpeech({
+  const {
+    synthesize,
+    synthesizeToBytes,
+    state: httpState,
+  } = useDeepgramTextToSpeech({
     trackState: true,
     options: {
       http: {
@@ -235,6 +246,23 @@ export default function TextToSpeech() {
     }
   };
 
+  const handleSynthesizeToBytes = async () => {
+    setIsFetchingBytes(true);
+    try {
+      const startedAt = Date.now();
+      const { data, mimeType } = await synthesizeToBytes(text);
+      setBytesResult({
+        size: data.byteLength,
+        mimeType,
+        ms: Date.now() - startedAt,
+      });
+    } catch (err) {
+      console.warn('Synthesize to bytes failed', err);
+    } finally {
+      setIsFetchingBytes(false);
+    }
+  };
+
   const handleStartStream = async () => {
     try {
       await startStreaming(text);
@@ -298,7 +326,27 @@ export default function TextToSpeech() {
                 iconLeft="🎧"
               />
             )}
+            <Button
+              title="Fetch bytes"
+              variant="ghost"
+              onPress={handleSynthesizeToBytes}
+              loading={isFetchingBytes}
+              disabled={isFetchingBytes || !text.trim()}
+              iconLeft="📦"
+            />
           </View>
+          {bytesResult ? (
+            <View style={styles.bytesBanner}>
+              <Text style={styles.bytesTitle}>
+                📦 {bytesResult.size.toLocaleString()} bytes ·{' '}
+                {bytesResult.mimeType}
+              </Text>
+              <Text style={styles.bytesHint}>
+                Fetched in {bytesResult.ms} ms. Tap “Fetch bytes” again with the
+                same text to serve it from the in-memory cache.
+              </Text>
+            </View>
+          ) : null}
           {httpState?.error ? (
             <View style={styles.errorBanner}>
               <Text style={styles.errorText}>⚠ {httpState.error.message}</Text>
@@ -605,6 +653,20 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
   },
   errorText: { color: colors.danger, ...type.smallMedium },
+  bytesBanner: {
+    backgroundColor: colors.surfaceMuted,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginTop: spacing.md,
+  },
+  bytesTitle: { color: colors.text, ...type.smallMedium },
+  bytesHint: {
+    ...type.small,
+    color: colors.textMuted,
+    marginTop: 4,
+  },
   kvBlock: {},
   kvTitle: {
     ...type.smallMedium,

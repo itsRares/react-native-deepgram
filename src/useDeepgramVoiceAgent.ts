@@ -2,7 +2,11 @@ import { useRef, useCallback, useEffect, useState } from 'react';
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 import { Deepgram } from './NativeDeepgram';
 import { askMicPermission } from './helpers/askMicPermission';
-import { arrayBufferToBase64 } from './helpers';
+import {
+  arrayBufferToBase64,
+  resolveAuthHeader,
+  hasAuthConfigured,
+} from './helpers';
 import { getAgentUrl } from './constants';
 import type {
   DeepgramVoiceAgentSettings,
@@ -1017,63 +1021,76 @@ export function useDeepgramVoiceAgent({
   );
 
   const openSocket = useCallback(() => {
-    const apiKey = (globalThis as any).__DEEPGRAM_API_KEY__;
     const generation = wsGenerationRef.current + 1;
     wsGenerationRef.current = generation;
 
-    const socket = new (WebSocket as any)(
-      endpointRef.current ?? getAgentUrl(),
-      undefined,
-      {
-        headers: { Authorization: `Token ${apiKey}` },
-      }
-    );
+    resolveAuthHeader()
+      .then((authHeader) => {
+        // A newer connection attempt superseded this one while the auth token
+        // was resolving — abandon this stale socket setup.
+        if (generation !== wsGenerationRef.current) {
+          return;
+        }
 
-    socket.binaryType = 'arraybuffer';
-    ws.current = socket;
+        const socket = new (WebSocket as any)(
+          endpointRef.current ?? getAgentUrl(),
+          undefined,
+          {
+            headers: { Authorization: authHeader },
+          }
+        );
 
-    socket.onopen = () => {
-      if (generation !== wsGenerationRef.current) return;
+        socket.binaryType = 'arraybuffer';
+        ws.current = socket;
 
-      const wasReconnecting = reconnectingRef.current;
-      reconnectingRef.current = false;
-      reconnectAttemptRef.current = 0;
+        socket.onopen = () => {
+          if (generation !== wsGenerationRef.current) return;
 
-      if (mergedSettingsRef.current) {
-        sendJsonMessage(mergedSettingsRef.current);
-      }
+          const wasReconnecting = reconnectingRef.current;
+          reconnectingRef.current = false;
+          reconnectAttemptRef.current = 0;
 
-      if (trackState) {
-        setInternalState((prev) => ({
-          ...prev,
-          connectionState: 'connected',
-        }));
-      }
+          if (mergedSettingsRef.current) {
+            sendJsonMessage(mergedSettingsRef.current);
+          }
 
-      if (autoPlayAudio) {
-        const sampleRate =
-          mergedSettingsRef.current?.audio?.output?.sample_rate ??
-          DEFAULT_INPUT_SAMPLE_RATE;
-        const channels = 1;
-        Deepgram.startPlayer(sampleRate, channels);
-      }
+          if (trackState) {
+            setInternalState((prev) => ({
+              ...prev,
+              connectionState: 'connected',
+            }));
+          }
 
-      if (wasReconnecting) {
-        onReconnectedRef.current?.();
-      } else {
-        onConnectRef.current?.();
-      }
-    };
+          if (autoPlayAudio) {
+            const sampleRate =
+              mergedSettingsRef.current?.audio?.output?.sample_rate ??
+              DEFAULT_INPUT_SAMPLE_RATE;
+            const channels = 1;
+            Deepgram.startPlayer(sampleRate, channels);
+          }
 
-    socket.onmessage = handleSocketMessage;
-    socket.onerror = (err: any) => {
-      if (generation !== wsGenerationRef.current) return;
-      onErrorRef.current?.(err);
-    };
-    socket.onclose = (event: any) => {
-      if (generation !== wsGenerationRef.current) return;
-      handleAgentDisconnect(event);
-    };
+          if (wasReconnecting) {
+            onReconnectedRef.current?.();
+          } else {
+            onConnectRef.current?.();
+          }
+        };
+
+        socket.onmessage = handleSocketMessage;
+        socket.onerror = (err: any) => {
+          if (generation !== wsGenerationRef.current) return;
+          onErrorRef.current?.(err);
+        };
+        socket.onclose = (event: any) => {
+          if (generation !== wsGenerationRef.current) return;
+          handleAgentDisconnect(event);
+        };
+      })
+      .catch((err) => {
+        if (generation !== wsGenerationRef.current) return;
+        onErrorRef.current?.(err);
+        handleAgentDisconnect();
+      });
   }, [
     autoPlayAudio,
     handleAgentDisconnect,
@@ -1109,8 +1126,7 @@ export function useDeepgramVoiceAgent({
 
       onBeforeConnectRef.current?.();
 
-      const apiKey = (globalThis as any).__DEEPGRAM_API_KEY__;
-      if (!apiKey) throw new Error('Deepgram API key missing');
+      if (!hasAuthConfigured()) throw new Error('Deepgram API key missing');
 
       const shouldCaptureMic = autoStartMicRef.current;
       if (shouldCaptureMic) {

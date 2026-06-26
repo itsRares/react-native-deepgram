@@ -26,6 +26,7 @@ interface DeepgramNative {
   interruptAudio?: () => void;
   stopPlayer(): void;
   startPlayer(sampleRate: number, channels?: number): void;
+  setMeteringEnabled?: (enabled: boolean, intervalMs?: number) => void;
 }
 
 const LINKING_ERROR = `react-native-deepgram: Native code not linked—did you run “pod install” & rebuild?`;
@@ -74,5 +75,10 @@ export const Deepgram: DeepgramNative = {
   },
   startPlayer(sampleRate: number, channels?: number) {
     return NativeDeepgramModule.startPlayer(sampleRate, channels);
+  },
+  setMeteringEnabled(enabled: boolean, intervalMs?: number) {
+    if (typeof NativeDeepgramModule.setMeteringEnabled === 'function') {
+      return NativeDeepgramModule.setMeteringEnabled(enabled, intervalMs);
+    }
   },
 };

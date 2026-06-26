@@ -41,6 +41,7 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     onAudioChunk = { data, length -> sendAudioChunk(data, length) },
     onForegroundServiceRequest = { startForegroundAudioService() },
     onForegroundServiceRelease = { stopForegroundAudioServiceIfInactive() },
+    onAudioLevel = { level -> sendAudioLevel(level) },
   )
 
   private val player = AudioPlayer(
@@ -186,6 +187,11 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun setMeteringEnabled(enabled: Boolean, intervalMs: Double) {
+    recorder.setMetering(enabled, intervalMs.toLong())
+  }
+
+  @ReactMethod
   fun feedAudio(base64Audio: String) {
     player.feedAudio(base64Audio)
   }
@@ -254,6 +260,24 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     } catch (e: Exception) {
       // Catalyst tearing down or JS bundle not ready — drop silently.
       Log.w(TAG, "sendAudioChunk emit failed", e)
+    }
+  }
+
+  /**
+   * Emit a microphone audio level (normalized RMS, 0..1) to JS as the
+   * `AudioLevel` event (matches the iOS `DeepgramAudioLevel` payload shape).
+   */
+  private fun sendAudioLevel(level: Double) {
+    if (!reactContext.hasActiveReactInstance()) return
+    val map = WritableNativeMap()
+    map.putDouble("level", level)
+    try {
+      reactContext
+        .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+        .emit("AudioLevel", map)
+    } catch (e: Exception) {
+      // Catalyst tearing down or JS bundle not ready — drop silently.
+      Log.w(TAG, "sendAudioLevel emit failed", e)
     }
   }
 

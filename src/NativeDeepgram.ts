@@ -52,55 +52,6 @@ export interface DeepgramRecordingResult {
   recordingUri?: string;
 }
 
-/**
- * Preferred audio output route requested via {@link DeepgramNative.setAudioRoute}.
- *
- * - `speaker` — force the loudspeaker.
- * - `earpiece` — force the phone earpiece/receiver (quiet, held-to-ear).
- * - `bluetooth` — prefer a connected Bluetooth headset (HFP) when available.
- * - `auto` — clear any override and let the OS pick the default route.
- *
- * Routing is best-effort: the operating system can override a request (e.g. a
- * wired headset always wins) and availability is device-dependent.
- */
-export type DeepgramAudioRoute = 'speaker' | 'earpiece' | 'bluetooth' | 'auto';
-
-/**
- * Actual audio output route reported by {@link DeepgramNative.getAudioRoute} and
- * the `onRouteChange` listener. `wired` covers headphones / USB / HDMI / car
- * audio, none of which can be selected explicitly (the OS routes to them
- * automatically when connected).
- */
-export type DeepgramActiveAudioRoute =
-  | 'speaker'
-  | 'earpiece'
-  | 'bluetooth'
-  | 'wired';
-
-/**
- * A single selectable audio output device reported by
- * {@link DeepgramNative.getAudioDevices} and the `DeepgramAudioDevices` change
- * event.
- *
- * Unlike the coarse {@link DeepgramAudioRoute} categories, each connected
- * Bluetooth headset is reported as its own device, so a UI can list (and let
- * the user pick) between several of them by name.
- */
-export interface DeepgramAudioDevice {
-  /**
-   * Stable platform identifier for the device. On iOS this is the audio port
-   * `UID`; on Android it is the `AudioDeviceInfo` id (as a string). Pass this
-   * value to {@link DeepgramNative.selectAudioDevice}.
-   */
-  id: string;
-  /** Human-readable name, e.g. `"AirPods Pro"`, `"Speaker"`, `"Earpiece"`. */
-  name: string;
-  /** Coarse category the device belongs to. */
-  type: DeepgramActiveAudioRoute;
-  /** Whether this device is the one audio is currently routed through. */
-  selected: boolean;
-}
-
 interface DeepgramNative {
   startRecording(options?: StartRecordingOptions): Promise<void>;
   stopRecording(): Promise<DeepgramRecordingResult | null>;
@@ -113,10 +64,6 @@ interface DeepgramNative {
   stopPlayer(): void;
   startPlayer(sampleRate: number, channels?: number): void;
   setMeteringEnabled?: (enabled: boolean, intervalMs?: number) => void;
-  setAudioRoute?: (route: DeepgramAudioRoute) => Promise<void>;
-  getAudioRoute?: () => Promise<DeepgramActiveAudioRoute>;
-  getAudioDevices?: () => Promise<DeepgramAudioDevice[]>;
-  selectAudioDevice?: (deviceId: string) => Promise<void>;
 }
 
 const LINKING_ERROR = `react-native-deepgram: Native code not linked—did you run “pod install” & rebuild?`;
@@ -170,33 +117,5 @@ export const Deepgram: DeepgramNative = {
     if (typeof NativeDeepgramModule.setMeteringEnabled === 'function') {
       return NativeDeepgramModule.setMeteringEnabled(enabled, intervalMs);
     }
-  },
-  setAudioRoute(route: DeepgramAudioRoute) {
-    if (typeof NativeDeepgramModule.setAudioRoute === 'function') {
-      return NativeDeepgramModule.setAudioRoute(route);
-    }
-    // Older native build without route control — treat as a no-op so callers
-    // don't have to feature-detect.
-    return Promise.resolve();
-  },
-  getAudioRoute() {
-    if (typeof NativeDeepgramModule.getAudioRoute === 'function') {
-      return NativeDeepgramModule.getAudioRoute();
-    }
-    return Promise.resolve('speaker' as DeepgramActiveAudioRoute);
-  },
-  getAudioDevices() {
-    if (typeof NativeDeepgramModule.getAudioDevices === 'function') {
-      return NativeDeepgramModule.getAudioDevices();
-    }
-    // Older native build without device enumeration — report nothing so
-    // callers can fall back to the coarse setAudioRoute() API.
-    return Promise.resolve([] as DeepgramAudioDevice[]);
-  },
-  selectAudioDevice(deviceId: string) {
-    if (typeof NativeDeepgramModule.selectAudioDevice === 'function') {
-      return NativeDeepgramModule.selectAudioDevice(deviceId);
-    }
-    return Promise.resolve();
   },
 };

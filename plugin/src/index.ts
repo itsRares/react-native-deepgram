@@ -22,8 +22,6 @@ const withAndroidDeepgram: ConfigPlugin<DeepgramPluginOptions | void> = (
       'android.permission.FOREGROUND_SERVICE_MICROPHONE';
     const foregroundPlaybackPermission =
       'android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK';
-    const bluetoothConnectPermission = 'android.permission.BLUETOOTH_CONNECT';
-    const legacyBluetoothPermission = 'android.permission.BLUETOOTH';
     const { manifest } = cfg.modResults;
     const permissions = manifest['uses-permission'] ?? [];
 
@@ -34,25 +32,6 @@ const withAndroidDeepgram: ConfigPlugin<DeepgramPluginOptions | void> = (
     };
 
     ensurePermission(recordPermission);
-
-    // Bluetooth output routing. BLUETOOTH_CONNECT is a runtime permission on
-    // Android 12+ (the app requests it); the legacy BLUETOOTH permission,
-    // capped at API 30, covers the SCO path on older devices.
-    ensurePermission(bluetoothConnectPermission);
-    if (
-      !permissions.some(
-        (p) => p.$?.['android:name'] === legacyBluetoothPermission
-      )
-    ) {
-      // maxSdkVersion isn't in the typed attribute set, so assert the entry
-      // shape; the manifest serializer preserves arbitrary string attributes.
-      permissions.push({
-        $: {
-          'android:name': legacyBluetoothPermission,
-          'android:maxSdkVersion': '30',
-        },
-      } as (typeof permissions)[number]);
-    }
 
     if (resolvedOptions.backgroundAudio !== false) {
       ensurePermission(foregroundServicePermission);

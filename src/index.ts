@@ -4,23 +4,6 @@ export { useDeepgramManagement } from './useDeepgramManagement';
 export { useDeepgramTextToSpeech } from './useDeepgramTextToSpeech';
 export { useDeepgramVoiceAgent } from './useDeepgramVoiceAgent';
 export { Deepgram } from './NativeDeepgram';
-export type {
-  DeepgramAudioRoute,
-  DeepgramActiveAudioRoute,
-  DeepgramAudioDevice,
-} from './NativeDeepgram';
-export {
-  setAudioRoute,
-  getAudioRoute,
-  addAudioRouteChangeListener,
-  getAudioDevices,
-  selectAudioDevice,
-  addAudioDevicesChangeListener,
-} from './audioRoute';
-export type {
-  AudioRouteSubscription,
-  AudioDevicesChangeEvent,
-} from './audioRoute';
 import type { DeepgramGetToken } from './helpers';
 import { clearCachedAuthToken } from './helpers';
 export {

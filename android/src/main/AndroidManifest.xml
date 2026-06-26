@@ -4,12 +4,6 @@
 	<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 	<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
 
-	<!-- Bluetooth output routing. BLUETOOTH_CONNECT is a runtime permission on
-	     Android 12+ (the app is responsible for requesting it); the legacy
-	     BLUETOOTH permission covers the SCO path on Android 11 and lower. -->
-	<uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
-	<uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-
 	<application>
 		<service
 			android:name=".DeepgramAudioService"

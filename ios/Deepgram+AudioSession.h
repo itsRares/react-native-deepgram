@@ -25,15 +25,4 @@
 - (void)handleMediaServicesReset:(NSNotification *)note;
 - (void)handleAudioInterruption:(NSNotification *)note;
 
-- (BOOL)applyRequestedAudioRoute:(NSError **)outError;
-- (void)reapplyOutputOverrideOnly;
-- (void)adoptActualRouteAsRequest;
-- (NSString *)currentAudioRouteString;
-- (void)emitRouteChange;
-
-// Device-centric routing (enumerate + select by stable port UID).
-- (NSArray<NSDictionary *> *)enumerateAudioDevices;
-- (BOOL)selectAudioDeviceById:(NSString *)deviceId error:(NSError **)outError;
-- (void)emitAudioDevices;
-
 @end

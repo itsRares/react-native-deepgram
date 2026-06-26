@@ -50,10 +50,7 @@ RCT_EXPORT_MODULE();
 }
 
 - (NSArray<NSString *> *)supportedEvents {
-  return @[
-    @"DeepgramAudioPCM", @"DeepgramAudioLevel", @"DeepgramRouteChange",
-    @"DeepgramAudioDevices"
-  ];
+  return @[ @"DeepgramAudioPCM", @"DeepgramAudioLevel" ];
 }
 
 - (void)startObserving {
@@ -623,111 +620,6 @@ RCT_EXPORT_METHOD(setMeteringEnabled : (BOOL)enabled intervalMs : (nonnull NSNum
   self.lastMeterEmitTime = 0;
   DGLogDebug(@"[Deepgram] setMeteringEnabled: enabled=%@ intervalMs=%.0f",
              enabled ? @"YES" : @"NO", ms);
-}
-
-/**
- * Request a preferred audio output route (`speaker` / `earpiece` / `bluetooth`
- * / `auto`). Best-effort and device-dependent: the OS may override the request
- * (a wired headset always wins) and `bluetooth` only applies when a compatible
- * headset is connected. The override is sticky for the audio session and is
- * re-applied after every (re)configuration until cleared with `auto`.
- */
-RCT_EXPORT_METHOD(setAudioRoute : (NSString *)route resolver : (
-    RCTPromiseResolveBlock)resolve rejecter : (RCTPromiseRejectBlock)reject) {
-  @try {
-    NSString *normalized = route.length ? route : @"auto";
-    if (![normalized isEqualToString:@"speaker"] &&
-        ![normalized isEqualToString:@"earpiece"] &&
-        ![normalized isEqualToString:@"bluetooth"] &&
-        ![normalized isEqualToString:@"auto"]) {
-      if (reject) {
-        reject(@"invalid_data",
-               [NSString stringWithFormat:@"Unknown audio route '%@'", route],
-               nil);
-      }
-      return;
-    }
-
-    self.requestedAudioRoute = normalized;
-    DGLogDebug(@"[Deepgram] setAudioRoute: %@", normalized);
-
-    NSError *error = nil;
-    if (![self applyRequestedAudioRoute:&error]) {
-      DGRejectPromise(reject, @"playback_error",
-                      error.localizedDescription
-                          ?: @"Failed to apply the requested audio route",
-                      error);
-      return;
-    }
-
-    if (resolve) {
-      resolve(nil);
-    }
-  } @catch (NSException *e) {
-    DGRejectPromise(reject, @"playback_error", e.reason ?: @"setAudioRoute failed",
-                    nil);
-  }
-}
-
-/**
- * Resolve the audio output route the system is currently using. Reflects the
- * *actual* route (which may differ from the last `setAudioRoute` request, e.g.
- * after the user plugs in headphones). One of `speaker` / `earpiece` /
- * `bluetooth` / `wired`.
- */
-RCT_EXPORT_METHOD(getAudioRoute : (RCTPromiseResolveBlock)resolve rejecter : (
-    RCTPromiseRejectBlock)reject) {
-  @try {
-    resolve([self currentAudioRouteString]);
-  } @catch (NSException *e) {
-    DGRejectPromise(reject, @"playback_error", e.reason ?: @"getAudioRoute failed",
-                    nil);
-  }
-}
-
-/**
- * Enumerate the audio output devices currently available for routing. Each
- * connected Bluetooth headset is reported individually (id = port UID) so a UI
- * can present several of them by name. Exactly one device is marked `selected`.
- */
-RCT_EXPORT_METHOD(getAudioDevices : (RCTPromiseResolveBlock)resolve rejecter : (
-    RCTPromiseRejectBlock)reject) {
-  @try {
-    resolve([self enumerateAudioDevices]);
-  } @catch (NSException *e) {
-    DGRejectPromise(reject, @"playback_error",
-                    e.reason ?: @"getAudioDevices failed", nil);
-  }
-}
-
-/**
- * Route audio to a specific device by id (from `getAudioDevices`). The
- * selection is sticky for the session and re-pinned after reconfigurations,
- * which is what lets a chosen Bluetooth headset survive Voice Agent start/AEC
- * setup instead of reverting to the earpiece.
- */
-RCT_EXPORT_METHOD(selectAudioDevice : (NSString *)deviceId resolver : (
-    RCTPromiseResolveBlock)resolve rejecter : (RCTPromiseRejectBlock)reject) {
-  @try {
-    NSError *error = nil;
-    if (![self selectAudioDeviceById:deviceId error:&error]) {
-      NSString *code = ([error.domain isEqualToString:@"DeepgramAudioRoute"] &&
-                        error.code == 1)
-                           ? @"invalid_data"
-                           : @"playback_error";
-      DGRejectPromise(reject, code,
-                      error.localizedDescription
-                          ?: @"Failed to select the requested audio device",
-                      error);
-      return;
-    }
-    if (resolve) {
-      resolve(nil);
-    }
-  } @catch (NSException *e) {
-    DGRejectPromise(reject, @"playback_error",
-                    e.reason ?: @"selectAudioDevice failed", nil);
-  }
 }
 
 /**

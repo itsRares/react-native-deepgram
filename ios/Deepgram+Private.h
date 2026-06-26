@@ -57,17 +57,6 @@
 @property(atomic, assign) BOOL recordToFileEnabled;
 @property(atomic, assign) unsigned long long recordFileDataBytes;
 
-// User-requested audio output route: `speaker` / `earpiece` / `bluetooth` /
-// `auto` (nil means `auto`). Re-applied after every session (re)configuration
-// so it survives playback/recording restarts.
-@property(atomic, copy) NSString *requestedAudioRoute;
-
-// User-requested specific output device, by audio port UID (from
-// `getAudioDevices`). Takes precedence over `requestedAudioRoute` when set so
-// the exact Bluetooth headset the user picked is re-pinned across (re)configs.
-// nil means "no specific device" (fall back to the coarse route).
-@property(atomic, copy) NSString *requestedDeviceId;
-
 // Playback / TTS (AVAudioEngine-based with echo cancellation)
 @property(nonatomic, strong) AVAudioEngine *audioEngine;
 @property(nonatomic, strong) AVAudioPlayerNode *playerNode;

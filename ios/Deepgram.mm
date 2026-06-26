@@ -27,6 +27,21 @@
 // RCT_EXPORT_METHOD entry points (kept here so the macros register on the
 // concrete class rather than a category).
 
+/**
+ * Whether the user has explicitly granted microphone record permission. Read
+ * via the deprecated `AVAudioSession` accessor (still functional on iOS 17+)
+ * with the deprecation warning suppressed locally — mirroring MicPermission.m.
+ * Lets `startRecording` fail fast with the contract `permission_denied` code,
+ * matching the Android module.
+ */
+static BOOL DGHasRecordPermission(void) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  return [AVAudioSession sharedInstance].recordPermission ==
+         AVAudioSessionRecordPermissionGranted;
+#pragma clang diagnostic pop
+}
+
 @implementation Deepgram
 RCT_EXPORT_MODULE();
 
@@ -138,6 +153,17 @@ RCT_EXPORT_METHOD(startRecording : (NSDictionary *)options resolver : (
   @try {
     DGLogDebug(@"[Deepgram] startRecording: begin");
 
+    if (!DGHasRecordPermission()) {
+      DGLogError(
+          @"[Deepgram] startRecording: microphone permission not granted");
+      DGRejectPromise(
+          reject, @"permission_denied",
+          @"Microphone permission has not been granted. Request it from JS "
+          @"(MicPermission.request) before calling startRecording.",
+          nil);
+      return;
+    }
+
     BOOL enableVoiceProcessing = NO;
     if ([options isKindOfClass:[NSDictionary class]]) {
       id raw = options[@"enableVoiceProcessing"];
@@ -158,7 +184,7 @@ RCT_EXPORT_METHOD(startRecording : (NSDictionary *)options resolver : (
       DGLogError(@"[Deepgram] startRecording: activation failed %@", message);
       self.voiceProcessingRequested = NO;
       self.audioQueueCaptureRequested = NO;
-      DGRejectPromise(reject, @"record_start_error", message, sessionError);
+      DGRejectPromise(reject, @"start_error", message, sessionError);
       return;
     }
 
@@ -176,7 +202,7 @@ RCT_EXPORT_METHOD(startRecording : (NSDictionary *)options resolver : (
         DGLogError(@"[Deepgram] startRecording: %@", message);
         self.voiceProcessingRequested = NO;
         [self maybeDeactivateAudioSession];
-        DGRejectPromise(reject, @"record_start_error", message, engineError);
+        DGRejectPromise(reject, @"start_error", message, engineError);
         return;
       }
       DGLogDebug(@"[Deepgram] startRecording: engine capture started");
@@ -233,7 +259,7 @@ RCT_EXPORT_METHOD(startRecording : (NSDictionary *)options resolver : (
       NSString *message = error.localizedDescription;
       DGLogError(@"[Deepgram] startRecording: %@", message);
       [self cleanupRecordingQueue];
-      DGRejectPromise(reject, @"record_start_error", message, error);
+      DGRejectPromise(reject, @"start_error", message, error);
       return;
     }
 
@@ -277,7 +303,7 @@ RCT_EXPORT_METHOD(startRecording : (NSDictionary *)options resolver : (
         NSString *message = error.localizedDescription;
         DGLogError(@"[Deepgram] startRecording: %@", message);
         [self cleanupRecordingQueue];
-        DGRejectPromise(reject, @"record_start_error", message, error);
+        DGRejectPromise(reject, @"start_error", message, error);
         return;
       }
 
@@ -288,7 +314,7 @@ RCT_EXPORT_METHOD(startRecording : (NSDictionary *)options resolver : (
         NSString *message = error.localizedDescription;
         DGLogError(@"[Deepgram] startRecording: %@", message);
         [self cleanupRecordingQueue];
-        DGRejectPromise(reject, @"record_start_error", message, error);
+        DGRejectPromise(reject, @"start_error", message, error);
         return;
       }
     }
@@ -299,7 +325,7 @@ RCT_EXPORT_METHOD(startRecording : (NSDictionary *)options resolver : (
       NSString *message = error.localizedDescription;
       DGLogError(@"[Deepgram] startRecording: %@", message);
       [self cleanupRecordingQueue];
-      DGRejectPromise(reject, @"record_start_error", message, error);
+      DGRejectPromise(reject, @"start_error", message, error);
       return;
     }
 
@@ -312,7 +338,7 @@ RCT_EXPORT_METHOD(startRecording : (NSDictionary *)options resolver : (
     [self cleanupRecordingQueue];
     NSString *message = e.reason ?: @"Deepgram native exception";
     NSError *error = DGNativeError(@"DeepgramNativeException", 0, message);
-    DGRejectPromise(reject, @"record_start_error", message, error);
+    DGRejectPromise(reject, @"start_error", message, error);
   }
 }
 
@@ -331,7 +357,7 @@ RCT_EXPORT_METHOD(stopRecording : (RCTPromiseResolveBlock)
       resolve(nil);
   } @catch (NSException *e) {
     DGLogError(@"[Deepgram] stopRecording: exception %@", e);
-    DGRejectPromise(reject, @"record_stop_error", e.reason, nil);
+    DGRejectPromise(reject, @"stop_error", e.reason, nil);
   }
 }
 
@@ -522,7 +548,7 @@ RCT_EXPORT_METHOD(stopPlayer : (RCTPromiseResolveBlock)
       resolve(nil);
   } @catch (NSException *e) {
     DGLogError(@"[Deepgram] stopPlayer: exception %@", e);
-    DGRejectPromise(reject, @"player_stop_error", e.reason, nil);
+    DGRejectPromise(reject, @"stop_player_error", e.reason, nil);
   }
 }
 
@@ -545,7 +571,7 @@ RCT_EXPORT_METHOD(playAudioChunk : (NSString *)b64 resolver : (
   @try {
     if (!b64 || b64.length == 0) {
       if (reject)
-        reject(@"audio_chunk_error", @"Empty audio chunk", nil);
+        reject(@"invalid_data", @"Empty audio chunk", nil);
       return;
     }
 
@@ -553,7 +579,7 @@ RCT_EXPORT_METHOD(playAudioChunk : (NSString *)b64 resolver : (
                                                           options:0];
     if (!pcmData || pcmData.length == 0) {
       if (reject)
-        reject(@"audio_chunk_error", @"Failed to decode audio chunk", nil);
+        reject(@"invalid_data", @"Failed to decode audio chunk", nil);
       return;
     }
 
@@ -564,7 +590,7 @@ RCT_EXPORT_METHOD(playAudioChunk : (NSString *)b64 resolver : (
                               ?: @"Failed to activate audio session";
       DGLogError(@"[Deepgram] playAudioChunk: activation failed %@", message);
       if (reject)
-        reject(@"audio_chunk_error", message, sessionError);
+        reject(@"playback_error", message, sessionError);
       return;
     }
 
@@ -586,7 +612,7 @@ RCT_EXPORT_METHOD(playAudioChunk : (NSString *)b64 resolver : (
             @"[Deepgram] playAudioChunk: failed to setup audio engine: %@",
             engineError);
         if (reject)
-          reject(@"audio_chunk_error", @"Failed to setup audio engine",
+          reject(@"playback_error", @"Failed to setup audio engine",
                  engineError);
         return;
       }
@@ -597,20 +623,30 @@ RCT_EXPORT_METHOD(playAudioChunk : (NSString *)b64 resolver : (
     if (!buffer) {
       DGLogError(@"[Deepgram] playAudioChunk: failed to create PCM buffer");
       if (reject)
-        reject(@"audio_chunk_error", @"Failed to create PCM buffer", nil);
+        reject(@"invalid_data", @"Failed to create PCM buffer", nil);
       return;
     }
 
     self.isPlaying = YES;
+    _scheduledBufferCount++;
+    int playbackGeneration = _playbackGeneration.load();
 
-    // Schedule buffer with completion handler to resolve promise
+    // Schedule buffer with completion handler to resolve promise. The session
+    // teardown is guarded by the playback generation and remaining buffer count
+    // (mirroring feedAudio) so a one-shot finishing mid-stream cannot deactivate
+    // the audio session while streaming playback is still active.
     __weak Deepgram *weakSelf = self;
     [self.playerNode scheduleBuffer:buffer
                   completionHandler:^{
                     Deepgram *strongSelf = weakSelf;
-                    if (strongSelf) {
-                      strongSelf.isPlaying = NO;
-                      [strongSelf maybeDeactivateAudioSession];
+                    if (strongSelf &&
+                        strongSelf->_playbackGeneration.load() ==
+                            playbackGeneration) {
+                      int remaining = --strongSelf->_scheduledBufferCount;
+                      if (remaining <= 0) {
+                        strongSelf.isPlaying = NO;
+                        [strongSelf maybeDeactivateAudioSession];
+                      }
                     }
                     if (resolve)
                       resolve(nil);
@@ -625,7 +661,7 @@ RCT_EXPORT_METHOD(playAudioChunk : (NSString *)b64 resolver : (
                (unsigned long)pcmData.length);
   } @catch (NSException *e) {
     DGLogError(@"[Deepgram] playAudioChunk: exception %@", e);
-    DGRejectPromise(reject, @"audio_chunk_error", e.reason, nil);
+    DGRejectPromise(reject, @"playback_error", e.reason, nil);
   }
 }
 

@@ -13,8 +13,10 @@ import android.os.Build
 import android.os.Handler
 import android.util.Base64
 import android.util.Log
+import java.util.Collections
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -34,9 +36,25 @@ internal class AudioPlayer(
   private val onForegroundServiceRequest: () -> Unit,
   private val onForegroundServiceRelease: () -> Unit,
 ) {
+  // `streamingActive` drives the streaming playback loop and its teardown.
+  // The simple play/stop path is tracked independently via `simpleActive`, and
+  // one-shot playbacks via `oneShotPlaybacks`, so none of the three paths can
+  // tear down another's AudioTrack or shared focus/foreground-service state.
   @Volatile
-  var isActive: Boolean = false
-    private set
+  private var streamingActive: Boolean = false
+
+  // The simple "prepare for playback" path (mirrors iOS `startAudio`, which only
+  // activates the audio session). It owns no AudioTrack — it just keeps audio
+  // focus + the foreground service alive until `stopAudio` is called.
+  @Volatile
+  private var simpleActive: Boolean = false
+
+  private val oneShotPlaybacks =
+    Collections.synchronizedSet(mutableSetOf<OneShotPlayback>())
+
+  /** True while streaming, simple, or any one-shot playback is running. */
+  val isActive: Boolean
+    get() = streamingActive || simpleActive || oneShotPlaybacks.isNotEmpty()
 
   private var playbackSampleRate: Int = DEFAULT_PLAYBACK_SAMPLE_RATE
   private var currentOutputChannels: Int = 1
@@ -120,34 +138,50 @@ internal class AudioPlayer(
   // -------------------------------------------------------------------
 
   fun startAudio() {
+    // Mirror iOS `startAudio`: only prepare the session for playback (request
+    // focus + keep-alive service). Do NOT create/play the streaming AudioTrack
+    // here — the streaming player owns that track, and sharing it would let a
+    // later `stopAudio`/`startPlayer` tear down the other path's playback.
     focusManager.requestFocus()
-    ensureAudioTrack()
-    audioTrack?.play()
-    isActive = true
+    simpleActive = true
     onForegroundServiceRequest()
   }
 
   fun stopAudio() {
-    stopAudioInternal(throwOnError = true)
+    // Mirror iOS `stopAudio` -> `stopPlayer`: end the simple session and stop
+    // any streaming playback, then release shared resources once nothing is
+    // left active.
+    simpleActive = false
+    stopStreamingPlayback(throwOnError = true)
   }
 
-  private fun stopAudioInternal(throwOnError: Boolean) {
+  private fun releaseStreamingTrack(throwOnError: Boolean) {
     try {
       audioTrack?.stop()
     } catch (e: Exception) {
-      Log.w(TAG, "stopAudioInternal: error stopping AudioTrack", e)
+      Log.w(TAG, "releaseStreamingTrack: error stopping AudioTrack", e)
       if (throwOnError) throw e
     }
 
     try {
       audioTrack?.release()
     } catch (e: Exception) {
-      Log.w(TAG, "stopAudioInternal: error releasing AudioTrack", e)
+      Log.w(TAG, "releaseStreamingTrack: error releasing AudioTrack", e)
       if (throwOnError) throw e
     }
 
     audioTrack = null
-    isActive = false
+    streamingActive = false
+    releaseSharedResourcesIfIdle()
+  }
+
+  /**
+   * Abandon audio focus and release the foreground service only when none of
+   * the streaming, simple, or one-shot playback paths remain active, so a
+   * finishing path cannot tear down shared resources still in use by another.
+   */
+  private fun releaseSharedResourcesIfIdle() {
+    if (isActive) return
     focusManager.abandonFocus()
     onForegroundServiceRelease()
   }
@@ -162,7 +196,7 @@ internal class AudioPlayer(
     currentOutputChannels = if (channels >= 2) 2 else 1
     audioQueue.clear()
     queuedBytes.set(0)
-    isActive = false
+    streamingActive = false
   }
 
   fun setAudioConfig(sampleRate: Int, channels: Int) {
@@ -187,7 +221,7 @@ internal class AudioPlayer(
       queuedBytes.addAndGet(audioData.size)
 
       // Start playback when we have enough buffered data
-      if (!isActive && queuedBytes.get() >= playbackThreshold) {
+      if (!streamingActive && queuedBytes.get() >= playbackThreshold) {
         startStreamingPlayback()
       }
     } catch (e: Exception) {
@@ -204,9 +238,9 @@ internal class AudioPlayer(
   }
 
   private fun startStreamingPlayback() {
-    if (isActive) return
+    if (streamingActive) return
 
-    isActive = true
+    streamingActive = true
     registerNoisyReceiver()
     playbackThread = Thread({
       try {
@@ -216,7 +250,7 @@ internal class AudioPlayer(
         ensureAudioTrack()
         audioTrack?.play()
 
-        while (isActive) {
+        while (streamingActive) {
           // Block until data is available (up to 100ms), avoids busy-wait
           val chunk = audioQueue.poll(100, TimeUnit.MILLISECONDS)
             ?: continue
@@ -233,8 +267,8 @@ internal class AudioPlayer(
       } catch (e: Exception) {
         Log.e(TAG, "Streaming playback error", e)
       } finally {
-        isActive = false
-        onForegroundServiceRelease()
+        streamingActive = false
+        releaseSharedResourcesIfIdle()
       }
     }, "Deepgram-Playback")
 
@@ -242,7 +276,7 @@ internal class AudioPlayer(
   }
 
   fun stopStreamingPlayback(throwOnError: Boolean = true) {
-    isActive = false
+    streamingActive = false
     playbackThread?.let { thread ->
       thread.interrupt()
       try {
@@ -254,14 +288,13 @@ internal class AudioPlayer(
     playbackThread = null
 
     try {
-      stopAudioInternal(throwOnError)
+      releaseStreamingTrack(throwOnError)
     } catch (e: Exception) {
       if (throwOnError) throw e else Log.w(TAG, "stopStreamingPlayback: error stopping audio", e)
     } finally {
       audioQueue.clear()
       queuedBytes.set(0)
       unregisterNoisyReceiver()
-      onForegroundServiceRelease()
     }
   }
 
@@ -276,7 +309,7 @@ internal class AudioPlayer(
 
   /** Resume output after regaining focus, if playback is still active. */
   fun resumeForFocusGain() {
-    if (isActive) {
+    if (streamingActive) {
       try { audioTrack?.play() } catch (_: Exception) {}
     }
   }
@@ -290,16 +323,39 @@ internal class AudioPlayer(
     onSuccess: () -> Unit,
     onError: (code: String, message: String?) -> Unit,
   ) {
+    val audioData = try {
+      Base64.decode(base64, Base64.DEFAULT)
+    } catch (e: Exception) {
+      Log.e(TAG, "playAudioChunk decode error", e)
+      onError("invalid_data", "Failed to decode audio data")
+      return
+    }
+
+    if (audioData.isEmpty()) {
+      onError("invalid_data", "Failed to decode audio data")
+      return
+    }
+
+    // Reject malformed / oversized PCM before building the AudioTrack. A
+    // sub-frame buffer would make frameCount (and notificationMarkerPosition)
+    // 0, so onMarkerReached would never fire — the promise would hang forever
+    // while leaking audio focus + the foreground service. The upper bound
+    // mirrors the streaming queue cap.
+    val bytesPerFrame = if (currentOutputChannels >= 2) 4 else 2 // PCM16 mono/stereo
+    if (audioData.size < bytesPerFrame || audioData.size % bytesPerFrame != 0) {
+      onError("invalid_data", "Audio data must contain whole PCM16 frames")
+      return
+    }
+    if (audioData.size > MAX_QUEUED_PLAYBACK_BYTES) {
+      onError("invalid_data", "Audio data exceeds the maximum one-shot size")
+      return
+    }
+
+    focusManager.requestFocus()
+    onForegroundServiceRequest()
+
+    var playback: OneShotPlayback? = null
     try {
-      val audioData = Base64.decode(base64, Base64.DEFAULT)
-      if (audioData.isEmpty()) {
-        onError("invalid_data", "Failed to decode audio data")
-        return
-      }
-
-      focusManager.requestFocus()
-      onForegroundServiceRequest()
-
       val channelMask = outputChannelMask()
       val minBuf = minTrackBufferSize(channelMask)
 
@@ -323,46 +379,90 @@ internal class AudioPlayer(
 
       tempAudioTrack.write(audioData, 0, audioData.size)
 
-      // Use notification marker to know when playback finishes,
-      // then notify the caller (instead of polling with Thread.sleep).
-      val bytesPerFrame = if (currentOutputChannels >= 2) 4 else 2 // PCM16 mono/stereo
+      // Use a notification marker to know when playback finishes (instead of
+      // polling with Thread.sleep). Track the one-shot so it contributes to
+      // isActive and can be torn down on focus loss / invalidate.
       val frameCount = audioData.size / bytesPerFrame
       tempAudioTrack.notificationMarkerPosition = frameCount
-      val listener = object : AudioTrack.OnPlaybackPositionUpdateListener {
-        override fun onMarkerReached(track: AudioTrack?) {
-          try {
-            track?.stop()
-            track?.release()
-          } catch (e: Exception) {
-            Log.w(TAG, "playAudioChunk cleanup error", e)
-          }
-          focusManager.abandonFocus()
-          onForegroundServiceRelease()
-          onSuccess()
-        }
 
-        override fun onPeriodicNotification(track: AudioTrack?) {}
-      }
+      val created = OneShotPlayback(tempAudioTrack, onSuccess, onError)
+      playback = created
+      oneShotPlaybacks.add(created)
 
       // minSdk is 24, the Handler-aware overload is always available.
-      tempAudioTrack.setPlaybackPositionUpdateListener(listener, mainHandler)
+      tempAudioTrack.setPlaybackPositionUpdateListener(
+        object : AudioTrack.OnPlaybackPositionUpdateListener {
+          override fun onMarkerReached(track: AudioTrack?) = created.complete()
+          override fun onPeriodicNotification(track: AudioTrack?) {}
+        },
+        mainHandler,
+      )
 
       tempAudioTrack.play()
     } catch (e: Exception) {
       Log.e(TAG, "playAudioChunk error", e)
-      focusManager.abandonFocus()
-      onForegroundServiceRelease()
-      onError("playback_error", e.message)
+      val created = playback
+      if (created != null) {
+        created.fail("playback_error", e.message)
+      } else {
+        releaseSharedResourcesIfIdle()
+        onError("playback_error", e.message)
+      }
     }
+  }
+
+  /**
+   * A single MODE_STATIC one-shot playback. Guarantees the JS promise settles
+   * exactly once (via [complete] or [fail]), tears the AudioTrack down, and
+   * releases the shared focus / foreground service only when nothing else is
+   * still playing.
+   */
+  private inner class OneShotPlayback(
+    private val track: AudioTrack,
+    private val onSuccess: () -> Unit,
+    private val onError: (code: String, message: String?) -> Unit,
+  ) {
+    private val settled = AtomicBoolean(false)
+
+    fun complete() {
+      if (!settled.compareAndSet(false, true)) return
+      teardown()
+      onSuccess()
+    }
+
+    fun fail(code: String, message: String?) {
+      if (!settled.compareAndSet(false, true)) return
+      teardown()
+      onError(code, message)
+    }
+
+    private fun teardown() {
+      try {
+        track.stop()
+        track.release()
+      } catch (e: Exception) {
+        Log.w(TAG, "playAudioChunk cleanup error", e)
+      }
+      oneShotPlaybacks.remove(this)
+      releaseSharedResourcesIfIdle()
+    }
+  }
+
+  /** Stop every in-flight one-shot playback, rejecting their pending promises. */
+  fun stopOneShotPlayback() {
+    val pending = synchronized(oneShotPlaybacks) { oneShotPlaybacks.toList() }
+    pending.forEach { it.fail("playback_error", "Playback interrupted") }
   }
 
   /** Tear down all playback resources (called from the module's invalidate). */
   fun release() {
+    simpleActive = false
     try {
       stopStreamingPlayback(throwOnError = false)
     } catch (e: Exception) {
       Log.w(TAG, "Error stopping playback on release", e)
     }
+    stopOneShotPlayback()
     unregisterNoisyReceiver()
   }
 

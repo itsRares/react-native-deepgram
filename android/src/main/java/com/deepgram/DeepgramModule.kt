@@ -62,6 +62,7 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     // other audio packages and so we release the microphone. Order matches the
     // original: stop playback first, then recording.
     try { player.stopStreamingPlayback(throwOnError = false) } catch (_: Exception) {}
+    try { player.stopOneShotPlayback() } catch (_: Exception) {}
     try { recorder.stop(throwOnError = false) } catch (_: Exception) {}
   }
 

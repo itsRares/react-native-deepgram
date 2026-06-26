@@ -19,16 +19,22 @@ export default function SpeechToText() {
   const [liveInterimTranscript, setLiveInterimTranscript] = useState('');
   const [fileTranscript, setFileTranscript] = useState('');
   const [pickedFileName, setPickedFileName] = useState<string | null>(null);
+  const [reconnectAttempt, setReconnectAttempt] = useState<number | null>(null);
 
   const {
     startListening,
     stopListening,
+    pause,
+    resume,
     state: liveState,
+    isPaused,
   } = useDeepgramSpeechToText({
     trackState: true,
+    reconnect: { enabled: true },
     onBeforeStart: () => {
       setLiveTranscript('');
       setLiveInterimTranscript('');
+      setReconnectAttempt(null);
     },
     onTranscript: (text, info) => {
       if (info?.isFinal) {
@@ -41,7 +47,16 @@ export default function SpeechToText() {
     onError: (err) => {
       console.error('Live STT error', err);
     },
-    onEnd: () => setLiveInterimTranscript(''),
+    onReconnecting: (attempt) => {
+      setReconnectAttempt(attempt);
+    },
+    onReconnected: () => {
+      setReconnectAttempt(null);
+    },
+    onEnd: () => {
+      setLiveInterimTranscript('');
+      setReconnectAttempt(null);
+    },
     live: {
       model: 'nova-3',
       interimResults: true,
@@ -61,13 +76,16 @@ export default function SpeechToText() {
     },
   });
 
+  const isReconnecting = reconnectAttempt !== null;
   const isListening = liveState?.status === 'listening';
   const isTranscribing = fileState?.status === 'transcribing';
+  const sessionActive = isListening || isReconnecting;
+  const isCapturing = sessionActive && !isPaused;
 
   // Mic pulse
   const pulse = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    if (!isListening) {
+    if (!isCapturing) {
       pulse.stopAnimation();
       pulse.setValue(0);
       return undefined;
@@ -88,7 +106,7 @@ export default function SpeechToText() {
     );
     loop.start();
     return () => loop.stop();
-  }, [isListening, pulse]);
+  }, [isCapturing, pulse]);
 
   const pickAndTranscribe = async () => {
     try {
@@ -113,12 +131,29 @@ export default function SpeechToText() {
     }
   };
 
-  const tone = liveState?.error ? 'error' : isListening ? 'live' : 'idle';
+  const stopLive = () => {
+    setReconnectAttempt(null);
+    stopListening();
+  };
+
+  const tone = liveState?.error
+    ? 'error'
+    : isReconnecting
+      ? 'connecting'
+      : isPaused
+        ? 'warning'
+        : isListening
+          ? 'live'
+          : 'idle';
   const toneLabel = liveState?.error
     ? 'Error'
-    : isListening
-      ? 'Listening'
-      : 'Ready';
+    : isReconnecting
+      ? 'Reconnecting'
+      : isPaused
+        ? 'Paused'
+        : isListening
+          ? 'Listening'
+          : 'Ready';
 
   const combinedLiveTranscript = [liveTranscript, liveInterimTranscript]
     .filter(Boolean)
@@ -143,7 +178,7 @@ export default function SpeechToText() {
           </View>
 
           <View style={styles.micWrap}>
-            {isListening && (
+            {isCapturing && (
               <Animated.View
                 style={[
                   styles.pulse,
@@ -152,29 +187,75 @@ export default function SpeechToText() {
               />
             )}
             <View
-              style={[styles.micCircle, isListening && styles.micCircleActive]}
+              style={[
+                styles.micCircle,
+                isCapturing && styles.micCircleActive,
+                isPaused && styles.micCirclePaused,
+              ]}
             >
-              <Text style={styles.micIcon}>🎤</Text>
+              <Text style={styles.micIcon}>{isPaused ? '🔇' : '🎤'}</Text>
             </View>
           </View>
 
           <Text style={styles.heroTitle}>
-            {isListening ? 'Listening…' : 'Live transcription'}
+            {isReconnecting
+              ? 'Reconnecting…'
+              : isPaused
+                ? 'Paused'
+                : isListening
+                  ? 'Listening…'
+                  : 'Live transcription'}
           </Text>
           <Text style={styles.heroSubtitle}>
-            {isListening
-              ? 'Tap stop when you are done.'
-              : 'Tap start and speak to see live transcripts.'}
+            {isReconnecting
+              ? 'Connection dropped — retrying automatically.'
+              : isListening
+                ? isPaused
+                  ? 'Mic muted — tap resume to continue.'
+                  : 'Tap stop when you are done.'
+                : 'Tap start and speak to see live transcripts.'}
           </Text>
 
+          <View style={styles.capabilityRow}>
+            <View style={styles.capabilityChip}>
+              <Text style={styles.capabilityChipText}>⏸ Pause / resume</Text>
+            </View>
+            <View
+              style={[
+                styles.capabilityChip,
+                isReconnecting && styles.capabilityChipActive,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.capabilityChipText,
+                  isReconnecting && styles.capabilityChipTextActive,
+                ]}
+              >
+                ↻ Auto-reconnect
+              </Text>
+            </View>
+          </View>
+
           <View style={styles.heroActions}>
-            {isListening ? (
-              <Button
-                title="Stop"
-                variant="danger"
-                size="lg"
-                onPress={stopListening}
-              />
+            {sessionActive ? (
+              <View style={styles.heroButtonRow}>
+                {isListening ? (
+                  <Button
+                    title={isPaused ? 'Resume' : 'Pause'}
+                    variant="secondary"
+                    size="lg"
+                    iconLeft={isPaused ? '▶' : '⏸'}
+                    onPress={() => (isPaused ? resume() : pause())}
+                  />
+                ) : null}
+                <Button
+                  title="Stop"
+                  variant="danger"
+                  size="lg"
+                  onPress={stopLive}
+                />
+              </View>
             ) : (
               <Button
                 title="Start listening"
@@ -186,6 +267,14 @@ export default function SpeechToText() {
             )}
           </View>
         </View>
+
+        {isReconnecting ? (
+          <View style={styles.reconnectBanner}>
+            <Text style={styles.reconnectText}>
+              ↻ Reconnecting… (attempt {reconnectAttempt})
+            </Text>
+          </View>
+        ) : null}
 
         {liveState?.error ? (
           <View style={styles.errorBanner}>
@@ -310,6 +399,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
     borderColor: colors.primary,
   },
+  micCirclePaused: {
+    backgroundColor: colors.surfaceMuted,
+    borderColor: colors.warning,
+  },
   micIcon: { fontSize: 36 },
   heroTitle: {
     ...type.h2,
@@ -323,6 +416,50 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   heroActions: { width: '100%' },
+  heroButtonRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: spacing.md,
+  },
+  capabilityRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  capabilityChip: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 5,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceMuted,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  capabilityChipActive: {
+    backgroundColor: colors.accentMuted,
+    borderColor: colors.accent,
+  },
+  capabilityChipText: {
+    ...type.small,
+    color: colors.textMuted,
+    fontSize: 12,
+  },
+  capabilityChipTextActive: {
+    color: colors.accent,
+  },
+  reconnectBanner: {
+    backgroundColor: colors.accentMuted,
+    borderColor: colors.accent,
+    borderWidth: 1,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  reconnectText: {
+    color: colors.accent,
+    ...type.smallMedium,
+  },
   errorBanner: {
     backgroundColor: '#3a1418',
     borderColor: colors.danger,

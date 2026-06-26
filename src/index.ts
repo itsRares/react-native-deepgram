@@ -12,6 +12,31 @@ export {
 } from './helpers';
 export type * from './types';
 
-export const configure = (opts: { apiKey: string }) => {
-  (globalThis as any).__DEEPGRAM_API_KEY__ = opts.apiKey;
+/**
+ * Options accepted by {@link configure}.
+ */
+export type DeepgramConfigureOptions = {
+  /** Deepgram API key used to authenticate REST and WebSocket requests. */
+  apiKey: string;
+  /**
+   * Override the REST base URL (must include the version segment, e.g.
+   * `https://api.beta.deepgram.com/v1` or a self-hosted host). Used for
+   * regional, Dedicated, and self-hosted deployments.
+   * @see https://developers.deepgram.com/reference/custom-endpoints
+   */
+  baseUrl?: string;
+  /**
+   * Override the streaming (WebSocket) base URL, e.g. `wss://my-host:8080/v1`.
+   */
+  baseWss?: string;
+  /** Override the Voice Agent socket URL. */
+  agentUrl?: string;
+};
+
+export const configure = (opts: DeepgramConfigureOptions) => {
+  const g = globalThis as any;
+  g.__DEEPGRAM_API_KEY__ = opts.apiKey;
+  g.__DEEPGRAM_BASE_URL__ = opts.baseUrl;
+  g.__DEEPGRAM_BASE_WSS__ = opts.baseWss;
+  g.__DEEPGRAM_AGENT_URL__ = opts.agentUrl;
 };

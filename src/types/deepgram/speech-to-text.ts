@@ -1,4 +1,8 @@
-import type { DeepgramCallbackMethod, DeepgramCustomMode } from './shared';
+import type {
+  DeepgramCallbackMethod,
+  DeepgramCustomMode,
+  DeepgramReconnectOptions,
+} from './shared';
 
 /**
  * Audio encoding formats supported by Deepgram's Live Listen API.
@@ -390,6 +394,16 @@ export type UseDeepgramSpeechToTextProps = {
 
   /** Automatically accumulate transcript results. @default false */
   trackTranscript?: boolean;
+
+  /**
+   * Auto-reconnect configuration for the live streaming socket. Disabled by
+   * default; set `reconnect.enabled` to opt in.
+   */
+  reconnect?: DeepgramReconnectOptions;
+  /** Called when a reconnect attempt begins (1-based attempt number). */
+  onReconnecting?: (attempt: number) => void;
+  /** Called once the live socket has successfully reconnected. */
+  onReconnected?: () => void;
 };
 
 /**
@@ -405,13 +419,21 @@ export type UseDeepgramSpeechToTextReturn = {
     file: DeepgramPrerecordedSource,
     options?: DeepgramPrerecordedOptions
   ) => Promise<void>;
-
+  /**
+   * Pause streaming: stop forwarding mic frames without tearing down the
+   * socket. Sends `Finalize` once (v1) to flush buffered audio and starts a
+   * periodic `KeepAlive` so the connection survives the pause.
+   */
+  pause: () => void;
+  /** Resume streaming after {@link pause}: forward mic frames again. */
+  resume: () => void;
   /** Current state of the transcription session (if trackState is enabled) */
   state?: {
     status: 'idle' | 'loading' | 'listening' | 'transcribing' | 'error';
     error: Error | null;
   };
-
+  /** Whether streaming is currently paused (only returned when trackState is enabled) */
+  isPaused?: boolean;
   /** Final accumulated transcript (only returned when trackTranscript is enabled) */
   transcript?: string;
   /** Interim/partial transcript (only returned when trackTranscript is enabled for live) */

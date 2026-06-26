@@ -17,8 +17,21 @@ import VoiceAgent from './VoiceAgent';
 import { colors, radius, spacing, type } from './theme';
 
 // Initialize Deepgram once at startup. Provide your key via .env (EXPO_PUBLIC_DEEPGRAM_API_KEY).
+//
+// Custom endpoints (regional, Dedicated, or self-hosted) are opt-in: set any of
+// the EXPO_PUBLIC_DEEPGRAM_BASE_URL / BASE_WSS / AGENT_URL vars in .env and they
+// flow straight into configure(). Leave them unset to use Deepgram's defaults.
 configure({
   apiKey: process.env.EXPO_PUBLIC_DEEPGRAM_API_KEY || 'YOUR_DEEPGRAM_API_KEY',
+  ...(process.env.EXPO_PUBLIC_DEEPGRAM_BASE_URL
+    ? { baseUrl: process.env.EXPO_PUBLIC_DEEPGRAM_BASE_URL }
+    : {}),
+  ...(process.env.EXPO_PUBLIC_DEEPGRAM_BASE_WSS
+    ? { baseWss: process.env.EXPO_PUBLIC_DEEPGRAM_BASE_WSS }
+    : {}),
+  ...(process.env.EXPO_PUBLIC_DEEPGRAM_AGENT_URL
+    ? { agentUrl: process.env.EXPO_PUBLIC_DEEPGRAM_AGENT_URL }
+    : {}),
 });
 
 type ScreenKey = 'voice' | 'speech' | 'tts' | 'text' | 'management';

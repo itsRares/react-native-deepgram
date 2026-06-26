@@ -18,7 +18,7 @@ import type {
   DeepgramGrantTokenResponse,
   UseDeepgramManagementReturn,
 } from './types/deepgram';
-import { DEEPGRAM_BASEURL } from './constants';
+import { getBaseUrl } from './constants';
 import { dgPath } from './helpers';
 
 /**
@@ -48,7 +48,7 @@ export function useDeepgramManagement(): UseDeepgramManagementReturn {
       if (!key) throw new Error('Deepgram API key missing');
 
       try {
-        const res = await fetch(`${DEEPGRAM_BASEURL}${path}`, {
+        const res = await fetch(`${getBaseUrl()}${path}`, {
           signal: ctrl.signal,
           headers: { Authorization: `Token ${key}`, ...(init.headers || {}) },
           ...init,

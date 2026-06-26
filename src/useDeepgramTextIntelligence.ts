@@ -4,7 +4,7 @@ import type {
   UseDeepgramTextIntelligenceReturn,
   DeepgramTextIntelligenceInput,
 } from './types';
-import { DEEPGRAM_BASEURL } from './constants';
+import { getBaseUrl } from './constants';
 import { buildParams } from './helpers';
 
 export function useDeepgramTextIntelligence({
@@ -85,7 +85,7 @@ export function useDeepgramTextIntelligence({
 
         const params = buildParams(paramMap);
 
-        const url = `${DEEPGRAM_BASEURL}/read${params ? `?${params}` : ''}`;
+        const url = `${getBaseUrl()}/read${params ? `?${params}` : ''}`;
         abortCtrl.current?.abort();
         abortCtrl.current = new AbortController();
 

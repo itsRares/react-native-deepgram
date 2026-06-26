@@ -13,7 +13,7 @@ import type {
   DeepgramTextToSpeechHttpEncoding,
   DeepgramTextToSpeechStreamEncoding,
 } from './types';
-import { DEEPGRAM_BASEURL, DEEPGRAM_BASEWSS } from './constants';
+import { getBaseUrl, getBaseWss } from './constants';
 import { buildParams, arrayBufferToBase64 } from './helpers';
 
 const DEFAULT_TTS_MODEL = 'aura-2-asteria-en';
@@ -309,9 +309,8 @@ export function useDeepgramTextToSpeech({
 
         const params = buildParams(httpParams);
 
-        const url = params
-          ? `${DEEPGRAM_BASEURL}/speak?${params}`
-          : `${DEEPGRAM_BASEURL}/speak`;
+        const baseUrl = getBaseUrl();
+        const url = params ? `${baseUrl}/speak?${params}` : `${baseUrl}/speak`;
         abortCtrl.current?.abort();
         abortCtrl.current = new AbortController();
 
@@ -474,9 +473,10 @@ export function useDeepgramTextToSpeech({
         );
 
         const wsParamString = buildParams(wsParams);
+        const baseWss = getBaseWss();
         const url = wsParamString
-          ? `${DEEPGRAM_BASEWSS}/speak?${wsParamString}`
-          : `${DEEPGRAM_BASEWSS}/speak`;
+          ? `${baseWss}/speak?${wsParamString}`
+          : `${baseWss}/speak`;
         ws.current = new (WebSocket as any)(url, undefined, {
           headers: { Authorization: getAuthorizationHeader(apiKey) },
         });

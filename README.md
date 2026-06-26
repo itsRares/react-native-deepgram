@@ -19,7 +19,7 @@ yarn add react-native-deepgram
 | 🧠 **Text Intelligence** | Summaries, topics, intents, sentiment over text or URLs. |
 | 🛠️ **Management API** | Typed wrapper for projects, models, keys, usage, balances, members, invitations, scopes, purchases, and temporary tokens. |
 | ⚙️ **Expo plugin** | One-line install — handles permissions, background-audio modes, and Android foreground service automatically. |
-| 🧰 **Resilient by default** | Audio interruptions, route changes, headphone unplugging, mediaserverd resets, audio-focus loss, and queue overflow are all handled. |
+| 🧰 **Resilient by default** | Audio interruptions, route changes, headphone unplugging, mediaserverd resets, audio-focus loss, and queue overflow are all handled — plus opt-in WebSocket auto-reconnect with exponential backoff. |
 | 🆕 **Modern iOS APIs** | `AVAudioApplication.requestRecordPermission` and `AllowBluetoothHFP` on iOS 17+, with safe fallbacks. |
 
 ---
@@ -232,6 +232,27 @@ configure({ apiKey: process.env.EXPO_PUBLIC_DEEPGRAM_API_KEY! });
 
 > **Never ship raw API keys.** Use `EXPO_PUBLIC_*` env vars, secrets storage, or a backend proxy that mints scoped keys.
 
+#### Custom endpoints (regional, Dedicated & self-hosted)
+
+Point the SDK at a non-default Deepgram deployment by passing base URLs to `configure`. Every override is optional and falls back to the public Deepgram endpoints.
+
+```ts
+configure({
+  apiKey: process.env.EXPO_PUBLIC_DEEPGRAM_API_KEY!,
+  baseUrl: 'https://api.beta.deepgram.com/v1', // REST (must include the version segment)
+  baseWss: 'wss://api.beta.deepgram.com/v1',   // live STT + streaming TTS sockets
+  agentUrl: 'wss://agent.deepgram.com/v1/agent/converse', // Voice Agent socket
+});
+```
+
+| Option | Applies to | Default |
+| ------ | ---------- | ------- |
+| `baseUrl` | REST calls (file STT, TTS, Text Intelligence, Management) | `https://api.deepgram.com/v1` |
+| `baseWss` | Live STT + streaming TTS sockets | `wss://api.deepgram.com/v1` |
+| `agentUrl` | Voice Agent socket | `wss://agent.deepgram.com/v1/agent/converse` |
+
+`baseUrl`/`baseWss` **must include the version segment** (`/v1`). Flux v2 endpoints are derived automatically by swapping the trailing `/v1` for `/v2`. See Deepgram's [custom endpoints reference](https://developers.deepgram.com/reference/custom-endpoints).
+
 ### 2. Hooks return reactive state — opt in
 
 Every hook supports `track*` flags that turn on a reactive return value. Without them, the hook stays event-driven (callbacks only) so it never causes unnecessary re-renders.
@@ -411,6 +432,8 @@ return (
 const {
   // Connection
   connect, disconnect, isConnected,
+  // Mic control
+  mute, unmute, isMuted,
   // Messaging
   sendMessage, sendSettings, sendMedia, sendKeepAlive,
   injectUserMessage, injectAgentMessage, updatePrompt,
@@ -432,6 +455,7 @@ const {
 | `autoStartMicrophone` | `boolean` | `true` | Automatically requests mic access and starts streaming PCM. |
 | `autoPlayAudio` | `boolean` | `true` | Plays received audio using the native player. |
 | `downsampleFactor` | `number` | heuristic | Manually override the downsample ratio applied to captured audio. |
+| `reconnect` | `DeepgramReconnectOptions` | `{ enabled: false }` | Auto-reconnect config for the agent socket. The stored `Settings` payload is re-sent on every successful reconnect. |
 
 **Reactive tracking flags** (opt-in — extra renders only when set)
 
@@ -452,6 +476,8 @@ const {
 | `onConnect` | `() => void` | Socket opens and the initial settings payload is delivered. |
 | `onClose` | `(event?: any) => void` | Socket closes (manual disconnect or remote). |
 | `onError` | `(error: unknown) => void` | Unexpected client-side error (mic, playback, socket send). |
+| `onReconnecting` | `(attempt: number) => void` | A reconnect attempt begins (1-based attempt number). Requires `reconnect.enabled`. |
+| `onReconnected` | `() => void` | The socket reconnects and the stored settings are re-sent. |
 | `onServerError` | `(message: DeepgramVoiceAgentErrorMessage) => void` | API reports a structured error (`description` + `code`). |
 | `onWarning` | `(message: DeepgramVoiceAgentWarningMessage) => void` | Non-fatal warning (e.g. degraded audio quality). |
 
@@ -499,6 +525,8 @@ const {
 | `connect` | `(settings?: DeepgramVoiceAgentSettings) => Promise<void>` | Opens the socket, optionally merges settings, starts mic streaming. |
 | `disconnect` | `() => void` | Tears down the socket, stops recording, removes listeners. |
 | `isConnected` | `() => boolean` | Returns `true` when the socket is open. |
+| `mute` | `() => void` | Stops forwarding mic audio while keeping the socket alive with periodic `KeepAlive` frames. |
+| `unmute` | `() => void` | Resumes forwarding microphone audio. |
 
 **Messaging**
 
@@ -528,6 +556,7 @@ Each value is `undefined` unless its corresponding `track*` flag is `true`.
 | Return | Type | Requires |
 | ------ | ---- | -------- |
 | `state` | `{ connectionState: 'idle' \| 'connecting' \| 'connected' \| 'disconnected'; error: string \| null; warning: string \| null }` | `trackState: true` |
+| `isMuted` | `boolean` | `trackState: true` |
 | `conversation` | `Array<{ role: string; content: string }>` | `trackConversation: true` |
 | `agentStatus` | `{ thinking: string \| null; latency: { total?: number; tts?: number; ttt?: number } \| null }` | `trackAgentStatus: true` |
 | `clearConversation` | `() => void` | `trackConversation: true` |
@@ -619,11 +648,11 @@ const pickFile = async () => {
 ```ts
 const {
   // Live streaming
-  startListening, stopListening,
+  startListening, stopListening, pause, resume,
   // File transcription
   transcribeFile,
   // Reactive state (opt-in)
-  state, transcript, interimTranscript,
+  state, transcript, interimTranscript, isPaused,
 } = useDeepgramSpeechToText(props);
 ```
 
@@ -635,6 +664,7 @@ const {
 | ---- | ---- | ----------- |
 | `live` | `DeepgramLiveListenOptions` | Default options merged into every live stream. |
 | `prerecorded` | `DeepgramPrerecordedOptions` | Default options merged into every file transcription. |
+| `reconnect` | `DeepgramReconnectOptions` | Auto-reconnect config for the live socket. Disabled unless `reconnect.enabled` is `true`. |
 
 **Live streaming callbacks**
 
@@ -644,7 +674,9 @@ const {
 | `onStart` | `() => void` | The WebSocket opens. |
 | `onTranscript` | `(transcript: string, event?: DeepgramTranscriptEvent) => void` | Every transcript update (partial and final). |
 | `onError` | `(error: unknown) => void` | A streaming error occurs. |
-| `onEnd` | `() => void` | The socket closes. |
+| `onReconnecting` | `(attempt: number) => void` | A reconnect attempt begins (1-based attempt number). Requires `reconnect.enabled`. |
+| `onReconnected` | `() => void` | The live socket successfully reconnects. |
+| `onEnd` | `() => void` | The socket closes (manual stop, or after reconnect attempts are exhausted). |
 
 **File transcription callbacks**
 
@@ -667,6 +699,8 @@ const {
 | ------ | --------- | ----------- |
 | `startListening` | `(options?: DeepgramLiveListenOptions) => Promise<void>` | Requests mic access, starts recording, streams audio to Deepgram. |
 | `stopListening` | `() => void` | Stops recording and closes the active WebSocket. |
+| `pause` | `() => void` | Pauses mic streaming while keeping the socket alive via `KeepAlive`. On v1 a `Finalize` is sent first to flush buffered audio. |
+| `resume` | `() => void` | Resumes mic streaming after a `pause`. |
 | `transcribeFile` | `(file: DeepgramPrerecordedSource, options?: DeepgramPrerecordedOptions) => Promise<void>` | Uploads a file/URI/URL and resolves via the success/error callbacks. |
 
 #### Reactive state
@@ -674,6 +708,7 @@ const {
 | Return | Type | Requires |
 | ------ | ---- | -------- |
 | `state` | `{ status: 'idle' \| 'loading' \| 'listening' \| 'transcribing' \| 'error'; error: Error \| null }` | `trackState: true` |
+| `isPaused` | `boolean` | `trackState: true` |
 | `transcript` | `string` | `trackTranscript: true` |
 | `interimTranscript` | `string` | `trackTranscript: true` |
 
@@ -1277,6 +1312,54 @@ const stt = useDeepgramSpeechToText({
 });
 ```
 
+### Pause and resume a live stream
+
+```tsx
+const { startListening, pause, resume, isPaused } = useDeepgramSpeechToText({
+  trackState: true,
+  live: { punctuate: true, interimResults: true },
+});
+
+// Stop forwarding mic audio without dropping the socket. Deepgram is kept warm
+// with periodic KeepAlive frames, so resume() continues the same session.
+<Button
+  title={isPaused ? 'Resume' : 'Pause'}
+  onPress={() => (isPaused ? resume() : pause())}
+/>;
+```
+
+### Auto-reconnect a dropped live stream
+
+```tsx
+const stt = useDeepgramSpeechToText({
+  trackState: true,
+  reconnect: {
+    enabled: true,
+    maxRetries: 5, // give up after 5 attempts
+    initialDelayMs: 500, // 0.5s, doubling each retry
+    maxDelayMs: 10_000, // capped at 10s (+ jitter)
+  },
+  onReconnecting: (attempt) => console.log(`reconnecting… (#${attempt})`),
+  onReconnected: () => console.log('back online'),
+});
+```
+
+> The Voice Agent hook accepts the same `reconnect` options and re-sends its `Settings` payload automatically on every successful reconnect.
+
+### Point at a regional or self-hosted endpoint
+
+```ts
+import { configure } from 'react-native-deepgram';
+
+configure({
+  apiKey: process.env.EXPO_PUBLIC_DEEPGRAM_API_KEY!,
+  baseUrl: 'https://api.beta.deepgram.com/v1', // REST (include the /v1 segment)
+  baseWss: 'wss://api.beta.deepgram.com/v1', // live STT + streaming TTS
+});
+```
+
+> Flux v2 URLs are derived automatically by swapping the trailing `/v1` for `/v2`.
+
 ### Transcribe a picked file with summaries + topics
 
 ```tsx
@@ -1457,6 +1540,10 @@ You ran `yarn prebuild` from `example/` but the workspace symlink wasn't created
 ## Example app
 
 The repository includes an Expo-managed playground under `example/` that wires up every hook in this package. It is configured for a tight inner-dev loop: edits to the library's TypeScript sources are hot-reloaded into the running app — no rebuild required.
+
+<p align="center">
+  <img src="assets/example.webp" alt="react-native-deepgram example app showing the Voice Agent, Speech-to-Text, Text-to-Speech, Text Intelligence, and Management screens" width="100%" />
+</p>
 
 ### 1. Install workspace dependencies
 

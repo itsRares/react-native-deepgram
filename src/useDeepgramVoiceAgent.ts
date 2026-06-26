@@ -3,6 +3,7 @@ import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 import { Deepgram } from './NativeDeepgram';
 import { askMicPermission } from './helpers/askMicPermission';
 import { arrayBufferToBase64 } from './helpers';
+import { getAgentUrl } from './constants';
 import type {
   DeepgramVoiceAgentSettings,
   DeepgramVoiceAgentSettingsMessage,
@@ -30,11 +31,21 @@ import type {
   DeepgramVoiceAgentListenConfig,
   DeepgramVoiceAgentThinkConfig,
   DeepgramVoiceAgentSpeakConfig,
+  DeepgramVoiceAgentAgentConfig,
+  DeepgramReconnectOptions,
 } from './types';
 
-const DEFAULT_AGENT_ENDPOINT = 'wss://agent.deepgram.com/v1/agent/converse';
 const DEFAULT_INPUT_SAMPLE_RATE = 16_000;
 const BASE_NATIVE_SAMPLE_RATE = 16_000;
+
+const AGENT_KEEPALIVE_INTERVAL_MS = 5_000;
+
+const DEFAULT_AGENT_RECONNECT = {
+  enabled: false,
+  maxRetries: 5,
+  initialDelayMs: 500,
+  maxDelayMs: 10_000,
+};
 
 const eventName = Platform.select({
   ios: 'DeepgramAudioPCM',
@@ -190,6 +201,16 @@ export interface UseDeepgramVoiceAgentProps {
   trackState?: boolean;
   trackConversation?: boolean;
   trackAgentStatus?: boolean;
+  /**
+   * Auto-reconnect configuration for the agent socket. Disabled by default;
+   * set `reconnect.enabled` to opt in. On reconnect the stored `Settings`
+   * message is automatically re-sent.
+   */
+  reconnect?: DeepgramReconnectOptions;
+  /** Called when a reconnect attempt begins (1-based attempt number). */
+  onReconnecting?: (attempt: number) => void;
+  /** Called once the agent socket has successfully reconnected. */
+  onReconnected?: () => void;
   onBeforeConnect?: () => void;
   onConnect?: () => void;
   onClose?: (event?: any) => void;
@@ -246,12 +267,18 @@ export interface UseDeepgramVoiceAgentReturn {
   updateThink: (think: DeepgramVoiceAgentThinkConfig) => boolean;
   updateSpeak: (speak: DeepgramVoiceAgentSpeakConfig) => boolean;
   sendMedia: (chunk: ArrayBuffer | Uint8Array | number[]) => boolean;
+  /** Stop forwarding mic frames; keep the socket alive with KeepAlive. */
+  mute: () => void;
+  /** Resume forwarding mic frames after {@link mute}. */
+  unmute: () => void;
   isConnected: () => boolean;
   state?: {
     connectionState: 'idle' | 'connecting' | 'connected' | 'disconnected';
     error: string | null;
     warning: string | null;
   };
+  /** Whether the microphone is currently muted (only when trackState is enabled). */
+  isMuted?: boolean;
   conversation?: Array<{ role: string; content: string }>;
   clearConversation?: () => void;
   agentStatus?: {
@@ -261,7 +288,7 @@ export interface UseDeepgramVoiceAgentReturn {
 }
 
 export function useDeepgramVoiceAgent({
-  endpoint = DEFAULT_AGENT_ENDPOINT,
+  endpoint,
   defaultSettings,
   autoStartMicrophone = true,
   autoPlayAudio = true,
@@ -269,6 +296,9 @@ export function useDeepgramVoiceAgent({
   trackConversation = false,
   trackAgentStatus = false,
   downsampleFactor,
+  reconnect = {},
+  onReconnecting = () => {},
+  onReconnected = () => {},
   onBeforeConnect,
   onConnect,
   onClose,
@@ -308,13 +338,30 @@ export function useDeepgramVoiceAgent({
     )
   );
   const microphoneActive = useRef(false);
+  const mutedRef = useRef(false);
+  const muteKeepAliveTimerRef = useRef<ReturnType<typeof setInterval> | null>(
+    null
+  );
   const defaultSettingsRef = useRef(defaultSettings);
   const endpointRef = useRef(endpoint);
+
+  const userDisconnectedRef = useRef(false);
+  const reconnectAttemptRef = useRef(0);
+  const reconnectingRef = useRef(false);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wsGenerationRef = useRef(0);
+  const mergedSettingsRef = useRef<DeepgramVoiceAgentSettingsMessage | null>(
+    null
+  );
+  const reconnectConfigRef = useRef({ ...DEFAULT_AGENT_RECONNECT });
+  const openSocketRef = useRef<() => void>(() => {});
 
   const onBeforeConnectRef = useRef(onBeforeConnect);
   const onConnectRef = useRef(onConnect);
   const onCloseRef = useRef(onClose);
   const onErrorRef = useRef(onError);
+  const onReconnectingRef = useRef(onReconnecting);
+  const onReconnectedRef = useRef(onReconnected);
   const onMessageRef = useRef(onMessage);
   const onWelcomeRef = useRef(onWelcome);
   const onSettingsAppliedRef = useRef(onSettingsApplied);
@@ -358,6 +405,8 @@ export function useDeepgramVoiceAgent({
     thinking: null,
     latency: null,
   }));
+
+  const [internalIsMuted, setInternalIsMuted] = useState(false);
 
   const sanitizeAudioSettings = useCallback(
     (audio?: DeepgramVoiceAgentSettings['audio']) => {
@@ -474,10 +523,13 @@ export function useDeepgramVoiceAgent({
 
   defaultSettingsRef.current = defaultSettings;
   endpointRef.current = endpoint;
+  reconnectConfigRef.current = { ...DEFAULT_AGENT_RECONNECT, ...reconnect };
   onBeforeConnectRef.current = onBeforeConnect;
   onConnectRef.current = onConnect;
   onCloseRef.current = onClose;
   onErrorRef.current = onError;
+  onReconnectingRef.current = onReconnecting;
+  onReconnectedRef.current = onReconnected;
   onMessageRef.current = onMessage;
   onWelcomeRef.current = onWelcome;
   onSettingsAppliedRef.current = onSettingsApplied;
@@ -504,6 +556,19 @@ export function useDeepgramVoiceAgent({
   }
 
   const cleanup = useCallback(() => {
+    if (muteKeepAliveTimerRef.current != null) {
+      clearInterval(muteKeepAliveTimerRef.current);
+      muteKeepAliveTimerRef.current = null;
+    }
+    mutedRef.current = false;
+    setInternalIsMuted(false);
+
+    if (reconnectTimerRef.current != null) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    reconnectingRef.current = false;
+
     audioSub.current?.remove();
     audioSub.current = null;
 
@@ -533,10 +598,19 @@ export function useDeepgramVoiceAgent({
     }
   }, []);
 
-  useEffect(() => () => cleanup(), [cleanup]);
+  useEffect(
+    () => () => {
+      userDisconnectedRef.current = true;
+      cleanup();
+    },
+    [cleanup]
+  );
 
   const handleMicChunk = useCallback(
     (ev: any) => {
+      if (mutedRef.current) {
+        return;
+      }
       const socket = ws.current;
       if (!socket || socket.readyState !== WebSocket.OPEN) {
         return;
@@ -873,9 +947,149 @@ export function useDeepgramVoiceAgent({
     []
   );
 
+  const handleAgentDisconnect = useCallback(
+    (event?: { code?: number }) => {
+      const cfg = reconnectConfigRef.current;
+      const shouldReconnect =
+        !userDisconnectedRef.current &&
+        cfg.enabled &&
+        event?.code !== 1000 &&
+        reconnectAttemptRef.current < cfg.maxRetries;
+
+      if (shouldReconnect) {
+        const attempt = reconnectAttemptRef.current;
+        reconnectAttemptRef.current = attempt + 1;
+        reconnectingRef.current = true;
+
+        const backoff = Math.min(
+          cfg.maxDelayMs,
+          cfg.initialDelayMs * 2 ** attempt
+        );
+        const delay = backoff + Math.random() * backoff * 0.25;
+
+        if (trackState) {
+          setInternalState((prev) => ({
+            ...prev,
+            connectionState: 'connecting',
+          }));
+        }
+        onReconnectingRef.current?.(attempt + 1);
+
+        if (reconnectTimerRef.current != null) {
+          clearTimeout(reconnectTimerRef.current);
+        }
+        reconnectTimerRef.current = setTimeout(() => {
+          reconnectTimerRef.current = null;
+          openSocketRef.current();
+        }, delay);
+        return;
+      }
+
+      const exhausted =
+        !userDisconnectedRef.current &&
+        cfg.enabled &&
+        reconnectAttemptRef.current >= cfg.maxRetries;
+
+      cleanup();
+
+      if (exhausted) {
+        const err = new Error(
+          `Deepgram reconnect failed after ${cfg.maxRetries} attempts`
+        );
+        if (trackState) {
+          setInternalState((prev) => ({
+            ...prev,
+            connectionState: 'disconnected',
+            error: err.message,
+          }));
+        }
+        onErrorRef.current?.(err);
+      } else if (trackState) {
+        setInternalState((prev) => ({
+          ...prev,
+          connectionState: 'disconnected',
+        }));
+      }
+
+      onCloseRef.current?.(event);
+    },
+    [cleanup, trackState]
+  );
+
+  const openSocket = useCallback(() => {
+    const apiKey = (globalThis as any).__DEEPGRAM_API_KEY__;
+    const generation = wsGenerationRef.current + 1;
+    wsGenerationRef.current = generation;
+
+    const socket = new (WebSocket as any)(
+      endpointRef.current ?? getAgentUrl(),
+      undefined,
+      {
+        headers: { Authorization: `Token ${apiKey}` },
+      }
+    );
+
+    socket.binaryType = 'arraybuffer';
+    ws.current = socket;
+
+    socket.onopen = () => {
+      if (generation !== wsGenerationRef.current) return;
+
+      const wasReconnecting = reconnectingRef.current;
+      reconnectingRef.current = false;
+      reconnectAttemptRef.current = 0;
+
+      if (mergedSettingsRef.current) {
+        sendJsonMessage(mergedSettingsRef.current);
+      }
+
+      if (trackState) {
+        setInternalState((prev) => ({
+          ...prev,
+          connectionState: 'connected',
+        }));
+      }
+
+      if (autoPlayAudio) {
+        const sampleRate =
+          mergedSettingsRef.current?.audio?.output?.sample_rate ??
+          DEFAULT_INPUT_SAMPLE_RATE;
+        const channels = 1;
+        Deepgram.startPlayer(sampleRate, channels);
+      }
+
+      if (wasReconnecting) {
+        onReconnectedRef.current?.();
+      } else {
+        onConnectRef.current?.();
+      }
+    };
+
+    socket.onmessage = handleSocketMessage;
+    socket.onerror = (err: any) => {
+      if (generation !== wsGenerationRef.current) return;
+      onErrorRef.current?.(err);
+    };
+    socket.onclose = (event: any) => {
+      if (generation !== wsGenerationRef.current) return;
+      handleAgentDisconnect(event);
+    };
+  }, [
+    autoPlayAudio,
+    handleAgentDisconnect,
+    handleSocketMessage,
+    sendJsonMessage,
+    trackState,
+  ]);
+
+  openSocketRef.current = openSocket;
+
   const connect = useCallback(
     async (overrideSettings?: DeepgramVoiceAgentSettings) => {
       cleanup();
+      userDisconnectedRef.current = false;
+      reconnectAttemptRef.current = 0;
+      reconnectingRef.current = false;
 
       if (trackState) {
         setInternalState({
@@ -883,6 +1097,7 @@ export function useDeepgramVoiceAgent({
           error: null,
           warning: null,
         });
+        setInternalIsMuted(false);
       }
 
       if (trackConversation) {
@@ -923,7 +1138,7 @@ export function useDeepgramVoiceAgent({
 
       const merged = mergeSettings(sanitizedDefault, sanitizedOverride);
 
-      const mergedSettings: DeepgramVoiceAgentSettingsMessage = {
+      mergedSettingsRef.current = {
         type: 'Settings',
         ...(merged ?? {}),
       };
@@ -939,58 +1154,15 @@ export function useDeepgramVoiceAgent({
         nativeInputSampleRate.current
       );
 
-      const socket = new (WebSocket as any)(endpointRef.current, undefined, {
-        headers: { Authorization: `Token ${apiKey}` },
-      });
-
-      socket.binaryType = 'arraybuffer';
-      ws.current = socket;
-
-      socket.onopen = () => {
-        sendJsonMessage(mergedSettings);
-
-        if (trackState) {
-          setInternalState((prev) => ({
-            ...prev,
-            connectionState: 'connected',
-          }));
-        }
-
-        if (autoPlayAudio) {
-          const sampleRate =
-            merged?.audio?.output?.sample_rate ?? DEFAULT_INPUT_SAMPLE_RATE;
-          const channels = 1;
-          Deepgram.startPlayer(sampleRate, channels);
-        }
-
-        onConnectRef.current?.();
-      };
-
-      socket.onmessage = handleSocketMessage;
-      socket.onerror = (err: any) => {
-        onErrorRef.current?.(err);
-      };
-      socket.onclose = (event: any) => {
-        if (trackState) {
-          setInternalState((prev) => ({
-            ...prev,
-            connectionState: 'disconnected',
-          }));
-        }
-
-        cleanup();
-        onCloseRef.current?.(event);
-      };
+      openSocket();
     },
     [
       cleanup,
       downsampleFactor,
       handleMicChunk,
-      handleSocketMessage,
       mergeSettings,
+      openSocket,
       sanitizeSettings,
-      sendJsonMessage,
-      autoPlayAudio,
       trackAgentStatus,
       trackConversation,
       trackState,
@@ -998,13 +1170,22 @@ export function useDeepgramVoiceAgent({
   );
 
   const disconnect = useCallback(() => {
+    userDisconnectedRef.current = true;
     cleanup();
   }, [cleanup]);
 
   const sendSettings = useCallback(
     (settings: DeepgramVoiceAgentSettings) => {
       const sanitized = sanitizeSettings(settings);
-      return sendJsonMessage({ type: 'Settings', ...(sanitized ?? {}) });
+      const message: DeepgramVoiceAgentSettingsMessage = {
+        type: 'Settings',
+        ...(sanitized ?? {}),
+      };
+      const sent = sendJsonMessage(message);
+      if (sent) {
+        mergedSettingsRef.current = message;
+      }
+      return sent;
     },
     [sanitizeSettings, sendJsonMessage]
   );
@@ -1039,27 +1220,102 @@ export function useDeepgramVoiceAgent({
     [sendJsonMessage]
   );
 
+  const mute = useCallback(() => {
+    if (mutedRef.current) {
+      return;
+    }
+    mutedRef.current = true;
+
+    if (muteKeepAliveTimerRef.current == null) {
+      muteKeepAliveTimerRef.current = setInterval(() => {
+        const socket = ws.current;
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+          return;
+        }
+        try {
+          socket.send(JSON.stringify({ type: 'KeepAlive' }));
+        } catch {}
+      }, AGENT_KEEPALIVE_INTERVAL_MS);
+    }
+
+    if (trackState) {
+      setInternalIsMuted(true);
+    }
+  }, [trackState]);
+
+  const unmute = useCallback(() => {
+    if (!mutedRef.current) {
+      return;
+    }
+    mutedRef.current = false;
+
+    if (muteKeepAliveTimerRef.current != null) {
+      clearInterval(muteKeepAliveTimerRef.current);
+      muteKeepAliveTimerRef.current = null;
+    }
+
+    if (trackState) {
+      setInternalIsMuted(false);
+    }
+  }, [trackState]);
+
+  const patchAgentSettings = useCallback(
+    (patch: Partial<DeepgramVoiceAgentAgentConfig>) => {
+      const current = mergedSettingsRef.current;
+      if (!current) {
+        return;
+      }
+      mergedSettingsRef.current = {
+        ...current,
+        agent: { ...(current.agent ?? {}), ...patch },
+      };
+    },
+    []
+  );
+
   const updatePrompt = useCallback(
-    (prompt: string) => sendJsonMessage({ type: 'UpdatePrompt', prompt }),
-    [sendJsonMessage]
+    (prompt: string) => {
+      const sent = sendJsonMessage({ type: 'UpdatePrompt', prompt });
+      if (sent) {
+        const currentThink = mergedSettingsRef.current?.agent?.think ?? {};
+        patchAgentSettings({ think: { ...currentThink, prompt } });
+      }
+      return sent;
+    },
+    [patchAgentSettings, sendJsonMessage]
   );
 
   const updateListen = useCallback(
-    (listen: DeepgramVoiceAgentListenConfig) =>
-      sendJsonMessage({ type: 'UpdateListen', listen }),
-    [sendJsonMessage]
+    (listen: DeepgramVoiceAgentListenConfig) => {
+      const sent = sendJsonMessage({ type: 'UpdateListen', listen });
+      if (sent) {
+        patchAgentSettings({ listen });
+      }
+      return sent;
+    },
+    [patchAgentSettings, sendJsonMessage]
   );
 
   const updateThink = useCallback(
-    (think: DeepgramVoiceAgentThinkConfig) =>
-      sendJsonMessage({ type: 'UpdateThink', think }),
-    [sendJsonMessage]
+    (think: DeepgramVoiceAgentThinkConfig) => {
+      const sent = sendJsonMessage({ type: 'UpdateThink', think });
+      if (sent) {
+        patchAgentSettings({ think });
+      }
+      return sent;
+    },
+    [patchAgentSettings, sendJsonMessage]
   );
 
   const updateSpeak = useCallback(
-    (speak: DeepgramVoiceAgentSpeakConfig) =>
-      sendJsonMessage({ type: 'UpdateSpeak', speak }),
-    [sendJsonMessage]
+    (speak: DeepgramVoiceAgentSpeakConfig) => {
+      const sent = sendJsonMessage({ type: 'UpdateSpeak', speak });
+      if (sent) {
+        patchAgentSettings({ speak });
+      }
+      return sent;
+    },
+    [patchAgentSettings, sendJsonMessage]
   );
 
   const sendMessage = useCallback(
@@ -1092,8 +1348,10 @@ export function useDeepgramVoiceAgent({
     updateThink,
     updateSpeak,
     sendMedia: sendBinary,
+    mute,
+    unmute,
     isConnected,
-    ...(trackState ? { state: internalState } : {}),
+    ...(trackState ? { state: internalState, isMuted: internalIsMuted } : {}),
     ...(trackConversation
       ? { conversation: internalConversation, clearConversation }
       : {}),

@@ -1,4 +1,8 @@
-import type { DeepgramCallbackMethod, DeepgramCustomMode } from './shared';
+import type {
+  DeepgramCallbackMethod,
+  DeepgramCustomMode,
+  DeepgramReconnectOptions,
+} from './shared';
 
 /**
  * Audio encoding formats supported by Deepgram's Live Listen API.
@@ -390,6 +394,63 @@ export type UseDeepgramSpeechToTextProps = {
 
   /** Automatically accumulate transcript results. @default false */
   trackTranscript?: boolean;
+
+  /**
+   * Microphone audio-level (metering) configuration. When enabled the native
+   * module emits a normalized RMS amplitude (0..1) while recording, surfaced
+   * via {@link UseDeepgramSpeechToTextReturn.audioLevel} (when `trackState` is
+   * on) and the {@link onAudioLevel} callback. Disabled by default.
+   */
+  metering?: {
+    /** Enable audio-level events while listening. @default false */
+    enabled?: boolean;
+    /** Minimum interval between level events, in ms. @default 100 */
+    intervalMs?: number;
+  };
+  /**
+   * Called with the latest microphone audio level (normalized RMS, 0..1) while
+   * listening. Only invoked when `metering.enabled` is true.
+   */
+  onAudioLevel?: (level: number) => void;
+
+  /**
+   * Persist the captured microphone audio to a file while it is simultaneously
+   * streamed to Deepgram. The resulting `file://` URI is delivered via
+   * {@link onRecordingComplete} and
+   * {@link UseDeepgramSpeechToTextReturn.recordingUri} (when `trackState` is on)
+   * once {@link UseDeepgramSpeechToTextReturn.stopListening} completes.
+   */
+  recordToFile?: {
+    /** Enable writing the live capture to a file. @default false */
+    enabled?: boolean;
+    /**
+     * Absolute destination path (with or without a `file://` prefix). When
+     * omitted, the native module writes to an app-specific location and reports
+     * the generated `file://` URI.
+     */
+    path?: string;
+    /**
+     * Container format. Only uncompressed `wav` (16 kHz PCM16 mono, mirroring
+     * the streamed audio) is currently supported.
+     */
+    format?: 'wav';
+  };
+  /**
+   * Called once a record-to-file session finishes (after `stopListening`) with
+   * the `file://` URI of the captured WAV. Only invoked when
+   * `recordToFile.enabled` is true and a file was produced.
+   */
+  onRecordingComplete?: (uri: string) => void;
+
+  /**
+   * Auto-reconnect configuration for the live streaming socket. Disabled by
+   * default; set `reconnect.enabled` to opt in.
+   */
+  reconnect?: DeepgramReconnectOptions;
+  /** Called when a reconnect attempt begins (1-based attempt number). */
+  onReconnecting?: (attempt: number) => void;
+  /** Called once the live socket has successfully reconnected. */
+  onReconnected?: () => void;
 };
 
 /**
@@ -405,13 +466,33 @@ export type UseDeepgramSpeechToTextReturn = {
     file: DeepgramPrerecordedSource,
     options?: DeepgramPrerecordedOptions
   ) => Promise<void>;
-
+  /**
+   * Pause streaming: stop forwarding mic frames without tearing down the
+   * socket. Sends `Finalize` once (v1) to flush buffered audio and starts a
+   * periodic `KeepAlive` so the connection survives the pause.
+   */
+  pause: () => void;
+  /** Resume streaming after {@link pause}: forward mic frames again. */
+  resume: () => void;
   /** Current state of the transcription session (if trackState is enabled) */
   state?: {
     status: 'idle' | 'loading' | 'listening' | 'transcribing' | 'error';
     error: Error | null;
   };
-
+  /** Whether streaming is currently paused (only returned when trackState is enabled) */
+  isPaused?: boolean;
+  /**
+   * Latest microphone audio level (normalized RMS, 0..1). Only returned when
+   * both `trackState` and `metering.enabled` are on; updates at most once per
+   * `metering.intervalMs` while listening.
+   */
+  audioLevel?: number;
+  /**
+   * `file://` URI of the most recent record-to-file capture. Only returned when
+   * `trackState` is on; populated once `stopListening` completes for a session
+   * started with `recordToFile.enabled`.
+   */
+  recordingUri?: string;
   /** Final accumulated transcript (only returned when trackTranscript is enabled) */
   transcript?: string;
   /** Interim/partial transcript (only returned when trackTranscript is enabled for live) */

@@ -10,6 +10,7 @@ import {
 import {
   useDeepgramVoiceAgent,
   createAgentSettings,
+  DeepgramError,
 } from 'react-native-deepgram';
 import OptionSelect from './components/OptionSelect';
 import Button from './components/Button';
@@ -54,6 +55,8 @@ export default function VoiceAgent() {
   const [inputSampleRate, setInputSampleRate] = useState('16000');
   const [temperature, setTemperature] = useState('0.7');
   const [customMessage, setCustomMessage] = useState('');
+  const [reconnectAttempt, setReconnectAttempt] = useState<number | null>(null);
+  const [errorCode, setErrorCode] = useState<string | null>(null);
 
   const agentSettings = useMemo(
     () =>
@@ -82,6 +85,8 @@ export default function VoiceAgent() {
   const {
     connect,
     disconnect,
+    mute,
+    unmute,
     injectUserMessage,
     sendFunctionCallResponse,
     updatePrompt,
@@ -91,6 +96,7 @@ export default function VoiceAgent() {
     state,
     conversation,
     agentStatus,
+    isMuted,
   } = useDeepgramVoiceAgent({
     defaultSettings: agentSettings,
     autoStartMicrophone: autoStartMic,
@@ -98,11 +104,22 @@ export default function VoiceAgent() {
     trackState: true,
     trackConversation: true,
     trackAgentStatus: true,
+    reconnect: { enabled: true },
+    onReconnecting: (attempt) => {
+      setReconnectAttempt(attempt);
+    },
+    onReconnected: () => {
+      setReconnectAttempt(null);
+    },
+    onError: (err) => {
+      setErrorCode(err instanceof DeepgramError ? err.code : 'unknown');
+    },
   });
 
   const connectionState = state?.connectionState ?? 'idle';
   const connecting = connectionState === 'connecting';
   const connected = connectionState === 'connected';
+  const isReconnecting = reconnectAttempt !== null;
   const conversationRef = useRef<ScrollView | null>(null);
 
   // Mic pulse animation
@@ -140,13 +157,18 @@ export default function VoiceAgent() {
 
   const startAgent = async () => {
     try {
+      setReconnectAttempt(null);
+      setErrorCode(null);
       await connect();
     } catch (err) {
       console.error('Start agent failed', err);
     }
   };
 
-  const stopAgent = () => disconnect();
+  const stopAgent = () => {
+    setReconnectAttempt(null);
+    disconnect();
+  };
 
   const sendCustomUserMessage = () => {
     const message = customMessage.trim();
@@ -180,18 +202,26 @@ export default function VoiceAgent() {
 
   const tone = state?.error
     ? 'error'
-    : connecting
+    : isReconnecting
       ? 'connecting'
-      : connected
-        ? 'live'
-        : 'idle';
+      : connecting
+        ? 'connecting'
+        : isMuted
+          ? 'warning'
+          : connected
+            ? 'live'
+            : 'idle';
   const toneLabel = state?.error
     ? 'Error'
-    : connecting
-      ? 'Connecting'
-      : connected
-        ? 'Live'
-        : 'Disconnected';
+    : isReconnecting
+      ? 'Reconnecting'
+      : connecting
+        ? 'Connecting'
+        : isMuted
+          ? 'Muted'
+          : connected
+            ? 'Live'
+            : 'Disconnected';
 
   const pulseScale = pulse.interpolate({
     inputRange: [0, 1],
@@ -244,21 +274,79 @@ export default function VoiceAgent() {
 
           <Text style={styles.heroTitle}>
             {connected
-              ? 'Listening — talk to the agent'
-              : connecting
-                ? 'Connecting…'
-                : 'Voice Agent'}
+              ? isMuted
+                ? 'Muted'
+                : 'Listening — talk to the agent'
+              : isReconnecting
+                ? 'Reconnecting…'
+                : connecting
+                  ? 'Connecting…'
+                  : 'Voice Agent'}
           </Text>
           <Text style={styles.heroSubtitle}>
             {connected
               ? `Model · ${thinkModel}`
-              : 'Configure below and tap Start'}
+              : isReconnecting
+                ? 'Connection dropped — retrying automatically.'
+                : 'Configure below and tap Start'}
           </Text>
+
+          <View style={styles.capabilityRow}>
+            <View
+              style={[
+                styles.capabilityChip,
+                isMuted && styles.capabilityChipActive,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.capabilityChipText,
+                  isMuted && styles.capabilityChipTextActive,
+                ]}
+              >
+                🔇 Mute
+              </Text>
+            </View>
+            <View
+              style={[
+                styles.capabilityChip,
+                isReconnecting && styles.capabilityChipActive,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.capabilityChipText,
+                  isReconnecting && styles.capabilityChipTextActive,
+                ]}
+              >
+                ↻ Auto-reconnect
+              </Text>
+            </View>
+            <View style={styles.capabilityChip}>
+              <Text style={styles.capabilityChipText}>✎ Live updates</Text>
+            </View>
+          </View>
 
           <View style={styles.heroActions}>
             {connected ? (
+              <View style={styles.heroButtonRow}>
+                <Button
+                  title={isMuted ? 'Unmute' : 'Mute'}
+                  variant="secondary"
+                  size="lg"
+                  iconLeft={isMuted ? '🎤' : '🔇'}
+                  onPress={() => (isMuted ? unmute() : mute())}
+                />
+                <Button
+                  title="Disconnect"
+                  variant="danger"
+                  size="lg"
+                  onPress={stopAgent}
+                />
+              </View>
+            ) : isReconnecting ? (
               <Button
-                title="Disconnect"
+                title="Cancel reconnect"
                 variant="danger"
                 size="lg"
                 onPress={stopAgent}
@@ -277,9 +365,20 @@ export default function VoiceAgent() {
           </View>
         </View>
 
+        {isReconnecting ? (
+          <View style={styles.reconnectBanner}>
+            <Text style={styles.reconnectText}>
+              ↻ Reconnecting… (attempt {reconnectAttempt})
+            </Text>
+          </View>
+        ) : null}
+
         {state?.error ? (
           <View style={styles.errorBanner}>
-            <Text style={styles.errorText}>⚠ {state.error}</Text>
+            <Text style={styles.errorText}>
+              ⚠ {errorCode ? `[${errorCode}] ` : ''}
+              {state.error}
+            </Text>
           </View>
         ) : null}
         {state?.warning ? (
@@ -570,6 +669,50 @@ const styles = StyleSheet.create({
   heroActions: {
     width: '100%',
     alignItems: 'stretch',
+  },
+  heroButtonRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: spacing.md,
+  },
+  capabilityRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  capabilityChip: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 5,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceMuted,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  capabilityChipActive: {
+    backgroundColor: colors.accentMuted,
+    borderColor: colors.accent,
+  },
+  capabilityChipText: {
+    ...type.small,
+    color: colors.textMuted,
+    fontSize: 12,
+  },
+  capabilityChipTextActive: {
+    color: colors.accent,
+  },
+  reconnectBanner: {
+    backgroundColor: colors.accentMuted,
+    borderColor: colors.accent,
+    borderWidth: 1,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  reconnectText: {
+    color: colors.accent,
+    ...type.smallMedium,
   },
   errorBanner: {
     backgroundColor: '#3a1418',

@@ -12,9 +12,12 @@ import type {
   DeepgramTextToSpeechStreamErrorMessage,
   DeepgramTextToSpeechHttpEncoding,
   DeepgramTextToSpeechStreamEncoding,
+  DeepgramTextToSpeechHttpOptions,
+  DeepgramTextToSpeechBytes,
 } from './types';
-import { DEEPGRAM_BASEURL, DEEPGRAM_BASEWSS } from './constants';
-import { buildParams, arrayBufferToBase64 } from './helpers';
+import { getBaseUrl, getBaseWss } from './constants';
+import { buildParams, arrayBufferToBase64, resolveAuthHeader } from './helpers';
+import { toDeepgramError } from './types';
 
 const DEFAULT_TTS_MODEL = 'aura-2-asteria-en';
 const DEFAULT_TTS_SAMPLE_RATE = 24_000;
@@ -23,6 +26,26 @@ const DEFAULT_TTS_STREAM_ENCODING: DeepgramTextToSpeechStreamEncoding =
   'linear16';
 const DEFAULT_TTS_CONTAINER = 'none';
 const DEFAULT_TTS_MP3_BITRATE = 48_000;
+
+const TTS_BYTES_CACHE_MAX = 50;
+
+const deriveTtsMimeType = (encoding?: string, container?: string): string => {
+  if (container === 'wav') return 'audio/wav';
+  if (container === 'ogg') return 'audio/ogg';
+  switch (encoding) {
+    case 'mp3':
+      return 'audio/mpeg';
+    case 'aac':
+      return 'audio/aac';
+    case 'flac':
+      return 'audio/flac';
+    case 'opus':
+      return 'audio/ogg';
+    default:
+      // linear16 / mulaw / alaw and other raw PCM payloads have no container.
+      return 'application/octet-stream';
+  }
+};
 
 type QueryParamPrimitive = string | number | boolean | null | undefined;
 type QueryParamValue = QueryParamPrimitive | Array<QueryParamPrimitive>;
@@ -53,14 +76,6 @@ const ensureQueryParam = (
     return;
   }
   params[key] = value;
-};
-
-const getAuthorizationHeader = (apiKeyOrToken: string): string => {
-  const trimmed = apiKeyOrToken.trim();
-  if (/^(Token|Bearer)\s+/i.test(trimmed)) {
-    return trimmed;
-  }
-  return `Token ${trimmed}`;
 };
 
 const isMetadataMessage = (
@@ -263,6 +278,9 @@ export function useDeepgramTextToSpeech({
 
   /* ---------- HTTP (one-shot synth) ---------- */
   const abortCtrl = useRef<AbortController | null>(null);
+  const ttsBytesCacheRef = useRef<Map<string, DeepgramTextToSpeechBytes>>(
+    new Map()
+  );
 
   const synthesize = useCallback(
     async (text: string) => {
@@ -271,9 +289,8 @@ export function useDeepgramTextToSpeech({
         setInternalState({ status: 'loading', error: null });
       }
       try {
-        const apiKey = (globalThis as any).__DEEPGRAM_API_KEY__;
-        if (!apiKey) throw new Error('Deepgram API key missing');
         if (!text?.trim()) throw new Error('Text is empty');
+        const authHeader = await resolveAuthHeader();
 
         const httpParams: Record<string, QueryParamValue> = {
           ...resolvedHttpOptions.queryParams,
@@ -309,16 +326,15 @@ export function useDeepgramTextToSpeech({
 
         const params = buildParams(httpParams);
 
-        const url = params
-          ? `${DEEPGRAM_BASEURL}/speak?${params}`
-          : `${DEEPGRAM_BASEURL}/speak`;
+        const baseUrl = getBaseUrl();
+        const url = params ? `${baseUrl}/speak?${params}` : `${baseUrl}/speak`;
         abortCtrl.current?.abort();
         abortCtrl.current = new AbortController();
 
         const res = await fetch(url, {
           method: 'POST',
           headers: {
-            'Authorization': getAuthorizationHeader(apiKey),
+            'Authorization': authHeader,
             'Content-Type': 'application/json',
             'Accept': 'application/octet-stream',
           },
@@ -344,17 +360,91 @@ export function useDeepgramTextToSpeech({
           throw err;
         }
 
-        onSynthesizeErrorRef.current(err);
+        const dgError = toDeepgramError(err);
+        onSynthesizeErrorRef.current(dgError);
         if (trackState) {
           setInternalState({
             status: 'error',
-            error: err instanceof Error ? err : new Error(String(err)),
+            error: dgError,
           });
         }
-        throw err;
+        throw dgError;
       }
     },
     [resolvedHttpOptions, trackState]
+  );
+
+  /* ---------- HTTP (synth to bytes + cache) ---------- */
+  const synthesizeToBytes = useCallback(
+    async (
+      text: string,
+      opts?: DeepgramTextToSpeechHttpOptions
+    ): Promise<DeepgramTextToSpeechBytes> => {
+      if (!text?.trim()) throw new Error('Text is empty');
+
+      // Per-call overrides win over the hook's resolved HTTP options.
+      const merged = { ...resolvedHttpOptions, ...(opts ?? {}) };
+
+      const httpParams: Record<string, QueryParamValue> = {
+        ...resolvedHttpOptions.queryParams,
+        ...(opts?.queryParams ?? {}),
+      };
+      ensureQueryParam(httpParams, 'model', merged.model);
+      ensureQueryParam(httpParams, 'encoding', merged.encoding);
+      ensureQueryParam(httpParams, 'sample_rate', merged.sampleRate);
+      ensureQueryParam(httpParams, 'container', merged.container);
+      ensureQueryParam(httpParams, 'format', merged.format);
+      ensureQueryParam(httpParams, 'bit_rate', merged.bitRate);
+      ensureQueryParam(httpParams, 'speed', merged.speed);
+      ensureQueryParam(httpParams, 'tag', merged.tag);
+      ensureQueryParam(httpParams, 'mip_opt_out', merged.mipOptOut);
+
+      const cache = ttsBytesCacheRef.current;
+      const cacheKey = JSON.stringify({ text, params: httpParams });
+      const cached = cache.get(cacheKey);
+      if (cached) {
+        // LRU touch: re-insert to mark as most-recently-used.
+        cache.delete(cacheKey);
+        cache.set(cacheKey, cached);
+        return { data: cached.data.slice(0), mimeType: cached.mimeType };
+      }
+
+      const authHeader = await resolveAuthHeader();
+      const params = buildParams(httpParams);
+      const baseUrl = getBaseUrl();
+      const url = params ? `${baseUrl}/speak?${params}` : `${baseUrl}/speak`;
+
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': authHeader,
+          'Content-Type': 'application/json',
+          'Accept': 'application/octet-stream',
+        },
+        body: JSON.stringify({ text }),
+      });
+
+      if (!res.ok) {
+        // Don't cache error responses.
+        const errText = await res.text();
+        throw new Error(`HTTP ${res.status}: ${errText}`);
+      }
+
+      const data = await res.arrayBuffer();
+      const mimeType =
+        res.headers?.get?.('Content-Type') ||
+        deriveTtsMimeType(merged.encoding, merged.container);
+
+      const result: DeepgramTextToSpeechBytes = { data, mimeType };
+      cache.set(cacheKey, { data: data.slice(0), mimeType });
+      while (cache.size > TTS_BYTES_CACHE_MAX) {
+        const oldest = cache.keys().next().value;
+        if (oldest === undefined) break;
+        cache.delete(oldest);
+      }
+      return result;
+    },
+    [resolvedHttpOptions]
   );
 
   /* ---------- WebSocket (streaming synth) ---------- */
@@ -385,11 +475,12 @@ export function useDeepgramTextToSpeech({
         ws.current.send(JSON.stringify(normalizedMessage));
         return true;
       } catch (err) {
-        onStreamErrorRef.current(err);
+        const dgError = toDeepgramError(err);
+        onStreamErrorRef.current(dgError);
         if (trackState) {
           setInternalState({
             status: 'error',
-            error: err instanceof Error ? err : new Error(String(err)),
+            error: dgError,
           });
         }
         return false;
@@ -451,9 +542,8 @@ export function useDeepgramTextToSpeech({
         setInternalState({ status: 'connecting', error: null });
       }
       try {
-        const apiKey = (globalThis as any).__DEEPGRAM_API_KEY__;
-        if (!apiKey) throw new Error('Deepgram API key missing');
         if (!text?.trim()) throw new Error('Text is empty');
+        const authHeader = await resolveAuthHeader();
 
         const wsParams: Record<string, QueryParamValue> = {
           ...resolvedStreamOptions.queryParams,
@@ -474,11 +564,12 @@ export function useDeepgramTextToSpeech({
         );
 
         const wsParamString = buildParams(wsParams);
+        const baseWss = getBaseWss();
         const url = wsParamString
-          ? `${DEEPGRAM_BASEWSS}/speak?${wsParamString}`
-          : `${DEEPGRAM_BASEWSS}/speak`;
+          ? `${baseWss}/speak?${wsParamString}`
+          : `${baseWss}/speak`;
         ws.current = new (WebSocket as any)(url, undefined, {
-          headers: { Authorization: getAuthorizationHeader(apiKey) },
+          headers: { Authorization: authHeader },
         });
         const socket = ws.current as WebSocket;
 
@@ -549,13 +640,14 @@ export function useDeepgramTextToSpeech({
                   const code =
                     err && typeof err.code === 'string' ? err.code : undefined;
 
-                  onStreamErrorRef.current(
+                  const dgError = toDeepgramError(
                     new Error(description ?? code ?? 'TTS error')
                   );
+                  onStreamErrorRef.current(dgError);
                   if (trackState) {
                     setInternalState({
                       status: 'error',
-                      error: new Error(description ?? code ?? 'TTS error'),
+                      error: dgError,
                     });
                   }
                   break;
@@ -571,11 +663,12 @@ export function useDeepgramTextToSpeech({
         };
 
         socket.onerror = (err) => {
-          onStreamErrorRef.current(err);
+          const dgError = toDeepgramError(err);
+          onStreamErrorRef.current(dgError);
           if (trackState) {
             setInternalState({
               status: 'error',
-              error: err instanceof Error ? err : new Error(String(err)),
+              error: dgError,
             });
           }
         };
@@ -587,15 +680,16 @@ export function useDeepgramTextToSpeech({
           closeStream();
         };
       } catch (err) {
-        onStreamErrorRef.current(err);
+        const dgError = toDeepgramError(err);
+        onStreamErrorRef.current(dgError);
         if (trackState) {
           setInternalState({
             status: 'error',
-            error: err instanceof Error ? err : new Error(String(err)),
+            error: dgError,
           });
         }
         closeStream();
-        throw err;
+        throw dgError;
       }
     },
     [resolvedStreamOptions, sendText, autoPlayAudio, closeStream, trackState]
@@ -609,11 +703,12 @@ export function useDeepgramTextToSpeech({
         onStreamEndRef.current();
       }
     } catch (err) {
-      onStreamErrorRef.current(err);
+      const dgError = toDeepgramError(err);
+      onStreamErrorRef.current(dgError);
       if (trackState) {
         setInternalState({
           status: 'error',
-          error: err instanceof Error ? err : new Error(String(err)),
+          error: dgError,
         });
       }
     }
@@ -630,6 +725,7 @@ export function useDeepgramTextToSpeech({
 
   return {
     synthesize,
+    synthesizeToBytes,
     startStreaming,
     sendMessage,
     sendText,

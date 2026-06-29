@@ -4,8 +4,9 @@ import type {
   UseDeepgramTextIntelligenceReturn,
   DeepgramTextIntelligenceInput,
 } from './types';
-import { DEEPGRAM_BASEURL } from './constants';
-import { buildParams } from './helpers';
+import { getBaseUrl } from './constants';
+import { buildParams, resolveAuthHeader } from './helpers';
+import { toDeepgramError } from './types';
 
 export function useDeepgramTextIntelligence({
   onBeforeAnalyze = () => {},
@@ -57,8 +58,7 @@ export function useDeepgramTextIntelligence({
       }
 
       try {
-        const apiKey = (globalThis as any).__DEEPGRAM_API_KEY__;
-        if (!apiKey) throw new Error('Deepgram API key missing');
+        const authHeader = await resolveAuthHeader();
 
         const { text, url: sourceUrl } = input;
 
@@ -85,7 +85,7 @@ export function useDeepgramTextIntelligence({
 
         const params = buildParams(paramMap);
 
-        const url = `${DEEPGRAM_BASEURL}/read${params ? `?${params}` : ''}`;
+        const url = `${getBaseUrl()}/read${params ? `?${params}` : ''}`;
         abortCtrl.current?.abort();
         abortCtrl.current = new AbortController();
 
@@ -93,7 +93,7 @@ export function useDeepgramTextIntelligence({
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Token ${apiKey}`,
+            'Authorization': authHeader,
           },
           body: JSON.stringify({
             ...(text ? { text } : {}),
@@ -114,11 +114,12 @@ export function useDeepgramTextIntelligence({
         }
       } catch (err: any) {
         if (err.name === 'AbortError') return;
-        onAnalyzeErrorRef.current(err);
+        const dgError = toDeepgramError(err);
+        onAnalyzeErrorRef.current(dgError);
         if (trackState) {
           setInternalState({
             status: 'error',
-            error: err instanceof Error ? err : new Error(String(err)),
+            error: dgError,
           });
         }
       }

@@ -1,7 +1,17 @@
 import { useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import {
+  Platform,
+  ScrollView,
+  Share,
+  StyleSheet,
+  Switch,
+  Text,
+  View,
+} from 'react-native';
+import * as FileSystem from 'expo-file-system';
 import {
   useDeepgramTextToSpeech,
+  arrayBufferToBase64,
   type DeepgramTextToSpeechStreamMetadataMessage,
   type DeepgramTextToSpeechStreamWarningMessage,
   type DeepgramTextToSpeechCallbackMethod,
@@ -100,6 +110,39 @@ const parseNumber = (value: string): number | undefined => {
   return Number.isFinite(parsed) ? parsed : undefined;
 };
 
+const extensionForAudio = (
+  mimeType: string,
+  encoding?: string,
+  container?: string
+): string => {
+  const mt = mimeType.toLowerCase();
+  if (mt.includes('mpeg') || mt.includes('mp3')) return 'mp3';
+  if (mt.includes('wav')) return 'wav';
+  if (mt.includes('aac')) return 'aac';
+  if (mt.includes('ogg') || mt.includes('opus')) return 'ogg';
+  if (mt.includes('flac')) return 'flac';
+  if (container === 'wav') return 'wav';
+  if (container === 'ogg') return 'ogg';
+  switch (encoding) {
+    case 'mp3':
+      return 'mp3';
+    case 'aac':
+      return 'aac';
+    case 'opus':
+      return 'ogg';
+    case 'flac':
+      return 'flac';
+    case 'mulaw':
+      return 'ulaw';
+    case 'alaw':
+      return 'alaw';
+    case 'linear16':
+      return 'pcm';
+    default:
+      return 'audio';
+  }
+};
+
 export default function TextToSpeech() {
   const [text, setText] = useState('');
   const [streamText, setStreamText] = useState('');
@@ -115,6 +158,14 @@ export default function TextToSpeech() {
     DeepgramTextToSpeechStreamWarningMessage[]
   >([]);
   const [streamAutoFlush, setStreamAutoFlush] = useState(true);
+
+  const [bytesResult, setBytesResult] = useState<{
+    size: number;
+    mimeType: string;
+    ms: number;
+    uri: string;
+  } | null>(null);
+  const [isFetchingBytes, setIsFetchingBytes] = useState(false);
 
   const [httpModel, setHttpModel] = useState('aura-2-asteria-en');
   const [httpEncoding, setHttpEncoding] = useState('linear16');
@@ -165,7 +216,11 @@ export default function TextToSpeech() {
     | DeepgramTextToSpeechSampleRate
     | undefined;
 
-  const { synthesize, state: httpState } = useDeepgramTextToSpeech({
+  const {
+    synthesize,
+    synthesizeToBytes,
+    state: httpState,
+  } = useDeepgramTextToSpeech({
     trackState: true,
     options: {
       http: {
@@ -235,6 +290,76 @@ export default function TextToSpeech() {
     }
   };
 
+  const handleSaveToFile = async () => {
+    setIsFetchingBytes(true);
+    try {
+      const startedAt = Date.now();
+      // The in-app HTTP player only decodes linear16 PCM, so this screen
+      // defaults to raw PCM — which has no container and isn't a self-contained
+      // file (you'd get a .pcm most apps can't open). For the export we upgrade
+      // raw PCM to a portable MP3; a real container/codec is saved as-is.
+      const isRawPcm =
+        (!httpEncodingValue ||
+          httpEncodingValue === 'linear16' ||
+          httpEncodingValue === 'mulaw' ||
+          httpEncodingValue === 'alaw') &&
+        httpContainerValue !== 'wav';
+      // synthesizeToBytes returns the audio WITHOUT playing it, so it's the
+      // right call for saving/caching. Identical prompts hit the in-memory LRU.
+      // mp3 takes only encoding + bit_rate (container/sample_rate are N/A).
+      const { data, mimeType } = await synthesizeToBytes(
+        text,
+        isRawPcm
+          ? {
+              encoding: 'mp3',
+              bitRate: 48000,
+              container: undefined,
+              sampleRate: undefined,
+            }
+          : undefined
+      );
+      const ext = extensionForAudio(
+        mimeType,
+        httpEncodingValue,
+        httpContainerValue
+      );
+      const base64 = arrayBufferToBase64(data);
+      const stamp = Date.now();
+      const ms = stamp - startedAt;
+
+      if (Platform.OS === 'android') {
+        // Let the user choose a destination folder via the Storage Access
+        // Framework, then write the bytes into the file they picked.
+        const perm =
+          await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+        if (!perm.granted) return;
+        const baseMime = mimeType.split(';')[0] || 'application/octet-stream';
+        const destUri = await FileSystem.StorageAccessFramework.createFileAsync(
+          perm.directoryUri,
+          `deepgram-tts-${stamp}`,
+          baseMime
+        );
+        await FileSystem.writeAsStringAsync(destUri, base64, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        setBytesResult({ size: data.byteLength, mimeType, ms, uri: destUri });
+      } else {
+        // iOS: write to a temp file, then open the share sheet so the user can
+        // “Save to Files” (or send it to any app) and choose the location.
+        const tmpUri = `${FileSystem.cacheDirectory}deepgram-tts-${stamp}.${ext}`;
+        await FileSystem.writeAsStringAsync(tmpUri, base64, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        setBytesResult({ size: data.byteLength, mimeType, ms, uri: tmpUri });
+        await Share.share({ url: tmpUri });
+      }
+    } catch (err) {
+      console.warn('Save to file failed', err);
+    } finally {
+      setIsFetchingBytes(false);
+    }
+  };
+
   const handleStartStream = async () => {
     try {
       await startStreaming(text);
@@ -298,7 +423,36 @@ export default function TextToSpeech() {
                 iconLeft="🎧"
               />
             )}
+            <Button
+              title="Save to file"
+              variant="ghost"
+              onPress={handleSaveToFile}
+              loading={isFetchingBytes}
+              disabled={isFetchingBytes || !text.trim()}
+              iconLeft="💾"
+            />
           </View>
+          {bytesResult ? (
+            <View style={styles.bytesBanner}>
+              <Text style={styles.bytesTitle}>
+                💾 {bytesResult.size.toLocaleString()} bytes ·{' '}
+                {bytesResult.mimeType}
+              </Text>
+              <Text style={styles.bytesPath} selectable numberOfLines={2}>
+                {bytesResult.uri}
+              </Text>
+              <Text style={styles.bytesHint}>
+                Synthesized in {bytesResult.ms} ms via synthesizeToBytes (no
+                playback).{' '}
+                {bytesResult.mimeType.includes('mpeg')
+                  ? 'Exported as MP3 so it plays anywhere. '
+                  : ''}
+                {Platform.OS === 'ios'
+                  ? 'Pick “Save to Files” in the share sheet to choose where it lands.'
+                  : 'Saved to the folder you selected.'}
+              </Text>
+            </View>
+          ) : null}
           {httpState?.error ? (
             <View style={styles.errorBanner}>
               <Text style={styles.errorText}>⚠ {httpState.error.message}</Text>
@@ -605,6 +759,25 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
   },
   errorText: { color: colors.danger, ...type.smallMedium },
+  bytesBanner: {
+    backgroundColor: colors.surfaceMuted,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginTop: spacing.md,
+  },
+  bytesTitle: { color: colors.text, ...type.smallMedium },
+  bytesPath: {
+    ...type.small,
+    color: colors.accent,
+    marginTop: 4,
+  },
+  bytesHint: {
+    ...type.small,
+    color: colors.textMuted,
+    marginTop: 4,
+  },
   kvBlock: {},
   kvTitle: {
     ...type.smallMedium,

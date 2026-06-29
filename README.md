@@ -14,12 +14,12 @@ yarn add react-native-deepgram
 | | |
 | --- | --- |
 | 🗣️ **Voice Agent** | Full-duplex agents over Deepgram's WebSocket. Hardware AEC on iOS (VPIO) and Android (`VOICE_COMMUNICATION` + `MODE_IN_COMMUNICATION`). Function calling, prompt updates, latency telemetry. |
-| 🎙️ **Speech-to-Text** | Live PCM streaming over WebSocket on STT v1 *or* Flux v2 (`flux-general-en`). File transcription with summarisation, topics, intents, entities. |
+| 🎙️ **Speech-to-Text** | Live PCM streaming over WebSocket on STT v1 *or* Flux v2 (`flux-general-en`). File transcription with summarisation, topics, intents, entities. Optionally record the mic to a WAV file while you stream. |
 | 🔊 **Text-to-Speech** | One-shot HTTP synthesis or low-latency WebSocket streaming with `Speak` / `Flush` / `Clear` / `Close` controls. |
 | 🧠 **Text Intelligence** | Summaries, topics, intents, sentiment over text or URLs. |
 | 🛠️ **Management API** | Typed wrapper for projects, models, keys, usage, balances, members, invitations, scopes, purchases, and temporary tokens. |
 | ⚙️ **Expo plugin** | One-line install — handles permissions, background-audio modes, and Android foreground service automatically. |
-| 🧰 **Resilient by default** | Audio interruptions, route changes, headphone unplugging, mediaserverd resets, audio-focus loss, and queue overflow are all handled. |
+| 🧰 **Resilient by default** | Audio interruptions, route changes, headphone unplugging, mediaserverd resets, audio-focus loss, and queue overflow are all handled — plus opt-in WebSocket auto-reconnect with exponential backoff. |
 | 🆕 **Modern iOS APIs** | `AVAudioApplication.requestRecordPermission` and `AllowBluetoothHFP` on iOS 17+, with safe fallbacks. |
 
 ---
@@ -232,6 +232,51 @@ configure({ apiKey: process.env.EXPO_PUBLIC_DEEPGRAM_API_KEY! });
 
 > **Never ship raw API keys.** Use `EXPO_PUBLIC_*` env vars, secrets storage, or a backend proxy that mints scoped keys.
 
+#### Custom endpoints (regional, Dedicated & self-hosted)
+
+Point the SDK at a non-default Deepgram deployment by passing base URLs to `configure`. Every override is optional and falls back to the public Deepgram endpoints.
+
+```ts
+configure({
+  apiKey: process.env.EXPO_PUBLIC_DEEPGRAM_API_KEY!,
+  baseUrl: 'https://api.beta.deepgram.com/v1', // REST (must include the version segment)
+  baseWss: 'wss://api.beta.deepgram.com/v1',   // live STT + streaming TTS sockets
+  agentUrl: 'wss://agent.deepgram.com/v1/agent/converse', // Voice Agent socket
+});
+```
+
+| Option | Applies to | Default |
+| ------ | ---------- | ------- |
+| `baseUrl` | REST calls (file STT, TTS, Text Intelligence, Management) | `https://api.deepgram.com/v1` |
+| `baseWss` | Live STT + streaming TTS sockets | `wss://api.deepgram.com/v1` |
+| `agentUrl` | Voice Agent socket | `wss://agent.deepgram.com/v1/agent/converse` |
+
+`baseUrl`/`baseWss` **must include the version segment** (`/v1`). Flux v2 endpoints are derived automatically by swapping the trailing `/v1` for `/v2`. See Deepgram's [custom endpoints reference](https://developers.deepgram.com/reference/custom-endpoints).
+
+#### Ephemeral / scoped tokens (keep your API key off-device)
+
+Instead of shipping a long-lived `apiKey`, you can hand `configure` a `getToken` provider that returns a short-lived Deepgram token minted by your backend (which proxies Deepgram's [`/v1/auth/grant`](https://developers.deepgram.com/reference/token-based-auth-api/grant-token)). The SDK caches the token, refreshes it before it expires, and de-duplicates concurrent refreshes — so a burst of requests never triggers multiple grants.
+
+```ts
+configure({
+  // No raw apiKey on the device. `getToken` takes precedence when provided.
+  getToken: async () => {
+    const res = await fetch('https://your-backend.example.com/deepgram-token');
+    const { access_token, expires_in } = await res.json();
+    return { token: access_token, expiresInSeconds: expires_in };
+  },
+});
+```
+
+| Field | Type | Description |
+| ----- | ---- | ----------- |
+| `token` | `string` | The short-lived token. Sent as `Authorization: Bearer <token>`. |
+| `expiresInSeconds` | `number` (optional) | TTL hint used to refresh ahead of expiry. Defaults to `30`. |
+
+- When both `getToken` and `apiKey` are set, `getToken` wins; the API key is the fallback.
+- The token only needs to be valid at connection time — live STT / Voice Agent sockets keep running after it expires.
+- **Exception:** the Management API (`useDeepgramManagement`) cannot authenticate with temporary tokens, so it always uses the configured `apiKey`.
+
 ### 2. Hooks return reactive state — opt in
 
 Every hook supports `track*` flags that turn on a reactive return value. Without them, the hook stays event-driven (callbacks only) so it never causes unnecessary re-renders.
@@ -265,6 +310,26 @@ For tuning details, see [Audio session, AEC & background](#audio-session-aec--ba
 | `useDeepgramTextToSpeech` | TTS via REST or streaming | `https://api.deepgram.com/v1/speak` & `wss://api.deepgram.com/v1/speak` |
 | `useDeepgramTextIntelligence` | Summaries, topics, intents, sentiment | `https://api.deepgram.com/v1/read` |
 | `useDeepgramManagement` | Projects / keys / usage REST API | `https://api.deepgram.com/v1` |
+
+### 5. Typed errors
+
+Every error the hooks surface — mic-permission denials, native start/stop failures, fetch and WebSocket errors — is normalized to a `DeepgramError` with a typed `code`, so you can branch on a stable enum instead of string-matching messages. The original failure is preserved on `cause`.
+
+```ts
+import { DeepgramError, type DeepgramErrorCode } from 'react-native-deepgram';
+
+useDeepgramSpeechToText({
+  onError: (err) => {
+    if (err instanceof DeepgramError && err.code === 'permission_denied') {
+      promptForMicAccess();
+    }
+  },
+});
+```
+
+The `code` is one of the native reject codes (or `'unknown'` when it can't be mapped):
+
+`permission_denied` · `init_failed` · `start_error` · `stop_error` · `audio_start_error` · `audio_stop_error` · `stop_player_error` · `invalid_data` · `playback_error`
 
 ---
 
@@ -411,6 +476,8 @@ return (
 const {
   // Connection
   connect, disconnect, isConnected,
+  // Mic control
+  mute, unmute, isMuted,
   // Messaging
   sendMessage, sendSettings, sendMedia, sendKeepAlive,
   injectUserMessage, injectAgentMessage, updatePrompt,
@@ -432,6 +499,7 @@ const {
 | `autoStartMicrophone` | `boolean` | `true` | Automatically requests mic access and starts streaming PCM. |
 | `autoPlayAudio` | `boolean` | `true` | Plays received audio using the native player. |
 | `downsampleFactor` | `number` | heuristic | Manually override the downsample ratio applied to captured audio. |
+| `reconnect` | `DeepgramReconnectOptions` | `{ enabled: false }` | Auto-reconnect config for the agent socket. The stored `Settings` payload is re-sent on every successful reconnect. |
 
 **Reactive tracking flags** (opt-in — extra renders only when set)
 
@@ -452,6 +520,8 @@ const {
 | `onConnect` | `() => void` | Socket opens and the initial settings payload is delivered. |
 | `onClose` | `(event?: any) => void` | Socket closes (manual disconnect or remote). |
 | `onError` | `(error: unknown) => void` | Unexpected client-side error (mic, playback, socket send). |
+| `onReconnecting` | `(attempt: number) => void` | A reconnect attempt begins (1-based attempt number). Requires `reconnect.enabled`. |
+| `onReconnected` | `() => void` | The socket reconnects and the stored settings are re-sent. |
 | `onServerError` | `(message: DeepgramVoiceAgentErrorMessage) => void` | API reports a structured error (`description` + `code`). |
 | `onWarning` | `(message: DeepgramVoiceAgentWarningMessage) => void` | Non-fatal warning (e.g. degraded audio quality). |
 
@@ -499,6 +569,8 @@ const {
 | `connect` | `(settings?: DeepgramVoiceAgentSettings) => Promise<void>` | Opens the socket, optionally merges settings, starts mic streaming. |
 | `disconnect` | `() => void` | Tears down the socket, stops recording, removes listeners. |
 | `isConnected` | `() => boolean` | Returns `true` when the socket is open. |
+| `mute` | `() => void` | Stops forwarding mic audio while keeping the socket alive with periodic `KeepAlive` frames. |
+| `unmute` | `() => void` | Resumes forwarding microphone audio. |
 
 **Messaging**
 
@@ -528,6 +600,7 @@ Each value is `undefined` unless its corresponding `track*` flag is `true`.
 | Return | Type | Requires |
 | ------ | ---- | -------- |
 | `state` | `{ connectionState: 'idle' \| 'connecting' \| 'connected' \| 'disconnected'; error: string \| null; warning: string \| null }` | `trackState: true` |
+| `isMuted` | `boolean` | `trackState: true` |
 | `conversation` | `Array<{ role: string; content: string }>` | `trackConversation: true` |
 | `agentStatus` | `{ thinking: string \| null; latency: { total?: number; tts?: number; ttt?: number } \| null }` | `trackAgentStatus: true` |
 | `clearConversation` | `() => void` | `trackConversation: true` |
@@ -619,11 +692,11 @@ const pickFile = async () => {
 ```ts
 const {
   // Live streaming
-  startListening, stopListening,
+  startListening, stopListening, pause, resume,
   // File transcription
   transcribeFile,
   // Reactive state (opt-in)
-  state, transcript, interimTranscript,
+  state, transcript, interimTranscript, isPaused, audioLevel, recordingUri,
 } = useDeepgramSpeechToText(props);
 ```
 
@@ -635,6 +708,9 @@ const {
 | ---- | ---- | ----------- |
 | `live` | `DeepgramLiveListenOptions` | Default options merged into every live stream. |
 | `prerecorded` | `DeepgramPrerecordedOptions` | Default options merged into every file transcription. |
+| `reconnect` | `DeepgramReconnectOptions` | Auto-reconnect config for the live socket. Disabled unless `reconnect.enabled` is `true`. |
+| `metering` | `{ enabled?: boolean; intervalMs?: number }` | Microphone audio-level (VU meter) events. Disabled by default; set `enabled: true` to emit a normalized RMS level (~10 Hz, tune with `intervalMs`). |
+| `recordToFile` | `{ enabled?: boolean; path?: string; format?: 'wav' }` | Persist the captured mic audio to a WAV file while it streams. Disabled by default. Omit `path` to let the native module pick an app-specific location. |
 
 **Live streaming callbacks**
 
@@ -644,7 +720,11 @@ const {
 | `onStart` | `() => void` | The WebSocket opens. |
 | `onTranscript` | `(transcript: string, event?: DeepgramTranscriptEvent) => void` | Every transcript update (partial and final). |
 | `onError` | `(error: unknown) => void` | A streaming error occurs. |
-| `onEnd` | `() => void` | The socket closes. |
+| `onAudioLevel` | `(level: number) => void` | A new mic audio level (`0..1` normalized RMS) is available. Requires `metering.enabled`. |
+| `onRecordingComplete` | `(uri: string) => void` | A `recordToFile` session finished; receives the `file://` URI of the saved WAV. Requires `recordToFile.enabled`. |
+| `onReconnecting` | `(attempt: number) => void` | A reconnect attempt begins (1-based attempt number). Requires `reconnect.enabled`. |
+| `onReconnected` | `() => void` | The live socket successfully reconnects. |
+| `onEnd` | `() => void` | The socket closes (manual stop, or after reconnect attempts are exhausted). |
 
 **File transcription callbacks**
 
@@ -667,6 +747,8 @@ const {
 | ------ | --------- | ----------- |
 | `startListening` | `(options?: DeepgramLiveListenOptions) => Promise<void>` | Requests mic access, starts recording, streams audio to Deepgram. |
 | `stopListening` | `() => void` | Stops recording and closes the active WebSocket. |
+| `pause` | `() => void` | Pauses mic streaming while keeping the socket alive via `KeepAlive`. On v1 a `Finalize` is sent first to flush buffered audio. |
+| `resume` | `() => void` | Resumes mic streaming after a `pause`. |
 | `transcribeFile` | `(file: DeepgramPrerecordedSource, options?: DeepgramPrerecordedOptions) => Promise<void>` | Uploads a file/URI/URL and resolves via the success/error callbacks. |
 
 #### Reactive state
@@ -674,6 +756,9 @@ const {
 | Return | Type | Requires |
 | ------ | ---- | -------- |
 | `state` | `{ status: 'idle' \| 'loading' \| 'listening' \| 'transcribing' \| 'error'; error: Error \| null }` | `trackState: true` |
+| `isPaused` | `boolean` | `trackState: true` |
+| `audioLevel` | `number` (0..1 normalized RMS) | `trackState: true` + `metering.enabled` |
+| `recordingUri` | `string` (last saved `file://` WAV) | `trackState: true` + `recordToFile.enabled` |
 | `transcript` | `string` | `trackTranscript: true` |
 | `interimTranscript` | `string` | `trackTranscript: true` |
 
@@ -926,7 +1011,7 @@ closeStreamGracefully();
 ```ts
 const {
   // HTTP synthesis
-  synthesize,
+  synthesize, synthesizeToBytes,
   // Streaming
   startStreaming, sendText, sendMessage,
   flushStream, clearStream,
@@ -975,6 +1060,7 @@ const {
 | Method | Signature | Description |
 | ------ | --------- | ----------- |
 | `synthesize` | `(text: string) => Promise<ArrayBuffer>` | Single-shot REST call; resolves with the full audio buffer. |
+| `synthesizeToBytes` | `(text: string, options?: DeepgramTextToSpeechHttpOptions) => Promise<{ data: ArrayBuffer; mimeType: string }>` | Like `synthesize` but **does not play** the audio — returns the raw bytes + MIME type for saving/caching. Results are cached in-memory (LRU) keyed by text + format, so repeated identical prompts skip the network. Pass `options` to override the format per call. |
 
 **Streaming**
 
@@ -1277,6 +1363,54 @@ const stt = useDeepgramSpeechToText({
 });
 ```
 
+### Pause and resume a live stream
+
+```tsx
+const { startListening, pause, resume, isPaused } = useDeepgramSpeechToText({
+  trackState: true,
+  live: { punctuate: true, interimResults: true },
+});
+
+// Stop forwarding mic audio without dropping the socket. Deepgram is kept warm
+// with periodic KeepAlive frames, so resume() continues the same session.
+<Button
+  title={isPaused ? 'Resume' : 'Pause'}
+  onPress={() => (isPaused ? resume() : pause())}
+/>;
+```
+
+### Auto-reconnect a dropped live stream
+
+```tsx
+const stt = useDeepgramSpeechToText({
+  trackState: true,
+  reconnect: {
+    enabled: true,
+    maxRetries: 5, // give up after 5 attempts
+    initialDelayMs: 500, // 0.5s, doubling each retry
+    maxDelayMs: 10_000, // capped at 10s (+ jitter)
+  },
+  onReconnecting: (attempt) => console.log(`reconnecting… (#${attempt})`),
+  onReconnected: () => console.log('back online'),
+});
+```
+
+> The Voice Agent hook accepts the same `reconnect` options and re-sends its `Settings` payload automatically on every successful reconnect.
+
+### Point at a regional or self-hosted endpoint
+
+```ts
+import { configure } from 'react-native-deepgram';
+
+configure({
+  apiKey: process.env.EXPO_PUBLIC_DEEPGRAM_API_KEY!,
+  baseUrl: 'https://api.beta.deepgram.com/v1', // REST (include the /v1 segment)
+  baseWss: 'wss://api.beta.deepgram.com/v1', // live STT + streaming TTS
+});
+```
+
+> Flux v2 URLs are derived automatically by swapping the trailing `/v1` for `/v2`.
+
 ### Transcribe a picked file with summaries + topics
 
 ```tsx
@@ -1294,6 +1428,33 @@ const pick = async () => {
   }
 };
 ```
+
+### Record the mic to a file while transcribing
+
+Persist the captured audio to a WAV file *and* get the live transcript at the
+same time. The `file://` URI arrives via `onRecordingComplete` (and, with
+`trackState`, as `recordingUri`) once `stopListening()` finishes writing.
+
+```tsx
+import { useDeepgramSpeechToText } from 'react-native-deepgram';
+
+const { startListening, stopListening, recordingUri } =
+  useDeepgramSpeechToText({
+    trackState: true,
+    recordToFile: { enabled: true }, // omit `path` to use an app-specific file
+    onTranscript: (text) => console.log(text),
+    onRecordingComplete: (uri) => {
+      console.log('saved recording at', uri); // file:///.../deepgram-….wav
+    },
+  });
+
+// start, talk, then:
+stopListening(); // onRecordingComplete fires with the finalized WAV
+```
+
+> Want a specific destination? Pass a `path` (with or without a `file://`
+> prefix) — e.g. from `expo-file-system`'s `documentDirectory`. Only
+> uncompressed `wav` is supported today.
 
 ### Voice Agent with a client-side function
 
@@ -1359,6 +1520,9 @@ closeStreamGracefully(); // finish remaining audio then close
 
 ### One-shot HTTP TTS as MP3
 
+`synthesize` plays the audio through the device speaker **and** resolves with
+the buffer:
+
 ```tsx
 const { synthesize } = useDeepgramTextToSpeech({
   options: {
@@ -1372,7 +1536,36 @@ const { synthesize } = useDeepgramTextToSpeech({
 });
 
 const buffer = await synthesize('Hello from Deepgram.');
-// `buffer` is an ArrayBuffer of MP3 bytes — write to disk, upload, etc.
+// `buffer` is an ArrayBuffer of MP3 bytes — also played out loud.
+```
+
+### Save TTS to a file without playing it
+
+Use `synthesizeToBytes` when you only want the bytes (to cache, upload, or write
+to disk). Unlike `synthesize`, it **does not** play the audio, and identical
+prompts are served from an in-memory LRU cache:
+
+```tsx
+import { arrayBufferToBase64 } from 'react-native-deepgram';
+import * as FileSystem from 'expo-file-system';
+
+const { synthesizeToBytes } = useDeepgramTextToSpeech({
+  options: {
+    http: {
+      model: 'aura-2-asteria-en',
+      encoding: 'mp3',
+      bitRate: 48000,
+      container: 'none',
+    },
+  },
+});
+
+const { data, mimeType } = await synthesizeToBytes('Hello from Deepgram.');
+const uri = `${FileSystem.documentDirectory}greeting.mp3`;
+await FileSystem.writeAsStringAsync(uri, arrayBufferToBase64(data), {
+  encoding: FileSystem.EncodingType.Base64,
+});
+// `uri` now points to a saved MP3 file; `mimeType` is "audio/mpeg".
 ```
 
 ### Run text intelligence on a transcript
@@ -1398,6 +1591,29 @@ const newKey = await dg.keys.create('project_id', {
 });
 console.log('temp token =', newKey.key);
 ```
+
+### Handle errors by typed code
+
+```tsx
+import { useDeepgramVoiceAgent, DeepgramError } from 'react-native-deepgram';
+
+useDeepgramVoiceAgent({
+  onError: (err) => {
+    const code = err instanceof DeepgramError ? err.code : 'unknown';
+    switch (code) {
+      case 'permission_denied':
+        return promptForMicAccess();
+      case 'playback_error':
+        return toast('Audio output failed — check the route and volume.');
+      default:
+        return console.error('Deepgram error', code, err);
+    }
+  },
+});
+```
+
+> `DeepgramError.code` is a `DeepgramErrorCode | 'unknown'`, and the underlying
+> failure is always kept on `DeepgramError.cause`.
 
 ---
 
@@ -1457,6 +1673,10 @@ You ran `yarn prebuild` from `example/` but the workspace symlink wasn't created
 ## Example app
 
 The repository includes an Expo-managed playground under `example/` that wires up every hook in this package. It is configured for a tight inner-dev loop: edits to the library's TypeScript sources are hot-reloaded into the running app — no rebuild required.
+
+<p align="center">
+  <img src="assets/example.webp" alt="react-native-deepgram example app showing the Voice Agent, Speech-to-Text, Text-to-Speech, Text Intelligence, and Management screens" width="100%" />
+</p>
 
 ### 1. Install workspace dependencies
 
@@ -1538,6 +1758,10 @@ If the app gets into a weird state, `yarn example:clean` wipes the generated nat
 - ✅ Hardware echo cancellation (iOS VPIO + Android `VOICE_COMMUNICATION`)
 - ✅ Background-audio support (iOS `UIBackgroundModes` + Android foreground service)
 - ✅ iOS 17+ permission API (`AVAudioApplication`) and Bluetooth option (`AllowBluetoothHFP`)
+- ✅ Microphone audio-level / metering events
+- ✅ Record the microphone to a WAV file while streaming
+- ✅ Audio output route control (speaker / earpiece / Bluetooth) with route-change events
+- ✅ Typed error codes (`DeepgramError` / `DeepgramErrorCode`)
 - 🚧 Detox E2E tests for the example app
 
 ---

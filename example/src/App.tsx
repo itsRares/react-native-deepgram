@@ -17,8 +17,38 @@ import VoiceAgent from './VoiceAgent';
 import { colors, radius, spacing, type } from './theme';
 
 // Initialize Deepgram once at startup. Provide your key via .env (EXPO_PUBLIC_DEEPGRAM_API_KEY).
+//
+// Custom endpoints (regional, Dedicated, or self-hosted) are opt-in: set any of
+// the EXPO_PUBLIC_DEEPGRAM_BASE_URL / BASE_WSS / AGENT_URL vars in .env and they
+// flow straight into configure(). Leave them unset to use Deepgram's defaults.
+//
+// Auth: for production, prefer ephemeral tokens over a raw API key. Set
+// EXPO_PUBLIC_DEEPGRAM_TOKEN_URL to a backend endpoint that proxies Deepgram's
+// /v1/auth/grant and returns { access_token, expires_in }. When set, `getToken`
+// is used (and takes precedence over apiKey) so the key never ships in the app.
+// See README → "Ephemeral / scoped tokens".
+const tokenUrl = process.env.EXPO_PUBLIC_DEEPGRAM_TOKEN_URL;
+
 configure({
   apiKey: process.env.EXPO_PUBLIC_DEEPGRAM_API_KEY || 'YOUR_DEEPGRAM_API_KEY',
+  ...(tokenUrl
+    ? {
+        getToken: async () => {
+          const res = await fetch(tokenUrl);
+          const { access_token, expires_in } = await res.json();
+          return { token: access_token, expiresInSeconds: expires_in };
+        },
+      }
+    : {}),
+  ...(process.env.EXPO_PUBLIC_DEEPGRAM_BASE_URL
+    ? { baseUrl: process.env.EXPO_PUBLIC_DEEPGRAM_BASE_URL }
+    : {}),
+  ...(process.env.EXPO_PUBLIC_DEEPGRAM_BASE_WSS
+    ? { baseWss: process.env.EXPO_PUBLIC_DEEPGRAM_BASE_WSS }
+    : {}),
+  ...(process.env.EXPO_PUBLIC_DEEPGRAM_AGENT_URL
+    ? { agentUrl: process.env.EXPO_PUBLIC_DEEPGRAM_AGENT_URL }
+    : {}),
 });
 
 type ScreenKey = 'voice' | 'speech' | 'tts' | 'text' | 'management';

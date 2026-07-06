@@ -5,6 +5,60 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-07-06
+
+### Added
+
+- **Audio output routing.** New `setAudioRoute()`, `getAudioRoute()`, and
+  `addAudioRouteChangeListener()` exports for steering playback between the
+  loudspeaker, earpiece, and Bluetooth headsets, plus observing route changes
+  made outside the app (Control Center, plugging in headphones, …). Requestable
+  routes are `'speaker' | 'earpiece' | 'bluetooth' | 'auto'`; the active route
+  additionally reports `'wired'`. Routing is best-effort: the OS keeps the
+  final say (a wired headset always wins), `bluetooth` engages once a headset
+  is actually connected (the request is remembered and applied when one
+  appears), and external switches are adopted — surfaced via the
+  `DeepgramRouteChange` event — rather than fought. During echo-cancelled
+  (`enableVoiceProcessing`) sessions Bluetooth is opt-in, since HFP's loopback
+  defeats hardware AEC. Backed by a new `AudioRouteManager` on Android and an
+  extended audio-session layer on iOS. Exposes `DeepgramAudioRoute` /
+  `DeepgramActiveAudioRoute` types and an `AudioRouteSubscription` handle.
+- **Example app.** The Voice Agent screen now includes an audio-route picker
+  demonstrating the new routing API.
+
+### Changed
+
+- **Android foreground-service permissions are now opt-in.** The library
+  manifest no longer force-merges `FOREGROUND_SERVICE`,
+  `FOREGROUND_SERVICE_MICROPHONE`, or `FOREGROUND_SERVICE_MEDIA_PLAYBACK`, and
+  the bundled `DeepgramAudioService` no longer hardcodes
+  `android:foregroundServiceType`. Google Play requires every app that declares
+  a foreground-service type to justify it (with a demo video) in the Play
+  Console — apps that don't use background audio couldn't. Now only apps that
+  opt in carry the declarations:
+  - **Expo** — the config plugin adds the permissions **and** the service's
+    `foregroundServiceType="microphone|mediaPlayback"` when `backgroundAudio`
+    is enabled (still the default).
+  - **Bare React Native** — apps that keep audio alive in the background must
+    add the permissions and a `<service>` override to their own
+    `AndroidManifest.xml`; see the README's "Background audio" section.
+    **Action required** if you relied on the previously auto-merged entries.
+  - At runtime the module checks which permissions the host app actually
+    declared: without them the keep-alive service is skipped gracefully
+    (foreground audio is unaffected), and on Android 14+ the microphone
+    service type is only advertised when `FOREGROUND_SERVICE_MICROPHONE` is
+    declared, so playback-only apps degrade cleanly instead of crashing.
+- The library manifest now ships `MODIFY_AUDIO_SETTINGS` (and legacy
+  `BLUETOOTH`, API ≤ 30) — normal, non-reviewed permissions needed by the new
+  audio-routing API.
+
+### Fixed
+
+- **Expo plugin `backgroundAudio: false` now actually works on Android.**
+  Previously the option skipped adding the foreground-service permissions, but
+  manifest merging pulled them in from the library manifest anyway, so every
+  app still shipped them.
+
 ## [2.2.0] - 2026-06-25
 
 ### Added

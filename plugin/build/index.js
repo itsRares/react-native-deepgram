@@ -20,6 +20,23 @@ const withAndroidDeepgram = (config, options = {}) => {
             ensurePermission(foregroundServicePermission);
             ensurePermission(foregroundMicPermission);
             ensurePermission(foregroundPlaybackPermission);
+            // The library manifest deliberately ships DeepgramAudioService without
+            // android:foregroundServiceType (so apps that don't use background audio
+            // never have to justify foreground-service types in the Play Console).
+            // Opting in requires merging the type back onto the service.
+            const application = manifest.application?.[0];
+            if (application) {
+                const serviceName = 'com.deepgram.DeepgramAudioService';
+                const services = (application.service ?? []);
+                let service = services.find((s) => s.$?.['android:name'] === serviceName);
+                if (!service) {
+                    service = { $: { 'android:name': serviceName } };
+                    services.push(service);
+                }
+                service.$['android:foregroundServiceType'] =
+                    'microphone|mediaPlayback';
+                application.service = services;
+            }
         }
         manifest['uses-permission'] = permissions;
         return cfg;

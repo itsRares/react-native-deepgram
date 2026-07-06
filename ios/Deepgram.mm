@@ -50,7 +50,7 @@ RCT_EXPORT_MODULE();
 }
 
 - (NSArray<NSString *> *)supportedEvents {
-  return @[ @"DeepgramAudioPCM", @"DeepgramAudioLevel" ];
+  return @[ @"DeepgramAudioPCM", @"DeepgramAudioLevel", @"DeepgramRouteChange" ];
 }
 
 - (void)startObserving {
@@ -113,6 +113,13 @@ RCT_EXPORT_MODULE();
              object:nil];
     DGLogDebug(@"[Deepgram] init: registered for "
                @"AVAudioSessionMediaServicesWereResetNotification");
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self
+           selector:@selector(handleEngineConfigurationChange:)
+               name:AVAudioEngineConfigurationChangeNotification
+             object:nil];
+    DGLogDebug(@"[Deepgram] init: registered for "
+               @"AVAudioEngineConfigurationChangeNotification");
   }
   return self;
 }
@@ -620,6 +627,57 @@ RCT_EXPORT_METHOD(setMeteringEnabled : (BOOL)enabled intervalMs : (nonnull NSNum
   self.lastMeterEmitTime = 0;
   DGLogDebug(@"[Deepgram] setMeteringEnabled: enabled=%@ intervalMs=%.0f",
              enabled ? @"YES" : @"NO", ms);
+}
+
+/**
+ * Request a preferred output route for playback (`speaker` / `earpiece` /
+ * `bluetooth` / `auto`). Best-effort and device-dependent: the OS can
+ * override the request (a wired headset always wins) and `bluetooth` only
+ * engages when a compatible headset is connected. Implementation lives in
+ * Deepgram+AudioSession.mm (`applyAudioRoute:error:`).
+ */
+RCT_EXPORT_METHOD(setAudioRoute : (NSString *)route resolver : (
+    RCTPromiseResolveBlock)resolve rejecter : (RCTPromiseRejectBlock)reject) {
+  @try {
+    static NSSet<NSString *> *validRoutes;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+      validRoutes = [NSSet
+          setWithObjects:@"speaker", @"earpiece", @"bluetooth", @"auto", nil];
+    });
+    if (!route || ![validRoutes containsObject:route]) {
+      DGRejectPromise(
+          reject, @"invalid_data",
+          [NSString stringWithFormat:@"Unknown audio route '%@'", route], nil);
+      return;
+    }
+    NSError *error = nil;
+    if (![self applyAudioRoute:route error:&error]) {
+      DGRejectPromise(reject, @"playback_error",
+                      error.localizedDescription
+                          ?: @"Failed to apply audio route",
+                      error);
+      return;
+    }
+    [self emitRouteChange];
+    resolve(nil);
+  } @catch (NSException *e) {
+    DGRejectPromise(reject, @"playback_error", e.reason, nil);
+  }
+}
+
+/**
+ * Resolve the output route the system is currently using (`speaker` /
+ * `earpiece` / `bluetooth` / `wired`). Reflects the *actual* route, which may
+ * differ from the last `setAudioRoute` request.
+ */
+RCT_EXPORT_METHOD(getAudioRoute : (RCTPromiseResolveBlock)
+                      resolve rejecter : (RCTPromiseRejectBlock)reject) {
+  @try {
+    resolve([self currentAudioRouteString]);
+  } @catch (NSException *e) {
+    DGRejectPromise(reject, @"playback_error", e.reason, nil);
+  }
 }
 
 /**

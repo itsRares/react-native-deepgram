@@ -25,7 +25,7 @@
 void DGHandleInputBuffer(
     void *inUserData, __unused AudioQueueRef inAQ, AudioQueueBufferRef inBuffer,
     __unused const AudioTimeStamp *inStartTime, __unused UInt32 inNumPackets,
-    __unused const AudioStreamPacketDescription *inPacketDesc) {
+    __unused const AudioStreamPacketDescription *_Nullable inPacketDesc) {
   @autoreleasepool {
     DGRecordState *state = (DGRecordState *)inUserData;
     if (!state || !state->isRunning) {

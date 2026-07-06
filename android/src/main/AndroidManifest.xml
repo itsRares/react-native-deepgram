@@ -1,15 +1,29 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-	<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-	<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
-	<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+	<!-- Audio output routing (setAudioRoute): speakerphone / SCO switches need
+	     MODIFY_AUDIO_SETTINGS; the legacy (pre-API 31) Bluetooth SCO path also
+	     needs the normal BLUETOOTH permission on those releases. -->
+	<uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+	<uses-permission
+		android:name="android.permission.BLUETOOTH"
+		android:maxSdkVersion="30" />
 
 	<application>
+		<!-- Keep-alive foreground service used ONLY for background audio.
+		     The FOREGROUND_SERVICE* permissions and the
+		     android:foregroundServiceType attribute are intentionally NOT
+		     declared here: Google Play requires every app to justify each
+		     declared foreground-service type (with a demo video), so they must
+		     only appear in apps that actually opt in to background audio.
+		     The Expo config plugin adds them when `backgroundAudio` is enabled
+		     (the default); bare React Native apps add them manually — see the
+		     README's "Background audio" section. Without them the SDK still
+		     works fully in the foreground; DeepgramAudioService simply skips
+		     the keep-alive service. -->
 		<service
 			android:name=".DeepgramAudioService"
 			android:enabled="true"
-			android:exported="false"
-			android:foregroundServiceType="microphone|mediaPlayback" />
+			android:exported="false" />
 	</application>
 
 </manifest>

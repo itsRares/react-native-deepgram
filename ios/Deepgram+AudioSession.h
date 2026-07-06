@@ -24,5 +24,12 @@
 - (void)handleAudioRouteChange:(NSNotification *)note;
 - (void)handleMediaServicesReset:(NSNotification *)note;
 - (void)handleAudioInterruption:(NSNotification *)note;
+- (void)handleEngineConfigurationChange:(NSNotification *)note;
+
+// Audio output routing (speaker / earpiece / bluetooth / auto).
+- (BOOL)applyAudioRoute:(NSString *)route error:(NSError **)outError;
+- (void)applyRequestedRouteToSession;
+- (NSString *)currentAudioRouteString;
+- (void)emitRouteChange;
 
 @end

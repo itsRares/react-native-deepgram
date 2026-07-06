@@ -52,6 +52,19 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     onForegroundServiceRelease = { stopForegroundAudioServiceIfInactive() },
   )
 
+  private val routeManager = AudioRouteManager(
+    context = reactContext,
+    mainHandler = mainHandler,
+    onRouteChange = { route -> sendRouteChange(route) },
+  )
+
+  init {
+    // Observe output-route changes (headset plug/unplug, Bluetooth
+    // connect/disconnect) for the module's lifetime so `DeepgramRouteChange`
+    // fires even while idle.
+    routeManager.start()
+  }
+
   override fun getName() = NAME
 
   // -------------------------------------------------------------------
@@ -256,6 +269,34 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     )
   }
 
+  // -------------------------------------------------------------------
+  // Audio output routing
+  // -------------------------------------------------------------------
+
+  @ReactMethod
+  fun setAudioRoute(route: String, promise: Promise) {
+    try {
+      routeManager.setRoute(route)
+      promise.resolve(null)
+    } catch (e: IllegalArgumentException) {
+      Log.e(TAG, "setAudioRoute invalid route", e)
+      promise.reject("invalid_data", e)
+    } catch (e: Exception) {
+      Log.e(TAG, "setAudioRoute error", e)
+      promise.reject("playback_error", e)
+    }
+  }
+
+  @ReactMethod
+  fun getAudioRoute(promise: Promise) {
+    try {
+      promise.resolve(routeManager.currentRoute())
+    } catch (e: Exception) {
+      Log.e(TAG, "getAudioRoute error", e)
+      promise.reject("playback_error", e)
+    }
+  }
+
   override fun invalidate() {
     try {
       recorder.stop(false)
@@ -269,6 +310,7 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
       Log.w(TAG, "Error stopping playback on invalidate", e)
     }
 
+    routeManager.stop()
     focusManager.abandonFocus()
     super.invalidate()
   }
@@ -309,6 +351,24 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     } catch (e: Exception) {
       // Catalyst tearing down or JS bundle not ready — drop silently.
       Log.w(TAG, "sendAudioLevel emit failed", e)
+    }
+  }
+
+  /**
+   * Emit the active output route to JS as the `DeepgramRouteChange` event
+   * (shared event name with iOS; payload `{ route }`).
+   */
+  private fun sendRouteChange(route: String) {
+    if (!reactContext.hasActiveReactInstance()) return
+    val map = WritableNativeMap()
+    map.putString("route", route)
+    try {
+      reactContext
+        .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+        .emit("DeepgramRouteChange", map)
+    } catch (e: Exception) {
+      // Catalyst tearing down or JS bundle not ready — drop silently.
+      Log.w(TAG, "sendRouteChange emit failed", e)
     }
   }
 

@@ -23,6 +23,8 @@
  * Only the shared state lives here, in a class extension, so it auto-synthesizes
  * in the primary `@implementation` while remaining visible to every category.
  */
+NS_ASSUME_NONNULL_BEGIN
+
 @interface Deepgram () {
 @protected
   DGRecordState _recordState;
@@ -31,7 +33,7 @@
 }
 
 // Recording
-@property(nonatomic, strong) NSMutableData *pendingPCMBuffer;
+@property(nonatomic, strong, nullable) NSMutableData *pendingPCMBuffer;
 @property(nonatomic, strong) dispatch_queue_t emitterQueue;
 @property(nonatomic, assign) NSUInteger chunkSizeBytes;
 @property(atomic, assign) BOOL hasListeners;
@@ -52,15 +54,15 @@
 // sample rate) are patched into the 44-byte header when recording stops.
 // Writes happen on the capture thread (single producer); finalization runs
 // after the capture queue/engine has been stopped, so no lock is required.
-@property(nonatomic, strong) NSFileHandle *recordFileHandle;
-@property(nonatomic, copy) NSString *recordFilePath;
+@property(nonatomic, strong, nullable) NSFileHandle *recordFileHandle;
+@property(nonatomic, copy, nullable) NSString *recordFilePath;
 @property(atomic, assign) BOOL recordToFileEnabled;
 @property(atomic, assign) unsigned long long recordFileDataBytes;
 
 // Playback / TTS (AVAudioEngine-based with echo cancellation)
-@property(nonatomic, strong) AVAudioEngine *audioEngine;
-@property(nonatomic, strong) AVAudioPlayerNode *playerNode;
-@property(nonatomic, strong) AVAudioFormat *playbackFormat;
+@property(nonatomic, strong, nullable) AVAudioEngine *audioEngine;
+@property(nonatomic, strong, nullable) AVAudioPlayerNode *playerNode;
+@property(nonatomic, strong, nullable) AVAudioFormat *playbackFormat;
 @property(atomic, assign) BOOL isPlaying;
 @property(atomic, assign) int currentSampleRate;
 @property(nonatomic, assign) BOOL audioSessionConfigured;
@@ -71,8 +73,24 @@
 @property(atomic, assign) BOOL engineCaptureActive;
 @property(atomic, assign) BOOL voiceProcessingRequested;
 @property(atomic, assign) BOOL audioQueueCaptureRequested;
-@property(nonatomic, strong) AVAudioConverter *captureConverter;
-@property(nonatomic, strong) AVAudioFormat *captureOutputFormat;
+// YES between AVAudioSessionInterruptionTypeBegan and ...Ended. While set,
+// `setActive:YES` is doomed (a higher-priority session — phone call, Siri —
+// holds the hardware), so route-change / config-change handlers must not try
+// to reactivate; the interruption-ended handler does that instead.
+@property(atomic, assign) BOOL sessionInterrupted;
+
+// Audio output routing. Holds the last explicit route request from JS
+// (`speaker` / `earpiece` / `bluetooth`); nil means `auto` (system default).
+// The request influences the category-option ladder (Bluetooth HFP is only
+// allowed on the AEC/VoiceChat path when explicitly requested — auto-routing
+// the duplex agent onto BT defeats VPIO echo cancellation) and is applied
+// once after each successful session configuration. It is *adopted from*
+// external route changes (user Control Center switches, device unplug) rather
+// than re-asserted against them, so the module never fights the OS or the
+// user for the route.
+@property(atomic, copy, nullable) NSString *requestedAudioRoute;
+@property(nonatomic, strong, nullable) AVAudioConverter *captureConverter;
+@property(nonatomic, strong, nullable) AVAudioFormat *captureOutputFormat;
 
 // Exported workers implemented in Deepgram.mm (via RCT_EXPORT_METHOD) but
 // invoked from other methods before their textual definition. Declared here so
@@ -83,3 +101,5 @@
           rejecter:(nullable RCTPromiseRejectBlock)reject;
 
 @end
+
+NS_ASSUME_NONNULL_END

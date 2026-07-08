@@ -24,5 +24,15 @@
 - (void)handleAudioRouteChange:(NSNotification *)note;
 - (void)handleMediaServicesReset:(NSNotification *)note;
 - (void)handleAudioInterruption:(NSNotification *)note;
+- (void)handleEngineConfigurationChange:(NSNotification *)note;
+// Retrying resume after the hardware was taken away (interruption ended /
+// Siri-style route grab). Idempotent; safe to invoke from multiple callers.
+- (void)resumeAfterInterruption:(int)attempt;
+
+// Audio output routing (speaker / earpiece / bluetooth / auto).
+- (BOOL)applyAudioRoute:(NSString *)route error:(NSError **)outError;
+- (void)applyRequestedRouteToSession;
+- (NSString *)currentAudioRouteString;
+- (void)emitRouteChange;
 
 @end

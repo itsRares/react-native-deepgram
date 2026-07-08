@@ -132,7 +132,9 @@
       // input and output flow through a voice-processing-enabled audio
       // unit. Enabling VP only on the input node is a no-op for capture
       // unless rendering goes through the same unit, so we enable both.
-      if (inputNode) {
+      // Skip nodes where VP is already engaged: re-asserting it tears down
+      // and rebuilds the VPIO unit, briefly dropping echo cancellation.
+      if (inputNode && !inputNode.isVoiceProcessingEnabled) {
         NSError *voiceProcessingError = nil;
         if (![inputNode setVoiceProcessingEnabled:YES
                                             error:&voiceProcessingError]) {
@@ -140,7 +142,7 @@
                     voiceProcessingError);
         }
       }
-      if (outputNode) {
+      if (outputNode && !outputNode.isVoiceProcessingEnabled) {
         NSError *voiceProcessingError = nil;
         if (![outputNode setVoiceProcessingEnabled:YES
                                              error:&voiceProcessingError]) {

@@ -2,6 +2,8 @@ import { useRef, useCallback, useEffect, useState } from 'react';
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 import { Deepgram } from './NativeDeepgram';
 import { askMicPermission } from './helpers/askMicPermission';
+import { addInterruptionListener } from './interruption';
+import type { DeepgramInterruptionEvent } from './interruption';
 import {
   arrayBufferToBase64,
   resolveAuthHeader,
@@ -220,6 +222,13 @@ export interface UseDeepgramVoiceAgentProps {
   onConnect?: () => void;
   onClose?: (event?: any) => void;
   onError?: (error: unknown) => void;
+  /**
+   * Called when the system interrupts audio (phone call, Siri, another app
+   * taking audio focus). While a session is connected the hook also keeps
+   * the agent socket alive with KeepAlive frames until the interruption
+   * ends, and disconnects gracefully on a permanent focus loss.
+   */
+  onInterruption?: (event: DeepgramInterruptionEvent) => void;
   onMessage?: (message: DeepgramVoiceAgentServerMessage) => void;
   onWelcome?: (message: DeepgramVoiceAgentWelcomeMessage) => void;
   onSettingsApplied?: (
@@ -328,6 +337,7 @@ export function useDeepgramVoiceAgent({
   onServerError,
   onAudioConfig,
   onAudio,
+  onInterruption,
 }: UseDeepgramVoiceAgentProps = {}): UseDeepgramVoiceAgentReturn {
   const ws = useRef<WebSocketLike | null>(null);
   const audioSub = useRef<ReturnType<NativeEventEmitter['addListener']> | null>(
@@ -347,6 +357,11 @@ export function useDeepgramVoiceAgent({
   const muteKeepAliveTimerRef = useRef<ReturnType<typeof setInterval> | null>(
     null
   );
+  const interruptedRef = useRef(false);
+  const interruptionSub = useRef<{ remove: () => void } | null>(null);
+  const interruptionKeepAliveTimerRef = useRef<ReturnType<
+    typeof setInterval
+  > | null>(null);
   const defaultSettingsRef = useRef(defaultSettings);
   const endpointRef = useRef(endpoint);
 
@@ -388,6 +403,9 @@ export function useDeepgramVoiceAgent({
   const onAudioConfigRef = useRef(onAudioConfig);
   const onAudioRef = useRef(onAudio);
   const autoStartMicRef = useRef(autoStartMicrophone);
+
+  const onInterruptionRef = useRef(onInterruption);
+  onInterruptionRef.current = onInterruption;
 
   const [internalState, setInternalState] = useState<{
     connectionState: 'idle' | 'connecting' | 'connected' | 'disconnected';
@@ -567,6 +585,14 @@ export function useDeepgramVoiceAgent({
     }
     mutedRef.current = false;
     setInternalIsMuted(false);
+
+    if (interruptionKeepAliveTimerRef.current != null) {
+      clearInterval(interruptionKeepAliveTimerRef.current);
+      interruptionKeepAliveTimerRef.current = null;
+    }
+    interruptedRef.current = false;
+    interruptionSub.current?.remove();
+    interruptionSub.current = null;
 
     if (reconnectTimerRef.current != null) {
       clearTimeout(reconnectTimerRef.current);
@@ -1172,6 +1198,43 @@ export function useDeepgramVoiceAgent({
         targetInputSampleRate.current,
         nativeInputSampleRate.current
       );
+
+      // System interruptions (phone call, Siri, focus loss) pause native
+      // capture/playback, so no audio reaches Deepgram and the agent socket
+      // would be closed as idle. Bridge the gap with KeepAlive frames until
+      // the interruption ends; a permanent focus loss tears the native
+      // session down, so disconnect gracefully instead of erroring out.
+      interruptionSub.current = addInterruptionListener((e) => {
+        onInterruptionRef.current?.(e);
+        if (e.type === 'began') {
+          if (interruptedRef.current) {
+            return;
+          }
+          interruptedRef.current = true;
+          if (interruptionKeepAliveTimerRef.current == null) {
+            interruptionKeepAliveTimerRef.current = setInterval(() => {
+              const socket = ws.current;
+              if (!socket || socket.readyState !== WebSocket.OPEN) {
+                return;
+              }
+              try {
+                socket.send(JSON.stringify({ type: 'KeepAlive' }));
+              } catch {}
+            }, AGENT_KEEPALIVE_INTERVAL_MS);
+          }
+        } else if (e.type === 'ended') {
+          interruptedRef.current = false;
+          if (interruptionKeepAliveTimerRef.current != null) {
+            clearInterval(interruptionKeepAliveTimerRef.current);
+            interruptionKeepAliveTimerRef.current = null;
+          }
+        } else {
+          // 'stopped' — the native session is gone; end cleanly (the socket
+          // close event delivers onClose, mirroring disconnect()).
+          userDisconnectedRef.current = true;
+          cleanup();
+        }
+      });
 
       openSocket();
     },

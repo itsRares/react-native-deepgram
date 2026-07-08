@@ -11,6 +11,11 @@ import {
   useDeepgramVoiceAgent,
   createAgentSettings,
   DeepgramError,
+  setAudioRoute,
+  getAudioRoute,
+  addAudioRouteChangeListener,
+  type DeepgramAudioRoute,
+  type DeepgramActiveAudioRoute,
 } from 'react-native-deepgram';
 import OptionSelect from './components/OptionSelect';
 import Button from './components/Button';
@@ -57,6 +62,37 @@ export default function VoiceAgent() {
   const [customMessage, setCustomMessage] = useState('');
   const [reconnectAttempt, setReconnectAttempt] = useState<number | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
+  const [activeRoute, setActiveRoute] =
+    useState<DeepgramActiveAudioRoute | null>(null);
+  const [requestedRoute, setRequestedRoute] =
+    useState<DeepgramAudioRoute>('auto');
+
+  // Track the actual output route (updates on headset plug/unplug, Bluetooth
+  // connect/disconnect and speaker ↔ earpiece switches — including switches
+  // made by the user outside the app).
+  useEffect(() => {
+    let mounted = true;
+    getAudioRoute()
+      .then((route) => mounted && setActiveRoute(route))
+      .catch(() => {});
+    const sub = addAudioRouteChangeListener((route) => {
+      if (mounted) setActiveRoute(route);
+    });
+    return () => {
+      mounted = false;
+      sub.remove();
+    };
+  }, []);
+
+  const requestRoute = async (route: DeepgramAudioRoute) => {
+    setRequestedRoute(route);
+    try {
+      await setAudioRoute(route);
+      setActiveRoute(await getAudioRoute());
+    } catch (err) {
+      console.warn('setAudioRoute failed', err);
+    }
+  };
 
   const agentSettings = useMemo(
     () =>
@@ -391,6 +427,35 @@ export default function VoiceAgent() {
             <Text style={styles.thinkingText}>🤔 {agentStatus.thinking}</Text>
           </View>
         ) : null}
+
+        {/* Audio output routing */}
+        <Card
+          title="Audio output"
+          subtitle={`Current route · ${activeRoute ?? 'unknown'}`}
+        >
+          <View style={styles.routeRow}>
+            {(
+              [
+                { route: 'auto', label: 'Auto', icon: '⚙️' },
+                { route: 'speaker', label: 'Speaker', icon: '🔊' },
+                { route: 'earpiece', label: 'Earpiece', icon: '📞' },
+                { route: 'bluetooth', label: 'Bluetooth', icon: '🎧' },
+              ] as const
+            ).map(({ route, label, icon }) => (
+              <Button
+                key={route}
+                title={`${icon} ${label}`}
+                size="sm"
+                variant={requestedRoute === route ? 'primary' : 'secondary'}
+                onPress={() => requestRoute(route)}
+              />
+            ))}
+          </View>
+          <Text style={styles.routeHint}>
+            Routing is best-effort: a wired headset always wins and Bluetooth
+            only engages when a headset is connected.
+          </Text>
+        </Card>
 
         {/* Conversation */}
         <Card title="Conversation" subtitle="Transcripts of you and the agent">
@@ -749,6 +814,16 @@ const styles = StyleSheet.create({
   thinkingText: {
     color: colors.accent,
     ...type.smallMedium,
+  },
+  routeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  routeHint: {
+    color: colors.textMuted,
+    ...type.small,
+    marginTop: spacing.sm,
   },
   conversation: {
     maxHeight: 320,

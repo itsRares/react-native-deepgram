@@ -7,6 +7,21 @@ import type { ConfigPlugin } from '@expo/config-plugins';
 type DeepgramPluginOptions = {
   microphonePermission?: string;
   backgroundAudio?: boolean;
+  /**
+   * Customize the Android foreground-service (keep-alive) notification shown
+   * while background audio is active. Values are written as
+   * `com.deepgram.notification.*` <meta-data> entries in the manifest.
+   */
+  androidNotification?: {
+    /** Notification title. Default: the app's label. */
+    title?: string;
+    /** Notification body text. */
+    text?: string;
+    /** Notification channel name (visible in system settings). Default: title. */
+    channelName?: string;
+    /** Drawable/mipmap resource name for the small icon, e.g. 'ic_stat_audio'. */
+    icon?: string;
+  };
 };
 
 const withAndroidDeepgram: ConfigPlugin<DeepgramPluginOptions | void> = (
@@ -37,9 +52,59 @@ const withAndroidDeepgram: ConfigPlugin<DeepgramPluginOptions | void> = (
       ensurePermission(foregroundServicePermission);
       ensurePermission(foregroundMicPermission);
       ensurePermission(foregroundPlaybackPermission);
+
+      // The library manifest deliberately ships DeepgramAudioService without
+      // android:foregroundServiceType (so apps that don't use background audio
+      // never have to justify foreground-service types in the Play Console).
+      // Opting in requires merging the type back onto the service.
+      const application = manifest.application?.[0];
+      if (application) {
+        const serviceName = 'com.deepgram.DeepgramAudioService';
+        const services = (application.service ?? []) as {
+          $: Record<string, string>;
+        }[];
+        let service = services.find(
+          (s) => s.$?.['android:name'] === serviceName
+        );
+        if (!service) {
+          service = { $: { 'android:name': serviceName } };
+          services.push(service);
+        }
+        service.$['android:foregroundServiceType'] = 'microphone|mediaPlayback';
+        application.service = services as typeof application.service;
+      }
     }
 
     manifest['uses-permission'] = permissions;
+
+    const notification = resolvedOptions.androidNotification;
+    if (notification) {
+      const application = manifest.application?.[0];
+      if (application) {
+        const metaData = application['meta-data'] ?? [];
+        const setMetaData = (name: string, value: string | undefined) => {
+          if (!value) return;
+          const existing = metaData.find((m) => m.$?.['android:name'] === name);
+          if (existing) {
+            existing.$['android:value'] = value;
+          } else {
+            metaData.push({
+              $: { 'android:name': name, 'android:value': value },
+            });
+          }
+        };
+
+        setMetaData('com.deepgram.notification.TITLE', notification.title);
+        setMetaData('com.deepgram.notification.TEXT', notification.text);
+        setMetaData(
+          'com.deepgram.notification.CHANNEL_NAME',
+          notification.channelName
+        );
+        setMetaData('com.deepgram.notification.ICON', notification.icon);
+
+        application['meta-data'] = metaData;
+      }
+    }
 
     return cfg;
   });

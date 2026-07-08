@@ -52,6 +52,23 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     onForegroundServiceRelease = { stopForegroundAudioServiceIfInactive() },
   )
 
+  private val routeManager = AudioRouteManager(
+    context = reactContext,
+    mainHandler = mainHandler,
+    onRouteChange = { route -> sendRouteChange(route) },
+  )
+
+  /** True between a transient focus-loss `began` and the matching `ended`. */
+  @Volatile
+  private var interruptionActive = false
+
+  init {
+    // Observe output-route changes (headset plug/unplug, Bluetooth
+    // connect/disconnect) for the module's lifetime so `DeepgramRouteChange`
+    // fires even while idle.
+    routeManager.start()
+  }
+
   override fun getName() = NAME
 
   // -------------------------------------------------------------------
@@ -65,15 +82,34 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     try { player.stopStreamingPlayback(throwOnError = false) } catch (_: Exception) {}
     try { player.stopOneShotPlayback() } catch (_: Exception) {}
     try { recorder.stop(throwOnError = false) } catch (_: Exception) {}
+    interruptionActive = false
+    sendInterruption { map ->
+      map.putString("type", "stopped")
+      map.putString("reason", "focusLossPermanent")
+    }
   }
 
   override fun onFocusLostTransiently() {
     // Transient loss (e.g. incoming call) — pause playback but keep state.
     player.pauseForFocusLoss()
+    if (!interruptionActive) {
+      interruptionActive = true
+      sendInterruption { map ->
+        map.putString("type", "began")
+        map.putString("reason", "focusLoss")
+      }
+    }
   }
 
   override fun onFocusGained() {
     player.resumeForFocusGain()
+    if (interruptionActive) {
+      interruptionActive = false
+      sendInterruption { map ->
+        map.putString("type", "ended")
+        map.putBoolean("shouldResume", true)
+      }
+    }
   }
 
   // -------------------------------------------------------------------
@@ -256,6 +292,34 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     )
   }
 
+  // -------------------------------------------------------------------
+  // Audio output routing
+  // -------------------------------------------------------------------
+
+  @ReactMethod
+  fun setAudioRoute(route: String, promise: Promise) {
+    try {
+      routeManager.setRoute(route)
+      promise.resolve(null)
+    } catch (e: IllegalArgumentException) {
+      Log.e(TAG, "setAudioRoute invalid route", e)
+      promise.reject("invalid_data", e)
+    } catch (e: Exception) {
+      Log.e(TAG, "setAudioRoute error", e)
+      promise.reject("playback_error", e)
+    }
+  }
+
+  @ReactMethod
+  fun getAudioRoute(promise: Promise) {
+    try {
+      promise.resolve(routeManager.currentRoute())
+    } catch (e: Exception) {
+      Log.e(TAG, "getAudioRoute error", e)
+      promise.reject("playback_error", e)
+    }
+  }
+
   override fun invalidate() {
     try {
       recorder.stop(false)
@@ -269,6 +333,7 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
       Log.w(TAG, "Error stopping playback on invalidate", e)
     }
 
+    routeManager.stop()
     focusManager.abandonFocus()
     super.invalidate()
   }
@@ -309,6 +374,43 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     } catch (e: Exception) {
       // Catalyst tearing down or JS bundle not ready — drop silently.
       Log.w(TAG, "sendAudioLevel emit failed", e)
+    }
+  }
+
+  /**
+   * Emit the active output route to JS as the `DeepgramRouteChange` event
+   * (shared event name with iOS; payload `{ route }`).
+   */
+  private fun sendRouteChange(route: String) {
+    if (!reactContext.hasActiveReactInstance()) return
+    val map = WritableNativeMap()
+    map.putString("route", route)
+    try {
+      reactContext
+        .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+        .emit("DeepgramRouteChange", map)
+    } catch (e: Exception) {
+      // Catalyst tearing down or JS bundle not ready — drop silently.
+      Log.w(TAG, "sendRouteChange emit failed", e)
+    }
+  }
+
+  /**
+   * Emit an audio-focus interruption to JS as the `DeepgramInterruption`
+   * event (shared event name with iOS). Observability only — the focus
+   * callbacks above already pause/resume/tear down the audio pipeline.
+   */
+  private fun sendInterruption(populate: (WritableNativeMap) -> Unit) {
+    if (!reactContext.hasActiveReactInstance()) return
+    val map = WritableNativeMap()
+    populate(map)
+    try {
+      reactContext
+        .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+        .emit("DeepgramInterruption", map)
+    } catch (e: Exception) {
+      // Catalyst tearing down or JS bundle not ready — drop silently.
+      Log.w(TAG, "sendInterruption emit failed", e)
     }
   }
 

@@ -4,6 +4,21 @@ export { useDeepgramManagement } from './useDeepgramManagement';
 export { useDeepgramTextToSpeech } from './useDeepgramTextToSpeech';
 export { useDeepgramVoiceAgent } from './useDeepgramVoiceAgent';
 export { Deepgram } from './NativeDeepgram';
+export {
+  setAudioRoute,
+  getAudioRoute,
+  addAudioRouteChangeListener,
+} from './audioRoute';
+export type { AudioRouteSubscription } from './audioRoute';
+export { addInterruptionListener } from './interruption';
+export type {
+  DeepgramInterruptionEvent,
+  InterruptionSubscription,
+} from './interruption';
+export type {
+  DeepgramAudioRoute,
+  DeepgramActiveAudioRoute,
+} from './NativeDeepgram';
 import type { DeepgramGetToken } from './helpers';
 import { clearCachedAuthToken } from './helpers';
 export {

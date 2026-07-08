@@ -52,6 +52,24 @@ export interface DeepgramRecordingResult {
   recordingUri?: string;
 }
 
+/**
+ * Requestable audio output routes for {@link DeepgramNative.setAudioRoute}.
+ * `auto` clears any preference and lets the OS manage the route.
+ */
+export type DeepgramAudioRoute = 'speaker' | 'earpiece' | 'bluetooth' | 'auto';
+
+/**
+ * The output route the system is actually using, as reported by
+ * {@link DeepgramNative.getAudioRoute} and the route-change event. `wired`
+ * covers headphones / USB / car audio — outputs the OS routes to
+ * automatically and that cannot be requested explicitly.
+ */
+export type DeepgramActiveAudioRoute =
+  | 'speaker'
+  | 'earpiece'
+  | 'bluetooth'
+  | 'wired';
+
 interface DeepgramNative {
   startRecording(options?: StartRecordingOptions): Promise<void>;
   stopRecording(): Promise<DeepgramRecordingResult | null>;
@@ -64,6 +82,8 @@ interface DeepgramNative {
   stopPlayer(): void;
   startPlayer(sampleRate: number, channels?: number): void;
   setMeteringEnabled?: (enabled: boolean, intervalMs?: number) => void;
+  setAudioRoute?: (route: DeepgramAudioRoute) => Promise<void>;
+  getAudioRoute?: () => Promise<DeepgramActiveAudioRoute>;
 }
 
 const LINKING_ERROR = `react-native-deepgram: Native code not linked—did you run “pod install” & rebuild?`;
@@ -117,5 +137,17 @@ export const Deepgram: DeepgramNative = {
     if (typeof NativeDeepgramModule.setMeteringEnabled === 'function') {
       return NativeDeepgramModule.setMeteringEnabled(enabled, intervalMs);
     }
+  },
+  setAudioRoute(route: DeepgramAudioRoute) {
+    if (typeof NativeDeepgramModule.setAudioRoute === 'function') {
+      return NativeDeepgramModule.setAudioRoute(route);
+    }
+    return Promise.resolve();
+  },
+  getAudioRoute() {
+    if (typeof NativeDeepgramModule.getAudioRoute === 'function') {
+      return NativeDeepgramModule.getAudioRoute();
+    }
+    return Promise.resolve('speaker' as DeepgramActiveAudioRoute);
   },
 };

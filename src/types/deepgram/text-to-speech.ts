@@ -1,4 +1,5 @@
 import type { DeepgramCallbackMethod } from './shared';
+import type { DeepgramInterruptionEvent } from '../../interruption';
 
 /**
  * Deepgram Aura text-to-speech models.
@@ -340,6 +341,13 @@ export type UseDeepgramTextToSpeechProps = {
 
   /** Automatically handle audio playback (speaker output). @default true */
   autoPlayAudio?: boolean;
+
+  /**
+   * Called when the system interrupts audio playback (phone call, Siri,
+   * another app taking audio focus). Observability only — the native layer
+   * already pauses/resumes playback itself.
+   */
+  onInterruption?: (event: DeepgramInterruptionEvent) => void;
 
   /** Enable internal state tracking. @default false */
   trackState?: boolean;

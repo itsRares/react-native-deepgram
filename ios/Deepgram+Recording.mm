@@ -25,7 +25,7 @@
 void DGHandleInputBuffer(
     void *inUserData, __unused AudioQueueRef inAQ, AudioQueueBufferRef inBuffer,
     __unused const AudioTimeStamp *inStartTime, __unused UInt32 inNumPackets,
-    __unused const AudioStreamPacketDescription *inPacketDesc) {
+    __unused const AudioStreamPacketDescription *_Nullable inPacketDesc) {
   @autoreleasepool {
     DGRecordState *state = (DGRecordState *)inUserData;
     if (!state || !state->isRunning) {
@@ -443,15 +443,18 @@ static NSData *DGMakeWavHeader(uint32_t sampleRate, uint16_t channels,
               @"proper AEC behavior.");
 #else
     @try {
+      // Re-asserting VP when it is already engaged tears down and rebuilds
+      // the VPIO unit, leaving a brief window with no echo cancellation (and
+      // can fail outright, silently dropping AEC). Only toggle when needed.
       NSError *vpError = nil;
-      if (self.audioEngine.inputNode &&
-          ![self.audioEngine.inputNode setVoiceProcessingEnabled:YES
-                                                           error:&vpError]) {
+      AVAudioInputNode *vpInput = self.audioEngine.inputNode;
+      AVAudioOutputNode *vpOutput = self.audioEngine.outputNode;
+      if (vpInput && !vpInput.isVoiceProcessingEnabled &&
+          ![vpInput setVoiceProcessingEnabled:YES error:&vpError]) {
         DGLogWarn(@"[Deepgram] inputNode VP enable failed: %@", vpError);
       }
-      if (self.audioEngine.outputNode &&
-          ![self.audioEngine.outputNode setVoiceProcessingEnabled:YES
-                                                            error:&vpError]) {
+      if (vpOutput && !vpOutput.isVoiceProcessingEnabled &&
+          ![vpOutput setVoiceProcessingEnabled:YES error:&vpError]) {
         DGLogWarn(@"[Deepgram] outputNode VP enable failed: %@", vpError);
       }
     } @catch (NSException *e) {

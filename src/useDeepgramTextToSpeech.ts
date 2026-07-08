@@ -1,5 +1,6 @@
 import { useRef, useCallback, useEffect, useMemo, useState } from 'react';
 import { Deepgram } from './NativeDeepgram';
+import { addInterruptionListener } from './interruption';
 import type {
   UseDeepgramTextToSpeechProps,
   UseDeepgramTextToSpeechReturn,
@@ -155,6 +156,7 @@ export function useDeepgramTextToSpeech({
   options = {},
   autoPlayAudio = true,
   trackState = false,
+  onInterruption,
 }: UseDeepgramTextToSpeechProps = {}): UseDeepgramTextToSpeechReturn {
   /* ---------- Stable refs for callbacks ---------- */
   const onBeforeSynthesizeRef = useRef(onBeforeSynthesize);
@@ -184,6 +186,15 @@ export function useDeepgramTextToSpeech({
     onStreamClearedRef.current = onStreamCleared;
     onStreamWarningRef.current = onStreamWarning;
   });
+
+  const onInterruptionRef = useRef(onInterruption);
+  onInterruptionRef.current = onInterruption;
+  const wantsInterruptions = typeof onInterruption === 'function';
+  useEffect(() => {
+    if (!wantsInterruptions) return;
+    const sub = addInterruptionListener((e) => onInterruptionRef.current?.(e));
+    return () => sub.remove();
+  }, [wantsInterruptions]);
 
   const streamEndFiredRef = useRef(false);
   const [internalState, setInternalState] = useState<{

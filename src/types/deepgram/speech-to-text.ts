@@ -3,6 +3,7 @@ import type {
   DeepgramCustomMode,
   DeepgramReconnectOptions,
 } from './shared';
+import type { DeepgramInterruptionEvent } from '../../interruption';
 
 /**
  * Audio encoding formats supported by Deepgram's Live Listen API.
@@ -378,6 +379,13 @@ export type UseDeepgramSpeechToTextProps = {
   onError?: (error: unknown) => void;
   /** Called when the session ends or WebSocket closes */
   onEnd?: () => void;
+  /**
+   * Called when the system interrupts audio (phone call, Siri, another app
+   * taking audio focus). Fires only while a live session is active. The hook
+   * also keeps the socket alive with KeepAlive frames until the interruption
+   * ends, and ends the session gracefully (onEnd) on a permanent focus loss.
+   */
+  onInterruption?: (event: DeepgramInterruptionEvent) => void;
   /** Called before starting file transcription (e.g. show spinner) */
   onBeforeTranscribe?: () => void;
   /** Called when file transcription completes with the final transcript */

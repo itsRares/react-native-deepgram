@@ -2,6 +2,7 @@ import { useRef, useCallback, useState, useEffect } from 'react';
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 import { Deepgram } from './NativeDeepgram';
 import { askMicPermission } from './helpers/askMicPermission';
+import { addInterruptionListener } from './interruption';
 import type {
   DeepgramLiveListenOptions,
   DeepgramPrerecordedOptions,
@@ -91,6 +92,7 @@ export function useDeepgramSpeechToText({
   reconnect = {},
   onReconnecting = () => {},
   onReconnected = () => {},
+  onInterruption,
 }: UseDeepgramSpeechToTextProps = {}): UseDeepgramSpeechToTextReturn {
   const [internalState, setInternalState] = useState<{
     status: 'idle' | 'loading' | 'listening' | 'transcribing' | 'error';
@@ -106,8 +108,10 @@ export function useDeepgramSpeechToText({
   const meterSub = useRef<ReturnType<NativeEventEmitter['addListener']> | null>(
     null
   );
+  const interruptionSub = useRef<{ remove: () => void } | null>(null);
   const apiVersionRef = useRef<'v1' | 'v2'>('v1');
   const pausedRef = useRef(false);
+  const interruptedRef = useRef(false);
   const keepAliveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const userClosedRef = useRef(false);
   const reconnectAttemptRef = useRef(0);
@@ -152,6 +156,10 @@ export function useDeepgramSpeechToText({
   onRecordingCompleteRef.current = onRecordingComplete;
   const recordToFileRef = useRef(recordToFile);
   recordToFileRef.current = recordToFile;
+
+  const onInterruptionRef = useRef(onInterruption);
+  onInterruptionRef.current = onInterruption;
+
   const meteringEnabled = metering.enabled === true;
   const meteringIntervalMs =
     typeof metering.intervalMs === 'number' && metering.intervalMs > 0
@@ -169,6 +177,31 @@ export function useDeepgramSpeechToText({
 
   const endFiredRef = useRef(false);
 
+  // Keep the socket warm while no audio is flowing (user pause or a system
+  // interruption). Deepgram closes a live socket that receives neither audio
+  // nor a KeepAlive text frame for ~10 s (NET-0001).
+  const startKeepAlive = useCallback(() => {
+    if (keepAliveTimerRef.current != null) {
+      return;
+    }
+    keepAliveTimerRef.current = setInterval(() => {
+      const s = ws.current;
+      if (!s || s.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      try {
+        s.send(JSON.stringify({ type: 'KeepAlive' }));
+      } catch {}
+    }, KEEPALIVE_INTERVAL_MS);
+  }, []);
+
+  const stopKeepAlive = useCallback(() => {
+    if (keepAliveTimerRef.current != null) {
+      clearInterval(keepAliveTimerRef.current);
+      keepAliveTimerRef.current = null;
+    }
+  }, []);
+
   const closeResources = useCallback(() => {
     if (keepAliveTimerRef.current != null) {
       clearInterval(keepAliveTimerRef.current);
@@ -180,6 +213,7 @@ export function useDeepgramSpeechToText({
     }
     reconnectingRef.current = false;
     pausedRef.current = false;
+    interruptedRef.current = false;
     if (audioSub.current) {
       audioSub.current.remove();
       audioSub.current = null;
@@ -187,6 +221,10 @@ export function useDeepgramSpeechToText({
     if (meterSub.current) {
       meterSub.current.remove();
       meterSub.current = null;
+    }
+    if (interruptionSub.current) {
+      interruptionSub.current.remove();
+      interruptionSub.current = null;
     }
     Deepgram.setMeteringEnabled?.(false, 0);
     Deepgram.stopRecording()
@@ -609,6 +647,47 @@ export function useDeepgramSpeechToText({
 
         connectSocket();
 
+        // System interruptions (phone call, Siri, focus loss) pause native
+        // capture, so no audio reaches Deepgram and the socket would be
+        // closed with NET-0001 after ~10 s. Bridge the gap with KeepAlive
+        // frames and hand the session back once the interruption ends; a
+        // permanent focus loss tears the session down natively, so end
+        // gracefully instead of surfacing a socket error.
+        interruptionSub.current?.remove();
+        interruptionSub.current = addInterruptionListener((e) => {
+          onInterruptionRef.current?.(e);
+          if (e.type === 'began') {
+            if (interruptedRef.current) {
+              return;
+            }
+            interruptedRef.current = true;
+            // Flush buffered audio so trailing words come back as finals
+            // (mirrors pause(); Flux has no Finalize control message).
+            if (
+              apiVersionRef.current !== 'v2' &&
+              ws.current?.readyState === WebSocket.OPEN
+            ) {
+              try {
+                ws.current.send(JSON.stringify({ type: 'Finalize' }));
+              } catch {}
+            }
+            startKeepAlive();
+          } else if (e.type === 'ended') {
+            if (!interruptedRef.current) {
+              return;
+            }
+            interruptedRef.current = false;
+            if (!pausedRef.current) {
+              stopKeepAlive();
+            }
+          } else {
+            // 'stopped' — the native session is gone; end cleanly.
+            userClosedRef.current = true;
+            closeResources();
+            fireEnd();
+          }
+        });
+
         audioSub.current = getEmitter().addListener(AUDIO_EVENT, (ev: any) => {
           if (pausedRef.current) {
             return;
@@ -669,6 +748,9 @@ export function useDeepgramSpeechToText({
       live,
       trackState,
       closeResources,
+      fireEnd,
+      startKeepAlive,
+      stopKeepAlive,
       meteringEnabled,
       meteringIntervalMs,
     ]
@@ -710,21 +792,13 @@ export function useDeepgramSpeechToText({
     }
 
     if (keepAliveTimerRef.current == null) {
-      keepAliveTimerRef.current = setInterval(() => {
-        const s = ws.current;
-        if (!s || s.readyState !== WebSocket.OPEN) {
-          return;
-        }
-        try {
-          s.send(JSON.stringify({ type: 'KeepAlive' }));
-        } catch {}
-      }, KEEPALIVE_INTERVAL_MS);
+      startKeepAlive();
     }
 
     if (trackState) {
       setInternalIsPaused(true);
     }
-  }, [trackState]);
+  }, [startKeepAlive, trackState]);
 
   const resume = useCallback(() => {
     if (!pausedRef.current) {
@@ -732,15 +806,16 @@ export function useDeepgramSpeechToText({
     }
     pausedRef.current = false;
 
-    if (keepAliveTimerRef.current != null) {
-      clearInterval(keepAliveTimerRef.current);
-      keepAliveTimerRef.current = null;
+    // Keep the KeepAlive timer while a system interruption is still holding
+    // the mic — no frames will flow until it ends.
+    if (!interruptedRef.current) {
+      stopKeepAlive();
     }
 
     if (trackState) {
       setInternalIsPaused(false);
     }
-  }, [trackState]);
+  }, [stopKeepAlive, trackState]);
 
   const transcribeFile = useCallback(
     async (

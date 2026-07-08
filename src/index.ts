@@ -10,6 +10,11 @@ export {
   addAudioRouteChangeListener,
 } from './audioRoute';
 export type { AudioRouteSubscription } from './audioRoute';
+export { addInterruptionListener } from './interruption';
+export type {
+  DeepgramInterruptionEvent,
+  InterruptionSubscription,
+} from './interruption';
 export type {
   DeepgramAudioRoute,
   DeepgramActiveAudioRoute,

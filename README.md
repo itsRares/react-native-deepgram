@@ -388,6 +388,19 @@ On **bare React Native**, add the equivalent entries to your `AndroidManifest.xm
 Things to know:
 
 - **Play Console declaration.** Apps targeting Android 14+ that declare foreground-service types must describe each type's use (and link a demo video) under **App content → Foreground service permissions** in the Play Console. For this package: `TYPE_MICROPHONE` → “Background Audio Access” (live transcription / voice agent continues while backgrounded), `TYPE_MEDIA_PLAYBACK` → “Media Playback” (TTS/agent audio continues while backgrounded). If you can't justify them, set `backgroundAudio: false` (or omit the manifest entries) — then no declaration is needed.
+- **App Store privacy.** The pod ships a `PrivacyInfo.xcprivacy` privacy manifest declaring audio-data collection (App Functionality, not linked to identity, no tracking) and its required-reason API usage — Xcode aggregates it into your app's privacy report automatically. Remember to also declare your *own* use of the captured audio (e.g. Deepgram processing/retention) in App Store Connect.
+- **Customizing the notification.** By default the Android keep-alive notification uses your app's name and launcher icon, and tapping it opens the app. Brand it via the Expo plugin's [`androidNotification` option](#expo-config-plugin-reference), or on bare React Native with `<meta-data>` entries in your `<application>` element:
+
+  ```xml
+  <application>
+    <meta-data android:name="com.deepgram.notification.TITLE" android:value="Transcribing…" />
+    <meta-data android:name="com.deepgram.notification.TEXT" android:value="Live captions are running" />
+    <meta-data android:name="com.deepgram.notification.CHANNEL_NAME" android:value="Live audio" />
+    <meta-data android:name="com.deepgram.notification.ICON" android:value="ic_stat_audio" />
+  </application>
+  ```
+
+  Each entry is optional. Values can also reference string resources for localization (`android:resource="@string/..."` instead of `android:value`); `ICON` names a drawable/mipmap resource and safely falls back to the launcher icon if missing.
 - **Graceful degradation.** If the permissions aren't declared, everything still works while the app is in the foreground; the native module simply skips the keep-alive service instead of crashing.
 
 ### Built-in resilience
@@ -401,6 +414,29 @@ The native modules handle the awkward edge cases for you:
 - **Bluetooth on iOS 17+** — uses `AllowBluetoothHFP` when available, with a deprecation-safe fallback for older toolchains.
 - **iOS 17+ permission API** — `requestMicPermission` calls `AVAudioApplication.requestRecordPermissionWithCompletionHandler` when available, falling back to `AVAudioSession` on older OS versions.
 - **Bounded playback queue (Android)** — if JS feeds audio faster than the device can play it, the oldest chunks are dropped at ~1.5 MB so you never OOM mid-call.
+
+### Interruption events
+
+All of the pausing/resuming above happens automatically — but your UI can observe it. Subscribe to interruption events to show “paused — on a call” states or to restart a session after Android tears it down on permanent focus loss:
+
+```ts
+import { addInterruptionListener } from 'react-native-deepgram';
+
+const sub = addInterruptionListener((e) => {
+  if (e.type === 'began') {
+    // capture/playback paused by the system
+    // e.reason: 'phoneCall' | 'focusLoss' | 'routeChange' | 'unknown'
+  } else if (e.type === 'ended') {
+    // interruption over; e.shouldResume === true means audio already resumed
+  } else {
+    // e.type === 'stopped' — Android permanent focus loss tore the session down;
+    // call startListening()/connect() again if you want to continue
+  }
+});
+// later: sub.remove();
+```
+
+The same events are available as an `onInterruption` callback on `useDeepgramSpeechToText`, `useDeepgramVoiceAgent`, and `useDeepgramTextToSpeech`. While a live STT or agent session is active the hooks also react on your behalf: they keep the Deepgram socket warm with `KeepAlive` frames for as long as the interruption holds the microphone (otherwise Deepgram closes the idle socket after ~10 s with `NET-0001`), resume normal streaming when it ends, and end the session gracefully (`onEnd`/`onClose`, no error) when Android tears it down on permanent focus loss.
 
 ### Audio output routing
 
@@ -1337,6 +1373,7 @@ The package ships with an Expo config plugin (exported from `app.plugin.js`). It
 | --- | --- |
 | Android | Adds `android.permission.RECORD_AUDIO` if missing. |
 | Android | When `backgroundAudio !== false`, adds the `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MICROPHONE`, and `FOREGROUND_SERVICE_MEDIA_PLAYBACK` permissions **and** sets `android:foregroundServiceType="microphone|mediaPlayback"` on `DeepgramAudioService`. When `false`, none of these are added — your app carries no foreground-service footprint and needs no Play Console foreground-service declaration. |
+| Android | When `androidNotification` is provided, writes `com.deepgram.notification.*` `<meta-data>` entries that customize the foreground-service notification (title, text, channel name, icon). |
 | iOS | Sets `NSMicrophoneUsageDescription` from the `microphonePermission` option (with a sensible fallback). |
 | iOS | When `backgroundAudio !== false`, adds `audio` to `UIBackgroundModes`. |
 
@@ -1353,6 +1390,12 @@ module.exports = {
           microphonePermission:
             'Allow $(PRODUCT_NAME) to capture audio for real-time transcription.',
           backgroundAudio: true, // default — set false to disable background audio + foreground service
+          androidNotification: {
+            title: 'Transcribing…', // default: your app's name
+            text: 'Live captions are running',
+            channelName: 'Live audio',
+            icon: 'ic_stat_audio', // drawable/mipmap resource name; default: launcher icon
+          },
         },
       ],
     ],
@@ -1364,6 +1407,7 @@ module.exports = {
 | --- | --- | --- | --- |
 | `microphonePermission` | `string` | Generic English fallback | Sets `NSMicrophoneUsageDescription`. Always provide your own copy in production. |
 | `backgroundAudio` | `boolean` | `true` | When `false`, **omits** the iOS background-audio mode, the Android foreground-service permissions, and the service's `foregroundServiceType`. Choose this if your app must never run audio in the background — it also spares you the Play Console foreground-service declaration. |
+| `androidNotification` | `object` | — | Brands the Android keep-alive notification. `title` (default: app name), `text`, `channelName` (default: title), and `icon` (drawable/mipmap resource name, default: launcher icon) are each optional. See [Background audio](#background-audio) for the bare-RN `<meta-data>` equivalents. |
 
 > 🧭 **Bare React Native** without Expo? You can still load the plugin in your own prebuild pipeline: `require('react-native-deepgram/app.plugin.js')`.
 

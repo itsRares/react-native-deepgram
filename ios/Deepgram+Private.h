@@ -73,6 +73,11 @@ NS_ASSUME_NONNULL_BEGIN
 @property(atomic, assign) BOOL engineCaptureActive;
 @property(atomic, assign) BOOL voiceProcessingRequested;
 @property(atomic, assign) BOOL audioQueueCaptureRequested;
+// YES between AVAudioSessionInterruptionTypeBegan and ...Ended. While set,
+// `setActive:YES` is doomed (a higher-priority session — phone call, Siri —
+// holds the hardware), so route-change / config-change handlers must not try
+// to reactivate; the interruption-ended handler does that instead.
+@property(atomic, assign) BOOL sessionInterrupted;
 
 // Audio output routing. Holds the last explicit route request from JS
 // (`speaker` / `earpiece` / `bluetooth`); nil means `auto` (system default).

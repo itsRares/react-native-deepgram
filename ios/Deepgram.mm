@@ -50,7 +50,10 @@ RCT_EXPORT_MODULE();
 }
 
 - (NSArray<NSString *> *)supportedEvents {
-  return @[ @"DeepgramAudioPCM", @"DeepgramAudioLevel", @"DeepgramRouteChange" ];
+  return @[
+    @"DeepgramAudioPCM", @"DeepgramAudioLevel", @"DeepgramRouteChange",
+    @"DeepgramInterruption"
+  ];
 }
 
 - (void)startObserving {
@@ -139,8 +142,19 @@ RCT_EXPORT_MODULE();
   self.appIsActive = YES;
 
   if (_recordState.isRunning || self.isPlaying || self.engineCaptureActive) {
-    DGLogDebug(@"[Deepgram] handleAppDidBecomeActive: reactivating session");
-    [self activateAudioSession:NULL];
+    // Siri (and some call flows) regularly ends an interruption WITHOUT ever
+    // posting AVAudioSessionInterruptionTypeEnded; becoming active again is
+    // the only reliable signal that the hardware is coming back. Clear the
+    // interruption flag and run the full retrying resume — a bare setActive:
+    // would leave the paused AudioQueue / stopped AVAudioEngine dead. If an
+    // interruption is actually still ongoing (user returned to the app
+    // mid-call), activation fails, the retries burn out harmlessly, and the
+    // real interruption-ended notification resumes later.
+    DGLogDebug(@"[Deepgram] handleAppDidBecomeActive: resuming session");
+    self.sessionInterrupted = NO;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [self resumeAfterInterruption:0];
+    });
   }
 }
 

@@ -25,6 +25,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DeepgramActiveAudioRoute` types and an `AudioRouteSubscription` handle.
 - **Example app.** The Voice Agent screen now includes an audio-route picker
   demonstrating the new routing API.
+- **iOS privacy manifest.** The pod now ships a `PrivacyInfo.xcprivacy`
+  declaring audio-data collection (App Functionality, not linked to identity,
+  no tracking) and its required-reason API usage
+  (`NSProcessInfo.systemUptime`, reason `35F9.1`), bundled via the podspec's
+  `resource_bundles` so Xcode's privacy-report aggregation picks it up
+  automatically.
+- **Customizable foreground-service notification (Android).** The keep-alive
+  notification can now be branded via the Expo plugin's new
+  `androidNotification` option (`title`, `text`, `channelName`, `icon`) or
+  `com.deepgram.notification.*` `<meta-data>` manifest entries on bare React
+  Native. Defaults are now sane without configuration: the title falls back to
+  the app's label, the small icon to the app's launcher icon, and tapping the
+  notification opens the app.
+- **Audio interruption events.** New `addInterruptionListener()` export (plus
+  an `onInterruption` callback on the speech-to-text, voice-agent, and
+  text-to-speech hooks) surfaces system audio interruptions to JS via the new
+  shared `DeepgramInterruption` native event: `began` (phone call / audio-focus
+  loss), `ended` (with the system's `shouldResume` hint), and `stopped`
+  (Android permanent focus loss tore the session down). Exposes the
+  `DeepgramInterruptionEvent` type.
+- **Interruption-proof live sessions.** While a phone call, Siri, or another
+  app holds the audio hardware, the STT and Voice Agent hooks now keep the
+  Deepgram socket warm with `KeepAlive` frames (previously the idle socket was
+  closed server-side after ~10 s with `NET-0001` and the session died with a
+  reconnect error), resume streaming when the interruption ends, and end
+  gracefully — `onEnd`/`onClose` instead of an error — when Android tears the
+  session down on permanent focus loss. On iOS, capture/playback now also
+  recovers when the system never posts an interruption-ended notification
+  (common with Siri): the module re-runs its retrying resume when the app
+  becomes active again and ignores stale “was suspended” interruption
+  notifications.
 
 ### Changed
 

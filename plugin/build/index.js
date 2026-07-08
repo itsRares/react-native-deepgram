@@ -33,12 +33,36 @@ const withAndroidDeepgram = (config, options = {}) => {
                     service = { $: { 'android:name': serviceName } };
                     services.push(service);
                 }
-                service.$['android:foregroundServiceType'] =
-                    'microphone|mediaPlayback';
+                service.$['android:foregroundServiceType'] = 'microphone|mediaPlayback';
                 application.service = services;
             }
         }
         manifest['uses-permission'] = permissions;
+        const notification = resolvedOptions.androidNotification;
+        if (notification) {
+            const application = manifest.application?.[0];
+            if (application) {
+                const metaData = application['meta-data'] ?? [];
+                const setMetaData = (name, value) => {
+                    if (!value)
+                        return;
+                    const existing = metaData.find((m) => m.$?.['android:name'] === name);
+                    if (existing) {
+                        existing.$['android:value'] = value;
+                    }
+                    else {
+                        metaData.push({
+                            $: { 'android:name': name, 'android:value': value },
+                        });
+                    }
+                };
+                setMetaData('com.deepgram.notification.TITLE', notification.title);
+                setMetaData('com.deepgram.notification.TEXT', notification.text);
+                setMetaData('com.deepgram.notification.CHANNEL_NAME', notification.channelName);
+                setMetaData('com.deepgram.notification.ICON', notification.icon);
+                application['meta-data'] = metaData;
+            }
+        }
         return cfg;
     });
 };

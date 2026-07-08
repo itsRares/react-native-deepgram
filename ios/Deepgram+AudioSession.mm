@@ -29,6 +29,13 @@
                success ? @"YES" : @"NO");
   }
 
+  if (success) {
+    // Owning the session again means any interruption is de facto over —
+    // clears a stale flag when the Ended notification was never delivered
+    // (Apple doesn't guarantee it for apps that were suspended).
+    self.sessionInterrupted = NO;
+  }
+
   if (outError) {
     *outError = activationError;
   }
@@ -622,8 +629,26 @@
   BOOL causedByCategory =
       reason == AVAudioSessionRouteChangeReasonCategoryChange ||
       reason == AVAudioSessionRouteChangeReasonNoSuitableRouteForCategory;
+  BOOL causedByOverride = reason == AVAudioSessionRouteChangeReasonOverride;
+  // Two more reasons that leave the configured session perfectly valid:
+  //   - NewDeviceAvailable: a device merely *appeared* (BT headset connected
+  //     nearby, headphones plugged in). The OS moves the route by itself when
+  //     the category options allow it, and a hardware-format change is covered
+  //     by the engine-configuration-change handler. Nothing about the
+  //     category/mode/options needs to change.
+  //   - RouteConfigurationChange: the same set of ports was reconfigured —
+  //     posted e.g. when the VPIO unit engages right after agent start.
+  // Clearing `audioSessionConfigured` for these forces the next activation to
+  // re-run the full setCategory ladder UNDERNEATH the live VPIO engine, which
+  // bounces the route and audibly breaks echo cancellation on the loudspeaker
+  // (the agent starts hearing itself) — same failure mechanism as the
+  // Override case below.
+  BOOL sessionStillValid =
+      causedByCategory || causedByOverride ||
+      reason == AVAudioSessionRouteChangeReasonNewDeviceAvailable ||
+      reason == AVAudioSessionRouteChangeReasonRouteConfigurationChange;
 
-  if (!causedByCategory) {
+  if (!sessionStillValid) {
     self.audioSessionConfigured = NO;
   }
 
@@ -637,14 +662,53 @@
     return;
   }
 
+  if (self.sessionInterrupted) {
+    // A phone call / Siri / another session holds the audio hardware —
+    // `setActive:YES` is guaranteed to fail. The interruption-ended handler
+    // reactivates when the system gives the session back.
+    DGLogDebug(@"[Deepgram] handleAudioRouteChange: interrupted, deferring "
+               @"reactivation");
+    return;
+  }
+
   if (causedByCategory) {
     DGLogDebug(@"[Deepgram] handleAudioRouteChange: category change detected, "
                @"keeping session");
     return;
   }
 
+  if (causedByOverride) {
+    // The delivery of an `overrideOutputAudioPort:` call (our own speaker /
+    // earpiece flip, or a Control Center pick adopted above) on a session
+    // that is still valid. Reconfiguring here would re-set the category —
+    // which *clears* the just-applied override, re-applies it, and loops
+    // back through this handler — bouncing output speaker → receiver →
+    // speaker under the live VPIO unit and audibly breaking echo
+    // cancellation on the loudspeaker.
+    DGLogDebug(@"[Deepgram] handleAudioRouteChange: output override applied, "
+               @"keeping session");
+    return;
+  }
+
+  if (sessionStillValid) {
+    // NewDeviceAvailable / RouteConfigurationChange — see above. The session
+    // (and any live VPIO engine) is untouched; a hardware format change is
+    // handled by handleEngineConfigurationChange.
+    DGLogDebug(@"[Deepgram] handleAudioRouteChange: session still valid "
+               @"(reason %lu), keeping session",
+               (unsigned long)reason);
+    return;
+  }
+
   DGLogDebug(@"[Deepgram] handleAudioRouteChange: reactivating session");
-  [self activateAudioSession:NULL];
+  // Retrying resume rather than a one-shot activation: Siri (and other
+  // transient audio grabs) posts this route change while it still HOLDS the
+  // hardware — sometimes before, or entirely without, an interruption
+  // notification — so the first activation attempt routinely fails and must
+  // be retried once the interrupter lets go.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [self resumeAfterInterruption:0];
+  });
 }
 
 /**
@@ -677,6 +741,9 @@
   }
   if (self.audioEngine.isRunning) {
     return; // engine recovered on its own; nothing to rebuild
+  }
+  if (self.sessionInterrupted) {
+    return; // hardware held by another session; rebuilt on interruption end
   }
 
   [self activateAudioSession:NULL];
@@ -748,6 +815,86 @@
   self.isPlaying = NO;
 }
 
+/**
+ * Resume capture/playback after the audio hardware was taken away — called
+ * when an interruption ends AND from `handleAudioRouteChange:` (Siri grabs
+ * the hardware and posts a route change sometimes before, or without, an
+ * interruption notification).
+ *
+ * Two quirks make this more involved than "setActive + play":
+ *   - Session activation can fail for a beat while the interrupter (Siri
+ *     especially) releases the audio hardware, so failed attempts are
+ *     retried a few times before giving up.
+ *   - AVAudioEngine stops itself during an interruption, so the engine paths
+ *     (Voice Agent capture, streaming TTS playback) need the same full
+ *     tap/converter rebuild as a configuration change — a bare
+ *     `[playerNode play]` on a stopped engine is a silent no-op.
+ *
+ * Every step is idempotent (AudioQueueStart on a running queue is a no-op,
+ * the engine restart is guarded by `isRunning`), so overlapping invocations
+ * from the two callers are harmless.
+ */
+- (void)resumeAfterInterruption:(int)attempt {
+  if (self.sessionInterrupted) {
+    return; // a new interruption began — its own Ended handler will resume
+  }
+  BOOL wantsQueueCapture = _recordState.isRunning && _recordState.queue;
+  BOOL wantsEngine =
+      self.audioEngine && (self.engineCaptureActive || self.isPlaying);
+  if (!wantsQueueCapture && !wantsEngine) {
+    DGLogDebug(@"[Deepgram] resumeAfterInterruption: nothing to resume");
+    return; // stopped in the meantime
+  }
+
+  NSError *error = nil;
+  if (![self activateAudioSession:&error]) {
+    // ~4s of retries: a Siri interaction holds the hardware for several
+    // seconds, and it doesn't always post interruption notifications that
+    // would otherwise re-trigger the resume.
+    if (attempt < 5) {
+      DGLogDebug(@"[Deepgram] resumeAfterInterruption: activation not ready "
+                 @"(attempt %d), retrying",
+                 attempt);
+      dispatch_after(
+          dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)),
+          dispatch_get_main_queue(), ^{
+            [self resumeAfterInterruption:attempt + 1];
+          });
+    } else {
+      DGLogError(@"[Deepgram] resumeAfterInterruption: giving up after %d "
+                 @"attempts: %@",
+                 attempt + 1, error.localizedDescription ?: error);
+    }
+    return;
+  }
+
+  if (wantsQueueCapture) {
+    OSStatus status = AudioQueueStart(_recordState.queue, NULL);
+    if (status != noErr) {
+      DGLogWarn(@"[Deepgram] resumeAfterInterruption: AudioQueueStart "
+                @"failed (%d)",
+                (int)status);
+    } else {
+      DGLogDebug(@"[Deepgram] resumeAfterInterruption: recording resumed");
+    }
+  }
+
+  if (wantsEngine && !self.audioEngine.isRunning) {
+    // Rebuilds the mic tap/converter against the current hardware format,
+    // restarts the engine, and resumes the player node if it was playing.
+    DGLogDebug(@"[Deepgram] resumeAfterInterruption: restarting engine");
+    [self restartEngineAfterConfigurationChange];
+  } else if (self.isPlaying && self.playerNode && !self.playerNode.isPlaying) {
+    @try {
+      [self.playerNode play];
+    } @catch (NSException *e) {
+      DGLogWarn(@"[Deepgram] resumeAfterInterruption: playerNode play "
+                @"threw: %@",
+                e);
+    }
+  }
+}
+
 - (void)handleAudioInterruption:(NSNotification *)note {
   DGLogDebug(@"[Deepgram] handleAudioInterruption: %@", note.userInfo);
   NSNumber *typeValue = note.userInfo[AVAudioSessionInterruptionTypeKey];
@@ -755,7 +902,37 @@
       (AVAudioSessionInterruptionType)typeValue.unsignedIntegerValue;
 
   if (type == AVAudioSessionInterruptionTypeBegan) {
+    // A "began" delivered because the app was suspended is stale history:
+    // the interruption already ran its course while the app was frozen and
+    // NO matching "ended" will ever arrive. Treating it as a live
+    // interruption would wedge `sessionInterrupted` and pause a session the
+    // system is actually handing back — resume instead. (Not posted on
+    // iOS 16+, which is why the app-active handler is the primary fallback.)
+    BOOL wasSuspended = NO;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    if (@available(iOS 14.5, *)) {
+      NSNumber *reasonValue = note.userInfo[AVAudioSessionInterruptionReasonKey];
+      wasSuspended = reasonValue != nil &&
+                     reasonValue.unsignedIntegerValue ==
+                         AVAudioSessionInterruptionReasonAppWasSuspended;
+    } else {
+      NSNumber *suspendedValue =
+          note.userInfo[AVAudioSessionInterruptionWasSuspendedKey];
+      wasSuspended = suspendedValue.boolValue;
+    }
+#pragma clang diagnostic pop
+    if (wasSuspended) {
+      DGLogDebug(@"[Deepgram] handleAudioInterruption: stale was-suspended "
+                 @"notification, resuming");
+      dispatch_async(dispatch_get_main_queue(), ^{
+        [self resumeAfterInterruption:0];
+      });
+      return;
+    }
+
     DGLogDebug(@"[Deepgram] handleAudioInterruption: interruption began");
+    self.sessionInterrupted = YES;
     if (_recordState.isRunning && _recordState.queue) {
       DGLogDebug(
           @"[Deepgram] handleAudioInterruption: pausing recording queue");
@@ -765,24 +942,33 @@
       DGLogDebug(@"[Deepgram] handleAudioInterruption: pausing player node");
       [self.playerNode pause];
     }
+    // Observability only — the system doesn't say why (call, Siri, alarm, …).
+    if (self.hasListeners) {
+      [self sendEventWithName:@"DeepgramInterruption"
+                         body:@{@"type" : @"began", @"reason" : @"unknown"}];
+    }
   } else if (type == AVAudioSessionInterruptionTypeEnded) {
     DGLogDebug(@"[Deepgram] handleAudioInterruption: interruption ended");
+    self.sessionInterrupted = NO;
     NSNumber *optionValue = note.userInfo[AVAudioSessionInterruptionOptionKey];
     AVAudioSessionInterruptionOptions options =
         (AVAudioSessionInterruptionOptions)optionValue.unsignedIntegerValue;
-    if (options & AVAudioSessionInterruptionOptionShouldResume) {
-      DGLogDebug(@"[Deepgram] handleAudioInterruption: should resume");
-      [self activateAudioSession:nil];
-
-      if (_recordState.isRunning && _recordState.queue) {
-        DGLogDebug(
-            @"[Deepgram] handleAudioInterruption: resuming recording queue");
-        AudioQueueStart(_recordState.queue, NULL);
-      }
-      if (self.isPlaying && self.playerNode) {
-        DGLogDebug(@"[Deepgram] handleAudioInterruption: resuming player node");
-        [self.playerNode play];
-      }
+    BOOL shouldResume =
+        (options & AVAudioSessionInterruptionOptionShouldResume) != 0;
+    // Resume whenever a session is still live, not only on the ShouldResume
+    // hint — Siri regularly ends interruptions without it, and for a live
+    // mic/agent session "keep going" is always the right call. The hint is
+    // still surfaced to JS. Runs async on main: activation may need retries
+    // while the interrupter releases the hardware.
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [self resumeAfterInterruption:0];
+    });
+    if (self.hasListeners) {
+      [self sendEventWithName:@"DeepgramInterruption"
+                         body:@{
+                           @"type" : @"ended",
+                           @"shouldResume" : @(shouldResume)
+                         }];
     }
   }
 }

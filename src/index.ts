@@ -26,8 +26,16 @@ export {
   createAudioPlayerController,
   useAsyncCall,
   createAgentSettings,
+  toSRT,
+  toWebVTT,
+  toSpeakerSegments,
 } from './helpers';
-export type { DeepgramGetToken, DeepgramTokenResult } from './helpers';
+export type {
+  DeepgramGetToken,
+  DeepgramTokenResult,
+  CaptionOptions,
+  SpeakerSegment,
+} from './helpers';
 export { DeepgramError } from './types/errors';
 export type * from './types';
 

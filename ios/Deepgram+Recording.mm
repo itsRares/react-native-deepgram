@@ -59,8 +59,7 @@ void DGHandleInputBuffer(
 
 /**
  * Build a canonical 44-byte little-endian WAV/RIFF header for `dataBytes` of
- * uncompressed PCM. Apple platforms are little-endian so the integer fields are
- * written directly. Used both for the placeholder header (dataBytes = 0) and to
+ * uncompressed PCM. Used for the placeholder header (dataBytes = 0) and to
  * patch the real sizes when recording stops.
  */
 static NSData *DGMakeWavHeader(uint32_t sampleRate, uint16_t channels,
@@ -130,10 +129,9 @@ static NSData *DGMakeWavHeader(uint32_t sampleRate, uint16_t channels,
 
 /**
  * Compute a normalized RMS amplitude (0..1) over a PCM16 buffer and emit it as
- * a `DeepgramAudioLevel` event, throttled to `meteringIntervalSeconds`. No-op
- * unless metering is enabled and JS listeners are attached. Called from the
- * shared capture sink so both the AudioQueue (STT) and AVAudioEngine (Voice
- * Agent) paths are metered with identical semantics.
+ * a `DeepgramAudioLevel` event, throttled to `meteringIntervalSeconds`. Called
+ * from the shared capture sink so the AudioQueue (STT) and AVAudioEngine
+ * (Voice Agent) paths are metered identically.
  */
 - (void)emitAudioLevelForPCM:(NSData *)pcmData {
   if (!self.meteringEnabled || !self.hasListeners) {
@@ -190,9 +188,8 @@ static NSData *DGMakeWavHeader(uint32_t sampleRate, uint16_t channels,
     return;
   }
 
-  // Audio-level metering is computed on the same captured PCM that feeds the
-  // transcription stream, so it reflects exactly what Deepgram receives. It is
-  // throttled and gated independently and never alters the PCM payload.
+  // Metering runs on the same captured PCM that feeds transcription, so it
+  // reflects exactly what Deepgram receives; it never alters the payload.
   [self emitAudioLevelForPCM:pcmData];
 
   // Tee the captured PCM to the WAV file. On a write failure (e.g. disk full)
@@ -369,7 +366,7 @@ static NSData *DGMakeWavHeader(uint32_t sampleRate, uint16_t channels,
   self.recordFileDataBytes = 0;
 
   @try {
-    // Rewrite the full header now that the final size and sample rate are known.
+    // Patch the header with the final size and sample rate.
     NSData *header =
         DGMakeWavHeader((uint32_t)MAX(1, self.currentSampleRate), 1, 16,
                         dataBytes);
@@ -412,12 +409,11 @@ static NSData *DGMakeWavHeader(uint32_t sampleRate, uint16_t channels,
 
 
 /**
- * Engine-based microphone capture path used when the JS side opts in to
- * hardware voice processing (Voice Agent / duplex). This routes through
- * `AVAudioEngine.inputNode` with `setVoiceProcessingEnabled:YES` on both
- * input and output nodes — the only Apple-supported way to actually engage
- * the VPIO Audio Unit's hardware echo cancellation on iOS. The legacy
- * AudioQueue path is preserved for STT-only usage where AEC is undesirable.
+ * Engine-based microphone capture used when JS opts in to hardware voice
+ * processing (Voice Agent / duplex). Routes through `AVAudioEngine.inputNode`
+ * with `setVoiceProcessingEnabled:YES` on both input and output nodes — the
+ * only Apple-supported way to engage VPIO hardware echo cancellation. The
+ * AudioQueue path remains for STT-only usage where AEC is undesirable.
  */
 - (BOOL)startEngineCaptureAndReturnError:(NSError **)outError {
   self.currentSampleRate = 16000;

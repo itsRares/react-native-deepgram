@@ -40,12 +40,16 @@ import type {
   DeepgramVoiceAgentSpeakConfig,
   DeepgramVoiceAgentAgentConfig,
   DeepgramReconnectOptions,
+  SessionStats,
 } from './types';
+import { createEmptySessionStats } from './types/deepgram/stats';
 
 const DEFAULT_INPUT_SAMPLE_RATE = 16_000;
 const BASE_NATIVE_SAMPLE_RATE = 16_000;
 
 const AGENT_KEEPALIVE_INTERVAL_MS = 5_000;
+
+const STATS_PUBLISH_INTERVAL_MS = 1_000;
 
 const DEFAULT_AGENT_RECONNECT = {
   enabled: false,
@@ -209,6 +213,11 @@ export interface UseDeepgramVoiceAgentProps {
   trackConversation?: boolean;
   trackAgentStatus?: boolean;
   /**
+   * Publish live session telemetry via `stats`, throttled to ≤1 update/s.
+   * @default false
+   */
+  trackStats?: boolean;
+  /**
    * Auto-reconnect configuration for the agent socket. Disabled by default;
    * set `reconnect.enabled` to opt in. On reconnect the stored `Settings`
    * message is automatically re-sent.
@@ -218,6 +227,14 @@ export interface UseDeepgramVoiceAgentProps {
   onReconnecting?: (attempt: number) => void;
   /** Called once the agent socket has successfully reconnected. */
   onReconnected?: () => void;
+  /**
+   * Flush queued agent audio on `UserStartedSpeaking` so the agent stops
+   * talking when the user interrupts. Requires `autoPlayAudio`.
+   * @default false
+   */
+  bargeIn?: boolean;
+  /** Called after a barge-in flush actually happened. */
+  onBargeIn?: () => void;
   onBeforeConnect?: () => void;
   onConnect?: () => void;
   onClose?: (event?: any) => void;
@@ -285,6 +302,8 @@ export interface UseDeepgramVoiceAgentReturn {
   mute: () => void;
   /** Resume forwarding mic frames after {@link mute}. */
   unmute: () => void;
+  /** Imperative snapshot of the session telemetry counters. */
+  getStats: () => SessionStats;
   isConnected: () => boolean;
   state?: {
     connectionState: 'idle' | 'connecting' | 'connected' | 'disconnected';
@@ -299,6 +318,8 @@ export interface UseDeepgramVoiceAgentReturn {
     thinking: string | null;
     latency: { total?: number; tts?: number; ttt?: number } | null;
   };
+  /** Live session telemetry (only when `trackStats` is enabled). */
+  stats?: SessionStats;
 }
 
 export function useDeepgramVoiceAgent({
@@ -309,10 +330,13 @@ export function useDeepgramVoiceAgent({
   trackState = false,
   trackConversation = false,
   trackAgentStatus = false,
+  trackStats = false,
   downsampleFactor,
   reconnect = {},
   onReconnecting = () => {},
   onReconnected = () => {},
+  bargeIn = false,
+  onBargeIn,
   onBeforeConnect,
   onConnect,
   onClose,
@@ -362,6 +386,9 @@ export function useDeepgramVoiceAgent({
   const interruptionKeepAliveTimerRef = useRef<ReturnType<
     typeof setInterval
   > | null>(null);
+  // True while agent audio is queued/playing on the native player.
+  const agentAudioInFlightRef = useRef(false);
+  const bargeInRef = useRef(bargeIn);
   const defaultSettingsRef = useRef(defaultSettings);
   const endpointRef = useRef(endpoint);
 
@@ -375,6 +402,10 @@ export function useDeepgramVoiceAgent({
   );
   const reconnectConfigRef = useRef({ ...DEFAULT_AGENT_RECONNECT });
   const openSocketRef = useRef<() => void>(() => {});
+
+  const statsRef = useRef<SessionStats>(createEmptySessionStats());
+  const statsDirtyRef = useRef(false);
+  const statsTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const onBeforeConnectRef = useRef(onBeforeConnect);
   const onConnectRef = useRef(onConnect);
@@ -402,6 +433,7 @@ export function useDeepgramVoiceAgent({
   const onServerErrorRef = useRef(onServerError);
   const onAudioConfigRef = useRef(onAudioConfig);
   const onAudioRef = useRef(onAudio);
+  const onBargeInRef = useRef(onBargeIn);
   const autoStartMicRef = useRef(autoStartMicrophone);
 
   const onInterruptionRef = useRef(onInterruption);
@@ -430,6 +462,30 @@ export function useDeepgramVoiceAgent({
   }));
 
   const [internalIsMuted, setInternalIsMuted] = useState(false);
+
+  const [internalStats, setInternalStats] = useState<SessionStats>(
+    createEmptySessionStats
+  );
+
+  const stopStatsPublisher = useCallback(() => {
+    if (statsTimerRef.current != null) {
+      clearInterval(statsTimerRef.current);
+      statsTimerRef.current = null;
+    }
+  }, []);
+
+  const startStatsPublisher = useCallback(() => {
+    if (statsTimerRef.current != null) {
+      return;
+    }
+    statsTimerRef.current = setInterval(() => {
+      if (!statsDirtyRef.current) {
+        return;
+      }
+      statsDirtyRef.current = false;
+      setInternalStats({ ...statsRef.current });
+    }, STATS_PUBLISH_INTERVAL_MS);
+  }, []);
 
   const sanitizeAudioSettings = useCallback(
     (audio?: DeepgramVoiceAgentSettings['audio']) => {
@@ -573,6 +629,8 @@ export function useDeepgramVoiceAgent({
   onServerErrorRef.current = onServerError;
   onAudioConfigRef.current = onAudioConfig;
   onAudioRef.current = onAudio;
+  onBargeInRef.current = onBargeIn;
+  bargeInRef.current = bargeIn;
   autoStartMicRef.current = autoStartMicrophone;
   if (downsampleFactor != null) {
     currentDownsample.current = downsampleFactor;
@@ -586,6 +644,8 @@ export function useDeepgramVoiceAgent({
     mutedRef.current = false;
     setInternalIsMuted(false);
 
+    stopStatsPublisher();
+
     if (interruptionKeepAliveTimerRef.current != null) {
       clearInterval(interruptionKeepAliveTimerRef.current);
       interruptionKeepAliveTimerRef.current = null;
@@ -593,6 +653,8 @@ export function useDeepgramVoiceAgent({
     interruptedRef.current = false;
     interruptionSub.current?.remove();
     interruptionSub.current = null;
+
+    agentAudioInFlightRef.current = false;
 
     if (reconnectTimerRef.current != null) {
       clearTimeout(reconnectTimerRef.current);
@@ -608,7 +670,6 @@ export function useDeepgramVoiceAgent({
       microphoneActive.current = false;
     }
 
-    // Cleanup audio session for playback
     Deepgram.stopAudio().catch(() => {});
 
     const socket = ws.current;
@@ -627,7 +688,7 @@ export function useDeepgramVoiceAgent({
         // ignore socket close errors
       }
     }
-  }, []);
+  }, [stopStatsPublisher]);
 
   useEffect(
     () => () => {
@@ -640,10 +701,14 @@ export function useDeepgramVoiceAgent({
   const handleMicChunk = useCallback(
     (ev: any) => {
       if (mutedRef.current) {
+        statsRef.current.framesDropped += 1;
+        statsDirtyRef.current = true;
         return;
       }
       const socket = ws.current;
       if (!socket || socket.readyState !== WebSocket.OPEN) {
+        statsRef.current.framesDropped += 1;
+        statsDirtyRef.current = true;
         return;
       }
 
@@ -660,8 +725,10 @@ export function useDeepgramVoiceAgent({
 
       const factor = currentDownsample.current ?? 1;
       let chunk: ArrayBuffer | null = null;
+      let decodedBytes = 0;
 
       if (typeof ev?.b64 === 'string') {
+        decodedBytes = Math.floor((ev.b64.length * 3) / 4);
         const binary = Uint8Array.from(atob(ev.b64), (c) => c.charCodeAt(0));
         let int16 = new Int16Array(binary.buffer);
         if (factor > 1 && int16.length >= factor) {
@@ -680,6 +747,8 @@ export function useDeepgramVoiceAgent({
 
       try {
         socket.send(chunk);
+        statsRef.current.bytesSent += decodedBytes;
+        statsDirtyRef.current = true;
       } catch (err) {
         onErrorRef.current?.(toDeepgramError(err));
       }
@@ -763,6 +832,8 @@ export function useDeepgramVoiceAgent({
                 const doneMsg =
                   message as DeepgramVoiceAgentAgentAudioDoneMessage;
 
+                agentAudioInFlightRef.current = false;
+
                 if (trackAgentStatus) {
                   setInternalAgentStatus({
                     thinking: null,
@@ -774,8 +845,16 @@ export function useDeepgramVoiceAgent({
               }
               break;
             case 'UserStartedSpeaking':
-              if (autoPlayAudio) {
+              // Barge-in: flush native playback so the agent stops when the
+              // user talks over it (skipped while muted).
+              if (
+                bargeInRef.current &&
+                agentAudioInFlightRef.current &&
+                !mutedRef.current
+              ) {
                 Deepgram.interruptAudio?.();
+                agentAudioInFlightRef.current = false;
+                onBargeInRef.current?.();
               }
 
               onUserStartedSpeakingRef.current?.(
@@ -817,7 +896,7 @@ export function useDeepgramVoiceAgent({
               );
               break;
             case 'Audio':
-              // Audio binary data will be handled by onmessage binary path
+              // Binary audio arrives on the binary onmessage path.
               break;
             case 'AudioConfig':
               if (hasKeys(message, ['sample_rate'])) {
@@ -903,10 +982,21 @@ export function useDeepgramVoiceAgent({
 
       const buffer = ensureArrayBuffer(ev.data);
       if (buffer) {
+        statsRef.current.bytesReceived += buffer.byteLength;
+        if (
+          statsRef.current.firstResultMs == null &&
+          statsRef.current.connectedAtMs != null
+        ) {
+          statsRef.current.firstResultMs =
+            Date.now() - statsRef.current.connectedAtMs;
+        }
+        statsDirtyRef.current = true;
+
         if (autoPlayAudio) {
           try {
             const b64 = arrayBufferToBase64(buffer);
             Deepgram.feedAudio(b64);
+            agentAudioInFlightRef.current = true;
           } catch (err) {
             console.warn('[VoiceAgent] Auto-feed audio error:', err);
           }
@@ -991,6 +1081,8 @@ export function useDeepgramVoiceAgent({
         const attempt = reconnectAttemptRef.current;
         reconnectAttemptRef.current = attempt + 1;
         reconnectingRef.current = true;
+        statsRef.current.reconnects += 1;
+        statsDirtyRef.current = true;
 
         const backoff = Math.min(
           cfg.maxDelayMs,
@@ -1054,8 +1146,7 @@ export function useDeepgramVoiceAgent({
 
     resolveAuthHeader()
       .then((authHeader) => {
-        // A newer connection attempt superseded this one while the auth token
-        // was resolving — abandon this stale socket setup.
+        // A newer connection attempt superseded this one; abandon it.
         if (generation !== wsGenerationRef.current) {
           return;
         }
@@ -1077,6 +1168,8 @@ export function useDeepgramVoiceAgent({
           const wasReconnecting = reconnectingRef.current;
           reconnectingRef.current = false;
           reconnectAttemptRef.current = 0;
+          statsRef.current.connectedAtMs = Date.now();
+          statsDirtyRef.current = true;
 
           if (mergedSettingsRef.current) {
             sendJsonMessage(mergedSettingsRef.current);
@@ -1136,6 +1229,11 @@ export function useDeepgramVoiceAgent({
       userDisconnectedRef.current = false;
       reconnectAttemptRef.current = 0;
       reconnectingRef.current = false;
+      statsRef.current = createEmptySessionStats();
+      statsDirtyRef.current = false;
+      if (trackStats) {
+        setInternalStats({ ...statsRef.current });
+      }
 
       if (trackState) {
         setInternalState({
@@ -1173,9 +1271,14 @@ export function useDeepgramVoiceAgent({
           );
         }
       } else {
-        // Only initialize audio session for playback if not recording
-        // (startRecording already activates the audio session)
+        // startRecording already activates the audio session; only needed here.
         await Deepgram.startAudio();
+      }
+
+      // Start after setup succeeded so a failed connect() can't leave the
+      // interval alive.
+      if (trackStats) {
+        startStatsPublisher();
       }
 
       const sanitizedDefault = sanitizeSettings(defaultSettingsRef.current);
@@ -1199,11 +1302,9 @@ export function useDeepgramVoiceAgent({
         nativeInputSampleRate.current
       );
 
-      // System interruptions (phone call, Siri, focus loss) pause native
-      // capture/playback, so no audio reaches Deepgram and the agent socket
-      // would be closed as idle. Bridge the gap with KeepAlive frames until
-      // the interruption ends; a permanent focus loss tears the native
-      // session down, so disconnect gracefully instead of erroring out.
+      // System interruptions pause native capture/playback; bridge the idle
+      // timeout with KeepAlive frames until they end. A permanent focus loss
+      // ('stopped') tears the native session down, so disconnect gracefully.
       interruptionSub.current = addInterruptionListener((e) => {
         onInterruptionRef.current?.(e);
         if (e.type === 'began') {
@@ -1229,8 +1330,7 @@ export function useDeepgramVoiceAgent({
             interruptionKeepAliveTimerRef.current = null;
           }
         } else {
-          // 'stopped' — the native session is gone; end cleanly (the socket
-          // close event delivers onClose, mirroring disconnect()).
+          // 'stopped' — native session is gone; the socket close delivers onClose.
           userDisconnectedRef.current = true;
           cleanup();
         }
@@ -1245,9 +1345,11 @@ export function useDeepgramVoiceAgent({
       mergeSettings,
       openSocket,
       sanitizeSettings,
+      startStatsPublisher,
       trackAgentStatus,
       trackConversation,
       trackState,
+      trackStats,
     ]
   );
 
@@ -1410,6 +1512,11 @@ export function useDeepgramVoiceAgent({
     []
   );
 
+  const getStats = useCallback(
+    (): SessionStats => ({ ...statsRef.current }),
+    []
+  );
+
   const clearConversation = useCallback(() => {
     if (trackConversation) {
       setInternalConversation([]);
@@ -1432,11 +1539,13 @@ export function useDeepgramVoiceAgent({
     sendMedia: sendBinary,
     mute,
     unmute,
+    getStats,
     isConnected,
     ...(trackState ? { state: internalState, isMuted: internalIsMuted } : {}),
     ...(trackConversation
       ? { conversation: internalConversation, clearConversation }
       : {}),
     ...(trackAgentStatus ? { agentStatus: internalAgentStatus } : {}),
+    ...(trackStats ? { stats: internalStats } : {}),
   };
 }

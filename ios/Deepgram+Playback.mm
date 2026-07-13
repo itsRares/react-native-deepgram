@@ -14,17 +14,8 @@
  */
 @implementation Deepgram (Playback)
 
-/* ================================================================== */
-/*  2.  AVAUDIOENGINE PLAYBACK WITH VOICE PROCESSING (ECHO CANCEL)    */
-/* ================================================================== */
+// MARK: - AVAudioEngine playback with voice processing (echo cancel)
 
-/**
- * Setup AVAudioEngine for output. When `enableVoiceProcessing` is YES we also
- * configure the input node for hardware echo cancellation (Voice Agent /
- * duplex use case). When NO (pure TTS playback), we deliberately avoid
- * touching `inputNode` so we don't request the microphone or interfere with
- * other audio libraries.
- */
 - (void)stopAndDetachPlayerNode {
   if (self.playerNode) {
     _playbackGeneration.fetch_add(1);
@@ -65,6 +56,12 @@
   _scheduledBufferCount = 0;
 }
 
+/**
+ * Set up AVAudioEngine for output. When `enableVoiceProcessing` is YES the
+ * input node is also configured for hardware echo cancellation (Voice Agent /
+ * duplex). When NO (pure TTS playback), `inputNode` is deliberately left
+ * untouched so the microphone isn't requested.
+ */
 - (BOOL)setupAudioEngineWithSampleRate:(int)sampleRate
                               channels:(int)channels
                  enableVoiceProcessing:(BOOL)enableVoiceProcessing
@@ -115,10 +112,8 @@
 
   if (enableVoiceProcessing) {
 #if TARGET_IPHONE_SIMULATOR
-    // VPIO is not implemented on the simulator. Calling
-    // setVoiceProcessingEnabled:YES there raises an internal AVAEInternal
-    // exception about IsFormatSampleRateAndChannelCountValid because the
-    // simulator's input node cannot satisfy the VPIO format constraints.
+    // VPIO is not implemented on the simulator: setVoiceProcessingEnabled:YES
+    // raises an AVAEInternal IsFormatSampleRateAndChannelCountValid exception.
     // Skip VP entirely; AEC has to be tested on a physical device.
     DGLogWarn(@"[Deepgram] NOTE: Voice Processing I/O (Echo Cancellation) is "
               @"NOT supported on the iOS Simulator. Audio output may be picked "
@@ -128,12 +123,10 @@
     @try {
       AVAudioInputNode *inputNode = self.audioEngine.inputNode;
       AVAudioOutputNode *outputNode = self.audioEngine.outputNode;
-      // Apple's hardware AEC (VPIO Audio Unit) only engages when *both*
-      // input and output flow through a voice-processing-enabled audio
-      // unit. Enabling VP only on the input node is a no-op for capture
-      // unless rendering goes through the same unit, so we enable both.
-      // Skip nodes where VP is already engaged: re-asserting it tears down
-      // and rebuilds the VPIO unit, briefly dropping echo cancellation.
+      // Hardware AEC (VPIO) only engages when *both* input and output flow
+      // through a voice-processing-enabled unit, so enable both. Skip nodes
+      // where VP is already engaged: re-asserting it tears down and rebuilds
+      // the VPIO unit, briefly dropping echo cancellation.
       if (inputNode && !inputNode.isVoiceProcessingEnabled) {
         NSError *voiceProcessingError = nil;
         if (![inputNode setVoiceProcessingEnabled:YES
@@ -151,7 +144,7 @@
         }
       }
     } @catch (NSException *exception) {
-      // Continue - voice processing not critical for basic playback
+      // VP is not critical for basic playback — continue.
       DGLogWarn(@"[Deepgram] VP enable threw: %@", exception);
     }
 #endif
@@ -181,7 +174,6 @@
     return nil;
   }
 
-  // Calculate frame count (data length / bytes per frame)
   const AudioStreamBasicDescription *asbd =
       self.playbackFormat.streamDescription;
   int bytesPerFrame = asbd ? (int)asbd->mBytesPerFrame : 0;

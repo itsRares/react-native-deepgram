@@ -4,3 +4,4 @@ export * from './text-intelligence';
 export * from './management';
 export * from './text-to-speech';
 export * from './voice-agent';
+export * from './stats';

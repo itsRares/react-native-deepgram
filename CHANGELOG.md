@@ -5,6 +5,37 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] - 2026-07-08
+
+### Added
+
+- **Caption export helpers.** New `toSRT()` and `toWebVTT()` exports that
+  convert a Deepgram pre-recorded transcription response (word timings, or
+  utterances when `utterances=true`) into SubRip / WebVTT subtitle text.
+  Cue segmentation is tunable via `CaptionOptions` (`lineLength`, `lineCount`,
+  `speakerLabels` for diarized `Speaker N:` prefixes). Pure functions — no
+  network or native calls.
+- **Speaker-attributed transcripts.** New `toSpeakerSegments()` export that
+  folds a diarized (`diarize=true`) response into ordered
+  `SpeakerSegment { speaker, text, start, end, confidence }` chunks, merging
+  consecutive words from the same speaker. Returns `[]` for non-diarized
+  responses instead of throwing.
+- **Session telemetry.** `useDeepgramSpeechToText` and `useDeepgramVoiceAgent`
+  now expose a `getStats()` method returning a `SessionStats` snapshot
+  (`bytesSent`, `bytesReceived`, `framesDropped`, `reconnects`,
+  `connectedAtMs`, `firstResultMs`). An opt-in `trackStats` prop additionally
+  enables a reactive `stats` return value, throttled to at most one update per
+  second so it never floods renders.
+- **Voice Agent barge-in.** Opt-in `bargeIn` prop on `useDeepgramVoiceAgent`
+  flushes the native playback queue when the server reports
+  `UserStartedSpeaking` while agent audio is playing, so the agent audibly
+  stops when the user talks over it. Fires the new `onBargeIn` callback only
+  when a flush actually happened; never flushes while muted, and the streaming
+  player resumes seamlessly on the agent's next turn. Reliable barge-in
+  depends on hardware echo cancellation — test on a physical device.
+
+All additions are backwards compatible and opt-in; no breaking changes.
+
 ## [2.3.0] - 2026-07-06
 
 ### Added

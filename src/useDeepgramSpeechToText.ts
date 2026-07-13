@@ -8,9 +8,11 @@ import type {
   DeepgramPrerecordedOptions,
   DeepgramPrerecordedSource,
   DeepgramTranscriptEvent,
+  SessionStats,
   UseDeepgramSpeechToTextProps,
   UseDeepgramSpeechToTextReturn,
 } from './types';
+import { createEmptySessionStats } from './types/deepgram/stats';
 import { getBaseUrl, getBaseWss, getV2BaseWss } from './constants';
 import { buildParams, resolveAuthHeader, hasAuthConfigured } from './helpers';
 import { toDeepgramError } from './types';
@@ -19,6 +21,8 @@ const DEFAULT_SAMPLE_RATE = 16_000;
 const BASE_NATIVE_SAMPLE_RATE = 16_000;
 
 const KEEPALIVE_INTERVAL_MS = 5_000;
+
+const STATS_PUBLISH_INTERVAL_MS = 1_000;
 
 const DEFAULT_RECONNECT = {
   enabled: false,
@@ -85,6 +89,7 @@ export function useDeepgramSpeechToText({
   prerecorded = {},
   trackState = false,
   trackTranscript = false,
+  trackStats = false,
   metering = {},
   onAudioLevel = () => {},
   recordToFile = {},
@@ -126,6 +131,10 @@ export function useDeepgramSpeechToText({
   const downsampleFactorRef = useRef(1);
   const lastPartialTranscriptRef = useRef('');
   const lastFinalTranscriptRef = useRef('');
+
+  const statsRef = useRef<SessionStats>(createEmptySessionStats());
+  const statsDirtyRef = useRef(false);
+  const statsTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const onTranscriptRef = useRef(onTranscript);
   const onErrorRef = useRef(onError);
@@ -174,12 +183,34 @@ export function useDeepgramSpeechToText({
   const [internalRecordingUri, setInternalRecordingUri] = useState<
     string | undefined
   >(undefined);
+  const [internalStats, setInternalStats] = useState<SessionStats>(
+    createEmptySessionStats
+  );
 
   const endFiredRef = useRef(false);
 
-  // Keep the socket warm while no audio is flowing (user pause or a system
-  // interruption). Deepgram closes a live socket that receives neither audio
-  // nor a KeepAlive text frame for ~10 s (NET-0001).
+  const stopStatsPublisher = useCallback(() => {
+    if (statsTimerRef.current != null) {
+      clearInterval(statsTimerRef.current);
+      statsTimerRef.current = null;
+    }
+  }, []);
+
+  const startStatsPublisher = useCallback(() => {
+    if (statsTimerRef.current != null) {
+      return;
+    }
+    statsTimerRef.current = setInterval(() => {
+      if (!statsDirtyRef.current) {
+        return;
+      }
+      statsDirtyRef.current = false;
+      setInternalStats({ ...statsRef.current });
+    }, STATS_PUBLISH_INTERVAL_MS);
+  }, []);
+
+  // Deepgram closes a live socket that gets no audio and no KeepAlive frame
+  // for ~10 s (NET-0001); keep it warm while paused/interrupted.
   const startKeepAlive = useCallback(() => {
     if (keepAliveTimerRef.current != null) {
       return;
@@ -207,6 +238,7 @@ export function useDeepgramSpeechToText({
       clearInterval(keepAliveTimerRef.current);
       keepAliveTimerRef.current = null;
     }
+    stopStatsPublisher();
     if (reconnectTimerRef.current != null) {
       clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
@@ -263,7 +295,7 @@ export function useDeepgramSpeechToText({
       setInternalTranscript('');
       setInternalInterimTranscript('');
     }
-  }, [trackState, trackTranscript]);
+  }, [stopStatsPublisher, trackState, trackTranscript]);
 
   const fireEnd = useCallback(() => {
     if (endFiredRef.current) return;
@@ -280,6 +312,15 @@ export function useDeepgramSpeechToText({
       const normalized = transcript.trim();
       if (!normalized) {
         return;
+      }
+
+      if (
+        statsRef.current.firstResultMs == null &&
+        statsRef.current.connectedAtMs != null
+      ) {
+        statsRef.current.firstResultMs =
+          Date.now() - statsRef.current.connectedAtMs;
+        statsDirtyRef.current = true;
       }
 
       if (isFinal) {
@@ -331,6 +372,8 @@ export function useDeepgramSpeechToText({
         const attempt = reconnectAttemptRef.current;
         reconnectAttemptRef.current = attempt + 1;
         reconnectingRef.current = true;
+        statsRef.current.reconnects += 1;
+        statsDirtyRef.current = true;
 
         const backoff = Math.min(
           cfg.maxDelayMs,
@@ -389,8 +432,7 @@ export function useDeepgramSpeechToText({
 
     resolveAuthHeader()
       .then((authHeader) => {
-        // A newer connection attempt superseded this one while the auth token
-        // was resolving — abandon this stale socket setup.
+        // A newer connection attempt superseded this one; abandon it.
         if (generation !== wsGenerationRef.current) {
           return;
         }
@@ -411,6 +453,8 @@ export function useDeepgramSpeechToText({
           const wasReconnecting = reconnectingRef.current;
           reconnectingRef.current = false;
           reconnectAttemptRef.current = 0;
+          statsRef.current.connectedAtMs = Date.now();
+          statsDirtyRef.current = true;
           onStartRef.current();
           if (wasReconnecting) {
             onReconnectedRef.current();
@@ -422,56 +466,57 @@ export function useDeepgramSpeechToText({
 
         socket.onmessage = (ev: any) => {
           if (generation !== wsGenerationRef.current) return;
-          if (typeof ev.data === 'string') {
-            try {
-              const msg = JSON.parse(ev.data);
-              if (isV2) {
-                // Flux (v2) message envelope reference:
-                // https://developers.deepgram.com/reference/speech-to-text-api/listen-flux
-                // - "Connected"        — handshake ack (no transcript)
-                // - "TurnInfo"         — carries transcript + an `event` field
-                //   ("Update" | "StartOfTurn" | "EagerEndOfTurn"
-                //    | "TurnResumed" | "EndOfTurn")
-                // - "ConfigureSuccess" / "ConfigureFailure"
-                // - "Error"            — fatal stream error
-                if (msg.type === 'Error') {
-                  const description =
-                    msg.description || 'Deepgram stream error';
-                  const streamError = toDeepgramError(new Error(description));
-                  onErrorRef.current(streamError);
-                  // Fatal stream error: tear down without auto-reconnecting.
-                  userClosedRef.current = true;
-                  closeResources();
-                  if (trackState) {
-                    setInternalState({
-                      status: 'error',
-                      error: streamError,
-                    });
-                  }
-                  fireEnd();
-                  return;
+          if (typeof ev.data !== 'string') {
+            // Binary frame (not expected from the STT APIs) — count bytes only.
+            const size =
+              typeof ev?.data?.byteLength === 'number' ? ev.data.byteLength : 0;
+            if (size > 0) {
+              statsRef.current.bytesReceived += size;
+              statsDirtyRef.current = true;
+            }
+            return;
+          }
+          try {
+            const msg = JSON.parse(ev.data);
+            if (isV2) {
+              // Flux (v2) envelope:
+              // https://developers.deepgram.com/reference/speech-to-text-api/listen-flux
+              if (msg.type === 'Error') {
+                const description = msg.description || 'Deepgram stream error';
+                const streamError = toDeepgramError(new Error(description));
+                onErrorRef.current(streamError);
+                // Fatal stream error: tear down without auto-reconnecting.
+                userClosedRef.current = true;
+                closeResources();
+                if (trackState) {
+                  setInternalState({
+                    status: 'error',
+                    error: streamError,
+                  });
                 }
-
-                if (msg.type !== 'TurnInfo') {
-                  return;
-                }
-
-                const transcript = msg.transcript;
-                if (typeof transcript === 'string' && transcript.length > 0) {
-                  const isFinal = msg.event === 'EndOfTurn';
-                  emitTranscript(transcript, isFinal, msg);
-                }
+                fireEnd();
                 return;
               }
 
-              const transcript = msg.channel?.alternatives?.[0]?.transcript;
-              if (typeof transcript === 'string') {
-                const isFinal =
-                  msg.is_final === true || msg.speech_final === true;
-                emitTranscript(transcript, Boolean(isFinal), msg);
+              if (msg.type !== 'TurnInfo') {
+                return;
               }
-            } catch {}
-          }
+
+              const transcript = msg.transcript;
+              if (typeof transcript === 'string' && transcript.length > 0) {
+                const isFinal = msg.event === 'EndOfTurn';
+                emitTranscript(transcript, isFinal, msg);
+              }
+              return;
+            }
+
+            const transcript = msg.channel?.alternatives?.[0]?.transcript;
+            if (typeof transcript === 'string') {
+              const isFinal =
+                msg.is_final === true || msg.speech_final === true;
+              emitTranscript(transcript, Boolean(isFinal), msg);
+            }
+          } catch {}
         };
 
         socket.onerror = (err: any) => {
@@ -503,6 +548,12 @@ export function useDeepgramSpeechToText({
         userClosedRef.current = false;
         reconnectAttemptRef.current = 0;
         reconnectingRef.current = false;
+        statsRef.current = createEmptySessionStats();
+        statsDirtyRef.current = false;
+        if (trackStats) {
+          setInternalStats({ ...statsRef.current });
+          startStatsPublisher();
+        }
         if (trackState) {
           setInternalState({ status: 'loading', error: null });
           setInternalIsPaused(false);
@@ -566,10 +617,8 @@ export function useDeepgramSpeechToText({
           merged.keyterm ?? (usesKeyterm ? merged.keywords : undefined);
         const keywords = usesKeyterm ? undefined : merged.keywords;
 
-        // Per Deepgram API reference, Flux (v2) only accepts a small set of
-        // query parameters. Sending v1-only params can cause the server to
-        // reject the connection or be silently ignored. Build the query map
-        // separately for each API version.
+        // Flux (v2) accepts only a small set of query params; v1-only params
+        // can make the server reject the connection.
         const query: Record<
           string,
           | string
@@ -647,12 +696,9 @@ export function useDeepgramSpeechToText({
 
         connectSocket();
 
-        // System interruptions (phone call, Siri, focus loss) pause native
-        // capture, so no audio reaches Deepgram and the socket would be
-        // closed with NET-0001 after ~10 s. Bridge the gap with KeepAlive
-        // frames and hand the session back once the interruption ends; a
-        // permanent focus loss tears the session down natively, so end
-        // gracefully instead of surfacing a socket error.
+        // System interruptions pause native capture; bridge the NET-0001 ~10 s
+        // idle timeout with KeepAlive frames until the interruption ends. A
+        // permanent focus loss ('stopped') tears the session down natively.
         interruptionSub.current?.remove();
         interruptionSub.current = addInterruptionListener((e) => {
           onInterruptionRef.current?.(e);
@@ -661,8 +707,7 @@ export function useDeepgramSpeechToText({
               return;
             }
             interruptedRef.current = true;
-            // Flush buffered audio so trailing words come back as finals
-            // (mirrors pause(); Flux has no Finalize control message).
+            // Flush buffered audio into finals (Flux has no Finalize message).
             if (
               apiVersionRef.current !== 'v2' &&
               ws.current?.readyState === WebSocket.OPEN
@@ -690,6 +735,8 @@ export function useDeepgramSpeechToText({
 
         audioSub.current = getEmitter().addListener(AUDIO_EVENT, (ev: any) => {
           if (pausedRef.current) {
+            statsRef.current.framesDropped += 1;
+            statsDirtyRef.current = true;
             return;
           }
           if (typeof ev?.sampleRate === 'number' && ev.sampleRate > 0) {
@@ -704,7 +751,9 @@ export function useDeepgramSpeechToText({
 
           const factor = downsampleFactorRef.current;
           let chunk: ArrayBuffer | undefined;
+          let decodedBytes = 0;
           if (typeof ev?.b64 === 'string') {
+            decodedBytes = Math.floor((ev.b64.length * 3) / 4);
             const bytes = Uint8Array.from(atob(ev.b64), (c) => c.charCodeAt(0));
             let int16 = new Int16Array(bytes.buffer);
             int16 = downsampleInt16(int16, factor) as Int16Array<ArrayBuffer>;
@@ -713,6 +762,12 @@ export function useDeepgramSpeechToText({
 
           if (chunk && ws.current?.readyState === WebSocket.OPEN) {
             ws.current.send(chunk);
+            statsRef.current.bytesSent += decodedBytes;
+            statsDirtyRef.current = true;
+          } else if (chunk) {
+            // Socket not open (e.g. reconnect gap) — the frame is lost.
+            statsRef.current.framesDropped += 1;
+            statsDirtyRef.current = true;
           }
         });
 
@@ -747,9 +802,11 @@ export function useDeepgramSpeechToText({
       connectSocket,
       live,
       trackState,
+      trackStats,
       closeResources,
       fireEnd,
       startKeepAlive,
+      startStatsPublisher,
       stopKeepAlive,
       meteringEnabled,
       meteringIntervalMs,
@@ -781,9 +838,8 @@ export function useDeepgramSpeechToText({
 
     const socket = ws.current;
     if (socket && socket.readyState === WebSocket.OPEN) {
-      // Finalize flushes buffered audio so trailing words come back as a final
-      // result. Flux (v2) is turn-based and has no Finalize control message, so
-      // only send it on the v1 streaming API.
+      // Finalize flushes buffered audio into finals; Flux (v2) is turn-based
+      // and has no Finalize control message.
       if (apiVersionRef.current !== 'v2') {
         try {
           socket.send(JSON.stringify({ type: 'Finalize' }));
@@ -806,8 +862,7 @@ export function useDeepgramSpeechToText({
     }
     pausedRef.current = false;
 
-    // Keep the KeepAlive timer while a system interruption is still holding
-    // the mic — no frames will flow until it ends.
+    // A system interruption may still hold the mic; keep KeepAlive until it ends.
     if (!interruptedRef.current) {
       stopKeepAlive();
     }
@@ -816,6 +871,11 @@ export function useDeepgramSpeechToText({
       setInternalIsPaused(false);
     }
   }, [stopKeepAlive, trackState]);
+
+  const getStats = useCallback(
+    (): SessionStats => ({ ...statsRef.current }),
+    []
+  );
 
   const transcribeFile = useCallback(
     async (
@@ -985,6 +1045,7 @@ export function useDeepgramSpeechToText({
     transcribeFile,
     pause,
     resume,
+    getStats,
     ...(trackState
       ? {
           state: internalState,
@@ -1001,5 +1062,6 @@ export function useDeepgramSpeechToText({
           interimTranscript: internalInterimTranscript,
         }
       : {}),
+    ...(trackStats ? { stats: internalStats } : {}),
   };
 }

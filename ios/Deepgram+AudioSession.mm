@@ -30,9 +30,8 @@
   }
 
   if (success) {
-    // Owning the session again means any interruption is de facto over —
-    // clears a stale flag when the Ended notification was never delivered
-    // (Apple doesn't guarantee it for apps that were suspended).
+    // Session is ours again — clear a stale interruption flag (Apple doesn't
+    // guarantee an Ended notification for apps that were suspended).
     self.sessionInterrupted = NO;
   }
 
@@ -105,10 +104,8 @@
 }
 
 /**
- * Build the Bluetooth input option appropriate for the running OS.
- * iOS 17 deprecated `AllowBluetooth` (HFP route) in favor of
- * `AllowBluetoothHFP`. Prefer the new symbol when building against the iOS
- * 17+ SDK and fall back to the legacy spelling on older toolchains.
+ * Bluetooth HFP input option: iOS 17 renamed `AllowBluetooth` to
+ * `AllowBluetoothHFP`; fall back to the legacy symbol on older toolchains.
  */
 - (AVAudioSessionCategoryOptions)bluetoothHFPOption {
 #if defined(__IPHONE_17_0) && (__IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_17_0)
@@ -123,9 +120,8 @@
 }
 
 /**
- * Attempt to apply a single category/mode/options tuple and activate the
- * session. Returns YES on success. On failure, populates `outError` so the
- * caller can decide whether to try a more conservative configuration.
+ * Apply one category/mode/options tuple and activate the session. On failure
+ * populates `outError` so the caller can fall back to a simpler configuration.
  */
 - (BOOL)applyAudioSessionCategory:(AVAudioSessionCategory)category
                              mode:(NSString *)mode
@@ -165,31 +161,19 @@
 }
 
 /**
- * Configure audio session with mode appropriate to current usage.
+ * Configure the audio session, attempting configurations from most- to
+ * least-capable so audio still works instead of hard-failing.
  *
- * The configuration is attempted from most- to least-capable. If a richer
- * setup is rejected we automatically fall back to a simpler one so audio still
- * works instead of hard-failing.
+ * Ordering rules — violations fail setCategory with OSStatus -50, leaving the
+ * session half-configured and failing a later AudioQueueStart:
+ *   1. Never mix `DefaultToSpeaker` with `AllowBluetoothA2DP`/`AllowAirPlay`
+ *      in a recording configuration (A2DP/AirPlay are output-only; BT input
+ *      uses HFP).
+ *   2. Try `MixWithOthers` first (coexist with expo-av etc.), then degrade to
+ *      exclusive access — Mix can block input acquisition on some routes.
  *
- * Two subtle rules drive the ordering below; getting them wrong yields
- * OSStatus -50 (kAudioSession/paramErr) on `setCategory`, which then leaves the
- * session in a half-configured state and makes a later AudioQueueStart fail
- * with 'what' (kAudioSessionUnspecifiedError):
- *
- *   1. `DefaultToSpeaker` forces output to the built-in speaker, while
- *      `AllowBluetoothA2DP` / `AllowAirPlay` route output to external devices.
- *      Combining them is contradictory and is rejected with -50, so those
- *      output-routing options are NEVER mixed with a recording configuration.
- *      A2DP/AirPlay devices are output-only and can't supply a mic input
- *      anyway — Bluetooth input uses the HFP route instead.
- *   2. `MixWithOthers` lets us coexist with other audio packages (expo-av,
- *      etc.) but can prevent us from acquiring the input on some routes. We try
- *      it first to be a good citizen, then degrade to exclusive access so
- *      recording still starts reliably.
- *
- * VoiceChat mode (which engages Apple's hardware AEC / VPIO) is used only when
- * echo cancellation is required and only on a device — VPIO is unavailable on
- * the Simulator and requesting it there guarantees a -50.
+ * VoiceChat mode (hardware AEC / VPIO) only when echo cancellation is needed
+ * and only on a device — VPIO on the Simulator guarantees a -50.
  */
 - (BOOL)configureAudioSessionForRecording:(BOOL)needsMicrophone
                                     error:(NSError **)outError {
@@ -199,15 +183,11 @@
   const AVAudioSessionCategoryOptions mixOption =
       AVAudioSessionCategoryOptionMixWithOthers;
 
-  // The requested output route shapes the option set:
-  //   - `bluetooth` adds the HFP option to the AEC/VoiceChat attempts (a BT
-  //     headset is only usable while the mic is live via the HFP route; HFP +
-  //     VoiceChat is the standard VoIP configuration). It is *not* added by
-  //     default — with HFP allowed, iOS auto-routes onto a connected headset,
-  //     and VPIO's echo cancellation is tuned for the built-in speaker/mic.
-  //   - `speaker` / `earpiece` drop the HFP option so a connected headset is
-  //     fully disengaged, and `earpiece` (or `bluetooth`) also drops
-  //     DefaultToSpeaker — with that option set, the receiver is unreachable.
+  // Route shapes the option set: `bluetooth` adds HFP to the VoiceChat
+  // attempts (not added by default — HFP auto-routes onto a connected headset
+  // while VPIO's AEC is tuned for built-in hardware; echo guard).
+  // `speaker`/`earpiece` drop HFP; `earpiece`/`bluetooth` also drop
+  // DefaultToSpeaker (the receiver is unreachable with it set).
   NSString *route = self.requestedAudioRoute;
   BOOL routeWantsBluetooth = [route isEqualToString:@"bluetooth"];
   BOOL routeBlocksBluetooth =
@@ -231,11 +211,9 @@
     }
 
 #if !TARGET_OS_SIMULATOR
-    // Preferred: hardware AEC via VoiceChat (device only). VoiceChat mode
-    // manages the route itself, so DefaultToSpeaker must NOT be combined
-    // with it — doing so is rejected with -50 on some iOS versions. Only
-    // MixWithOthers (and, for an explicit Bluetooth request, HFP) is safe to
-    // layer on top; the bare attempts remain as -50 fallbacks.
+    // Preferred: hardware AEC via VoiceChat (device only). DefaultToSpeaker
+    // must NOT be combined with VoiceChat (-50 on some iOS versions); only
+    // MixWithOthers/HFP layer safely, with the bare attempts as -50 fallbacks.
     if (needsAEC) {
       if (routeWantsBluetooth) {
         [attempts addObject:@{
@@ -317,10 +295,9 @@
                    (unsigned long)attemptIndex, (unsigned long)attempts.count);
       }
       self.audioSessionConfigured = YES;
-      // Category (re)configuration resets any output override / preferred
-      // input, so the requested route is applied exactly once, here. Every
-      // sub-call is guarded to be a no-op when the session already matches,
-      // so this cannot trigger route-change feedback loops.
+      // Category (re)configuration resets overrides/preferred input — apply
+      // the requested route exactly once, here (sub-calls are no-op guarded,
+      // so this cannot trigger route-change feedback loops).
       [self applyRequestedRouteToSession];
       DGLogDebug(@"[Deepgram] configureAudioSession: success");
       return YES;
@@ -395,18 +372,15 @@
 }
 
 /**
- * Prefer a connected Bluetooth HFP input. Output follows the negotiated HFP
- * route, so selecting the BT input is what actually moves call audio onto the
- * headset. Returns YES when an HFP device is engaged (or already was).
+ * Prefer a connected Bluetooth HFP input; output follows the negotiated HFP
+ * route. Returns YES when an HFP device is engaged (or already was).
  */
 - (BOOL)preferBluetoothInputIfAvailable {
   AVAudioSession *session = [AVAudioSession sharedInstance];
   for (AVAudioSessionPortDescription *input in session.availableInputs) {
     if ([input.portType isEqualToString:AVAudioSessionPortBluetoothHFP]) {
-      // Idempotent: re-setting the input we're already pinned to still posts
-      // a route-change notification, and the route-change handler reconfigures
-      // the session — which would call back in here and spin into a feedback
-      // loop that stalls playback. Skip when already pinned.
+      // Skip when already pinned: a redundant setPreferredInput still posts a
+      // route change → reconfigure → feedback loop that stalls playback.
       if ([session.preferredInput.UID isEqualToString:input.UID]) {
         return YES;
       }
@@ -423,9 +397,8 @@
 }
 
 /**
- * Release a previously preferred input (e.g. a Bluetooth HFP device) so the
- * OS resolves the default route again. Idempotent: no-op when no preferred
- * input is set.
+ * Release a previously preferred input so the OS resolves the default route
+ * again. No-op when none is set.
  */
 - (void)clearPreferredInputIfSet {
   AVAudioSession *session = [AVAudioSession sharedInstance];
@@ -440,14 +413,11 @@
 }
 
 /**
- * Apply `requestedAudioRoute` to the *already configured* session. Called
+ * Apply `requestedAudioRoute` to the *already configured* session — called
  * exactly once after each successful category configuration (which resets any
- * override) and from `applyAudioRoute:` when no reconfiguration is needed.
- *
- * Every sub-call is guarded to be a no-op when the session already matches
- * the request, so this never generates redundant route-change notifications
- * (redundant `setPreferredInput` / override calls caused route-change storms
- * that stalled the playback engine in the previous implementation).
+ * override). Every sub-call is no-op guarded when the session already matches:
+ * redundant `setPreferredInput`/override calls caused route-change storms that
+ * stalled the playback engine in the previous implementation.
  */
 - (void)applyRequestedRouteToSession {
   NSString *route = self.requestedAudioRoute;
@@ -463,9 +433,8 @@
 
   if ([route isEqualToString:@"speaker"]) {
     [self clearPreferredInputIfSet];
-    // The override is what moves VoiceChat-mode output from the receiver to
-    // the loud speaker. Only meaningful for PlayAndRecord (Playback has no
-    // receiver — its default output already is the speaker).
+    // The override moves VoiceChat-mode output from receiver to speaker; only
+    // meaningful for PlayAndRecord (Playback already defaults to the speaker).
     if (playAndRecord &&
         ![currentOutput isEqualToString:AVAudioSessionPortBuiltInSpeaker]) {
       NSError *error = nil;
@@ -478,9 +447,8 @@
     }
   } else if ([route isEqualToString:@"earpiece"]) {
     [self clearPreferredInputIfSet];
-    // Clear any speaker override; without DefaultToSpeaker in the options
-    // (guaranteed by the ladder for this route) PlayAndRecord defaults to the
-    // receiver. Only needed when the output actually sits on the speaker.
+    // Clear any speaker override; without DefaultToSpeaker (guaranteed by the
+    // ladder for this route) PlayAndRecord defaults to the receiver.
     if (playAndRecord &&
         [currentOutput isEqualToString:AVAudioSessionPortBuiltInSpeaker]) {
       NSError *error = nil;
@@ -494,9 +462,8 @@
   } else if ([route isEqualToString:@"bluetooth"]) {
     if (playAndRecord) {
       // Engage the headset via its HFP input; output follows. Best-effort —
-      // when no headset is connected the request stays pending and HFP stays
-      // allowed in the category, so a headset that connects later is adopted
-      // by the OS automatically.
+      // with no headset connected the request stays pending (HFP stays allowed
+      // in the category, so a later-connecting headset is adopted by the OS).
       if (![self preferBluetoothInputIfAvailable]) {
         DGLogDebug(@"[Deepgram] applyRequestedRoute: no Bluetooth HFP input "
                    @"available (request stays pending)");
@@ -508,10 +475,8 @@
 
 /**
  * Adopt the *actual* current route as the stored request after an external
- * route change (user Control Center switch, headset unplug). Without this,
- * the next session reconfiguration would re-assert a stale request and revert
- * the user's choice — the "can't switch output while the agent is running"
- * bug class from the previous implementation.
+ * route change (Control Center switch, headset unplug) so the next
+ * reconfiguration preserves — rather than reverts — the user's pick.
  */
 - (void)adoptCurrentRouteAsRequest {
   NSString *actual = [self currentAudioRouteString];
@@ -535,12 +500,10 @@
 }
 
 /**
- * Store and apply a route request from JS. When nothing is active the request
- * is simply remembered (it shapes the next activation). When a session is
- * live, the category is re-set only if the route needs different category
- * options (Bluetooth HFP allowance / DefaultToSpeaker) — a plain speaker ↔
- * earpiece flip under VoiceChat is a pure output override and must not
- * disturb a running VPIO engine.
+ * Store and apply a route request from JS. Reconfigures the category only when
+ * the route needs different options (HFP allowance / DefaultToSpeaker) — a
+ * plain speaker ↔ earpiece flip is a pure output override and must not disturb
+ * a running VPIO engine.
  */
 - (BOOL)applyAudioRoute:(NSString *)route error:(NSError **)outError {
   NSString *normalized = [route isEqualToString:@"auto"] ? nil : route;
@@ -567,8 +530,7 @@
       // disengaged (the override alone would leave the BT mic as input).
       needsReset = hfpAllowed;
     }
-    // auto: keep the running configuration; the system default applies from
-    // the next reconfiguration onward.
+    // auto: keep the running configuration until the next reconfiguration.
   }
 
   if (needsReset) {
@@ -597,27 +559,19 @@
           ? (AVAudioSessionRouteChangeReason)reasonValue.unsignedIntegerValue
           : AVAudioSessionRouteChangeReasonUnknown;
 
-  // External route changes (a Control Center output switch, a device
-  // disappearing) become the new stored request so later reconfigurations
-  // preserve — rather than fight — the user's pick. Our own overrides also
-  // land here with reason Override, but by delivery time the route already
-  // *is* the requested one, so adoption converges to the same value.
-  // NewDeviceAvailable is excluded: merely connecting a headset must not
-  // convert the request to `bluetooth` (the duplex agent stays on the
-  // built-in hardware unless BT is explicitly chosen — echo guard).
+  // External route changes (CC switch, device removal) become the new stored
+  // request so later reconfigurations preserve the user's pick.
+  // NewDeviceAvailable is excluded: a merely-connected headset must not flip
+  // the request to `bluetooth` (echo guard).
   if (reason == AVAudioSessionRouteChangeReasonOverride ||
       reason == AVAudioSessionRouteChangeReasonOldDeviceUnavailable) {
     [self adoptCurrentRouteAsRequest];
   }
 
-  // Surface every route change to JS (headphone plug/unplug, BT
-  // connect/disconnect, speaker ↔ earpiece switches).
   [self emitRouteChange];
 
-  // Headphones / Bluetooth headset unplugged — pause playback so we don't
-  // surprise the user by suddenly blasting through the loud speaker.
-  // (System would route audio to the speaker automatically; that's the point
-  // of this notification.) Matches expo-audio behavior and Apple's guidance.
+  // Headset unplugged — pause playback so we don't suddenly blast through the
+  // loudspeaker (matches expo-audio behavior and Apple's guidance).
   if (reason == AVAudioSessionRouteChangeReasonOldDeviceUnavailable) {
     DGLogDebug(@"[Deepgram] handleAudioRouteChange: old device unavailable — "
                @"pausing playback");
@@ -630,19 +584,11 @@
       reason == AVAudioSessionRouteChangeReasonCategoryChange ||
       reason == AVAudioSessionRouteChangeReasonNoSuitableRouteForCategory;
   BOOL causedByOverride = reason == AVAudioSessionRouteChangeReasonOverride;
-  // Two more reasons that leave the configured session perfectly valid:
-  //   - NewDeviceAvailable: a device merely *appeared* (BT headset connected
-  //     nearby, headphones plugged in). The OS moves the route by itself when
-  //     the category options allow it, and a hardware-format change is covered
-  //     by the engine-configuration-change handler. Nothing about the
-  //     category/mode/options needs to change.
-  //   - RouteConfigurationChange: the same set of ports was reconfigured —
-  //     posted e.g. when the VPIO unit engages right after agent start.
-  // Clearing `audioSessionConfigured` for these forces the next activation to
-  // re-run the full setCategory ladder UNDERNEATH the live VPIO engine, which
-  // bounces the route and audibly breaks echo cancellation on the loudspeaker
-  // (the agent starts hearing itself) — same failure mechanism as the
-  // Override case below.
+  // NewDeviceAvailable and RouteConfigurationChange (posted e.g. when VPIO
+  // engages after agent start) also leave the configured session valid;
+  // hardware-format changes are covered by handleEngineConfigurationChange.
+  // Clearing `audioSessionConfigured` for them re-runs the setCategory ladder
+  // under the live VPIO engine and audibly breaks AEC (agent hears itself).
   BOOL sessionStillValid =
       causedByCategory || causedByOverride ||
       reason == AVAudioSessionRouteChangeReasonNewDeviceAvailable ||
@@ -663,9 +609,8 @@
   }
 
   if (self.sessionInterrupted) {
-    // A phone call / Siri / another session holds the audio hardware —
-    // `setActive:YES` is guaranteed to fail. The interruption-ended handler
-    // reactivates when the system gives the session back.
+    // Another session holds the audio hardware — `setActive:YES` is guaranteed
+    // to fail. The interruption-ended handler reactivates when it's returned.
     DGLogDebug(@"[Deepgram] handleAudioRouteChange: interrupted, deferring "
                @"reactivation");
     return;
@@ -678,22 +623,16 @@
   }
 
   if (causedByOverride) {
-    // The delivery of an `overrideOutputAudioPort:` call (our own speaker /
-    // earpiece flip, or a Control Center pick adopted above) on a session
-    // that is still valid. Reconfiguring here would re-set the category —
-    // which *clears* the just-applied override, re-applies it, and loops
-    // back through this handler — bouncing output speaker → receiver →
-    // speaker under the live VPIO unit and audibly breaking echo
-    // cancellation on the loudspeaker.
+    // Delivery of our own (or CC's) overrideOutputAudioPort on a still-valid
+    // session; reconfiguring would loop the override under the live VPIO unit
+    // and audibly break echo cancellation on the loudspeaker.
     DGLogDebug(@"[Deepgram] handleAudioRouteChange: output override applied, "
                @"keeping session");
     return;
   }
 
   if (sessionStillValid) {
-    // NewDeviceAvailable / RouteConfigurationChange — see above. The session
-    // (and any live VPIO engine) is untouched; a hardware format change is
-    // handled by handleEngineConfigurationChange.
+    // NewDeviceAvailable / RouteConfigurationChange — see above.
     DGLogDebug(@"[Deepgram] handleAudioRouteChange: session still valid "
                @"(reason %lu), keeping session",
                (unsigned long)reason);
@@ -701,24 +640,20 @@
   }
 
   DGLogDebug(@"[Deepgram] handleAudioRouteChange: reactivating session");
-  // Retrying resume rather than a one-shot activation: Siri (and other
-  // transient audio grabs) posts this route change while it still HOLDS the
-  // hardware — sometimes before, or entirely without, an interruption
-  // notification — so the first activation attempt routinely fails and must
-  // be retried once the interrupter lets go.
+  // Retry-based resume: Siri posts this route change while it still HOLDS the
+  // hardware (sometimes before, or entirely without, an interruption
+  // notification), so the first activation attempt routinely fails.
   dispatch_async(dispatch_get_main_queue(), ^{
     [self resumeAfterInterruption:0];
   });
 }
 
 /**
- * AVAudioEngine stops itself and posts this notification whenever the
- * underlying hardware I/O format changes — most notably when the route moves
- * between the built-in mic and a Bluetooth HFP headset (48 kHz → 16/24 kHz).
- * The mic tap and AVAudioConverter were built against the *old* hardware
- * format, so without a rebuild capture goes silent after switching to
- * AirPods. Rebuild the capture front-end against the new format and restart
- * the engine.
+ * AVAudioEngine stops itself and posts this when the hardware I/O format
+ * changes — notably when the route moves between the built-in mic and a BT
+ * HFP headset (48 kHz → 16/24 kHz). The mic tap and AVAudioConverter were
+ * built against the *old* format, so without a rebuild capture goes silent
+ * after switching to AirPods.
  */
 - (void)handleEngineConfigurationChange:(NSNotification *)note {
   if (note.object != self.audioEngine) {
@@ -777,28 +712,23 @@
   }
 }
 
-// AVAudioSession can post this when mediaserverd restarts (e.g. after a
-// rare system audio HAL hiccup). Once it fires, every AudioQueue /
-// AVAudioEngine instance becomes a zombie. Apple's documented fix is to throw
-// everything away and rebuild on demand. Match expo-audio's approach.
+// Posted when mediaserverd restarts: every AudioQueue / AVAudioEngine
+// instance becomes a zombie. Apple's documented fix is to discard everything
+// and rebuild on demand (matches expo-audio).
 - (void)handleMediaServicesReset:(NSNotification *)note {
   DGLogDebug(@"[Deepgram] handleMediaServicesReset: tearing down audio stack");
   self.audioSessionConfigured = NO;
 
-  // Recording queue must be torn down — it's a zombie after a media services
-  // reset.
   if (_recordState.isRunning || _recordState.queue) {
     [self cleanupRecordingQueue];
   }
 
-  // Engine-based capture path also dies with mediaserverd; force a full
-  // teardown so the next startRecording rebuilds VPIO from scratch.
+  // Engine-based capture dies with mediaserverd too; force a full teardown so
+  // the next startRecording rebuilds VPIO from scratch.
   self.engineCaptureActive = NO;
   self.captureConverter = nil;
   self.captureOutputFormat = nil;
 
-  // AVAudioEngine + player node are no longer valid. Stop and discard so the
-  // next setup call rebuilds from scratch.
   @try {
     if (self.playerNode) {
       [self.playerNode stop];
@@ -816,23 +746,13 @@
 }
 
 /**
- * Resume capture/playback after the audio hardware was taken away — called
- * when an interruption ends AND from `handleAudioRouteChange:` (Siri grabs
- * the hardware and posts a route change sometimes before, or without, an
- * interruption notification).
- *
- * Two quirks make this more involved than "setActive + play":
- *   - Session activation can fail for a beat while the interrupter (Siri
- *     especially) releases the audio hardware, so failed attempts are
- *     retried a few times before giving up.
- *   - AVAudioEngine stops itself during an interruption, so the engine paths
- *     (Voice Agent capture, streaming TTS playback) need the same full
- *     tap/converter rebuild as a configuration change — a bare
- *     `[playerNode play]` on a stopped engine is a silent no-op.
- *
- * Every step is idempotent (AudioQueueStart on a running queue is a no-op,
- * the engine restart is guarded by `isRunning`), so overlapping invocations
- * from the two callers are harmless.
+ * Resume capture/playback after the hardware was taken away — called when an
+ * interruption ends AND from `handleAudioRouteChange:` (Siri grabs the
+ * hardware and posts a route change sometimes before, or without, an
+ * interruption notification). Activation is retried while the interrupter
+ * releases the hardware; the engine paths need a full tap/converter rebuild
+ * (a bare `[playerNode play]` on a stopped engine is a silent no-op). Every
+ * step is idempotent, so overlapping invocations are harmless.
  */
 - (void)resumeAfterInterruption:(int)attempt {
   if (self.sessionInterrupted) {
@@ -848,9 +768,8 @@
 
   NSError *error = nil;
   if (![self activateAudioSession:&error]) {
-    // ~4s of retries: a Siri interaction holds the hardware for several
-    // seconds, and it doesn't always post interruption notifications that
-    // would otherwise re-trigger the resume.
+    // ~4s of retries: Siri holds the hardware for several seconds and doesn't
+    // always post interruption notifications to re-trigger the resume.
     if (attempt < 5) {
       DGLogDebug(@"[Deepgram] resumeAfterInterruption: activation not ready "
                  @"(attempt %d), retrying",
@@ -902,12 +821,10 @@
       (AVAudioSessionInterruptionType)typeValue.unsignedIntegerValue;
 
   if (type == AVAudioSessionInterruptionTypeBegan) {
-    // A "began" delivered because the app was suspended is stale history:
-    // the interruption already ran its course while the app was frozen and
-    // NO matching "ended" will ever arrive. Treating it as a live
-    // interruption would wedge `sessionInterrupted` and pause a session the
-    // system is actually handing back — resume instead. (Not posted on
-    // iOS 16+, which is why the app-active handler is the primary fallback.)
+    // A "began" posted because the app was suspended is stale history — no
+    // matching "ended" ever arrives; treating it as live would wedge
+    // `sessionInterrupted`. Resume instead. (Not posted on iOS 16+; the
+    // app-active handler is the primary fallback.)
     BOOL wasSuspended = NO;
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -955,11 +872,9 @@
         (AVAudioSessionInterruptionOptions)optionValue.unsignedIntegerValue;
     BOOL shouldResume =
         (options & AVAudioSessionInterruptionOptionShouldResume) != 0;
-    // Resume whenever a session is still live, not only on the ShouldResume
-    // hint — Siri regularly ends interruptions without it, and for a live
-    // mic/agent session "keep going" is always the right call. The hint is
-    // still surfaced to JS. Runs async on main: activation may need retries
-    // while the interrupter releases the hardware.
+    // Resume regardless of the ShouldResume hint — Siri regularly omits it,
+    // and for a live mic/agent session "keep going" is always right. Runs
+    // async on main since activation may need retries.
     dispatch_async(dispatch_get_main_queue(), ^{
       [self resumeAfterInterruption:0];
     });

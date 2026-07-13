@@ -10,7 +10,14 @@ import {
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
-import { DeepgramError, useDeepgramSpeechToText } from 'react-native-deepgram';
+import {
+  DeepgramError,
+  toSRT,
+  toSpeakerSegments,
+  toWebVTT,
+  useDeepgramSpeechToText,
+  type SpeakerSegment,
+} from 'react-native-deepgram';
 import Button from './components/Button';
 import Card from './components/Card';
 import Field from './components/Field';
@@ -18,12 +25,36 @@ import OptionSelect from './components/OptionSelect';
 import StatusBadge from './components/StatusBadge';
 import { colors, radius, spacing, type } from './theme';
 
+const formatBytes = (n: number) =>
+  n < 1024
+    ? `${n} B`
+    : n < 1024 * 1024
+      ? `${(n / 1024).toFixed(1)} KB`
+      : `${(n / (1024 * 1024)).toFixed(1)} MB`;
+
+const formatClock = (seconds: number) => {
+  const m = Math.floor(seconds / 60);
+  const s = seconds - m * 60;
+  return `${m}:${s.toFixed(1).padStart(4, '0')}`;
+};
+
 export default function SpeechToText() {
   const [liveTranscript, setLiveTranscript] = useState('');
   const [liveInterimTranscript, setLiveInterimTranscript] = useState('');
   const [fileTranscript, setFileTranscript] = useState('');
   const [pickedFileName, setPickedFileName] = useState<string | null>(null);
   const [reconnectAttempt, setReconnectAttempt] = useState<number | null>(null);
+
+  // Captions & speaker segments (2.4.0)
+  const [captionsLoading, setCaptionsLoading] = useState(false);
+  const [captionsError, setCaptionsError] = useState<string | null>(null);
+  const [captionsFileName, setCaptionsFileName] = useState<string | null>(null);
+  const [captionView, setCaptionView] = useState<'srt' | 'vtt' | 'speakers'>(
+    'srt'
+  );
+  const [captionSrt, setCaptionSrt] = useState('');
+  const [captionVtt, setCaptionVtt] = useState('');
+  const [speakerSegments, setSpeakerSegments] = useState<SpeakerSegment[]>([]);
 
   // Record-to-file is opt-in: the user chooses whether to save and where.
   const [recordEnabled, setRecordEnabled] = useState(false);
@@ -51,8 +82,10 @@ export default function SpeechToText() {
     isPaused,
     audioLevel,
     recordingUri,
+    stats,
   } = useDeepgramSpeechToText({
     trackState: true,
+    trackStats: true,
     reconnect: { enabled: true },
     metering: { enabled: true },
     recordToFile: { enabled: recordEnabled, path: recordPath },
@@ -177,6 +210,60 @@ export default function SpeechToText() {
   const stopLive = () => {
     setReconnectAttempt(null);
     stopListening();
+  };
+
+  // Caption helpers need the raw prerecorded response (word timings,
+  // utterances, speakers), so hit /v1/listen directly — same request the
+  // hook makes, but with utterances + diarize enabled.
+  const pickForCaptions = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: 'audio/*',
+        copyToCacheDirectory: true,
+      });
+      if (!result.assets || result.assets.length === 0) return;
+      const asset = result.assets[0]!;
+      setCaptionsFileName(asset.name ?? 'audio file');
+      setCaptionsLoading(true);
+      setCaptionsError(null);
+      setCaptionSrt('');
+      setCaptionVtt('');
+      setSpeakerSegments([]);
+
+      const base =
+        process.env.EXPO_PUBLIC_DEEPGRAM_BASE_URL ||
+        'https://api.deepgram.com/v1';
+      const formData = new FormData();
+      formData.append('audio', {
+        uri: asset.uri,
+        name: asset.name || 'audio-file',
+        type: asset.mimeType || 'audio/mpeg',
+      } as any);
+
+      const res = await fetch(
+        `${base}/listen?model=nova-3&smart_format=true&utterances=true&diarize=true`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Token ${process.env.EXPO_PUBLIC_DEEPGRAM_API_KEY}`,
+          },
+          body: formData,
+        }
+      );
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      }
+      const json = await res.json();
+
+      setCaptionSrt(toSRT(json, { speakerLabels: true }));
+      setCaptionVtt(toWebVTT(json, { speakerLabels: true }));
+      setSpeakerSegments(toSpeakerSegments(json));
+      setCaptionView('srt');
+    } catch (err) {
+      setCaptionsError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCaptionsLoading(false);
+    }
   };
 
   const tone = liveState?.error
@@ -450,6 +537,55 @@ export default function SpeechToText() {
           )}
         </Card>
 
+        {/* Session stats (2.4.0) */}
+        <Card
+          title="Session stats"
+          subtitle="Live telemetry — updates at most once per second"
+        >
+          <View style={styles.statsGrid}>
+            <View style={styles.statCell}>
+              <Text style={styles.statValue}>
+                {formatBytes(stats?.bytesSent ?? 0)}
+              </Text>
+              <Text style={styles.statLabel}>Audio sent</Text>
+            </View>
+            <View style={styles.statCell}>
+              <Text style={styles.statValue}>
+                {formatBytes(stats?.bytesReceived ?? 0)}
+              </Text>
+              <Text style={styles.statLabel}>Received</Text>
+            </View>
+            <View style={styles.statCell}>
+              <Text style={styles.statValue}>{stats?.framesDropped ?? 0}</Text>
+              <Text style={styles.statLabel}>Frames dropped</Text>
+            </View>
+            <View style={styles.statCell}>
+              <Text style={styles.statValue}>{stats?.reconnects ?? 0}</Text>
+              <Text style={styles.statLabel}>Reconnects</Text>
+            </View>
+            <View style={styles.statCell}>
+              <Text style={styles.statValue}>
+                {stats?.firstResultMs != null
+                  ? `${stats.firstResultMs} ms`
+                  : '—'}
+              </Text>
+              <Text style={styles.statLabel}>First result</Text>
+            </View>
+            <View style={styles.statCell}>
+              <Text style={styles.statValue}>
+                {stats?.connectedAtMs != null
+                  ? new Date(stats.connectedAtMs).toLocaleTimeString()
+                  : '—'}
+              </Text>
+              <Text style={styles.statLabel}>Connected at</Text>
+            </View>
+          </View>
+          <Text style={styles.recordHint}>
+            Counters reset on every start. Pause the mic to watch “frames
+            dropped” climb.
+          </Text>
+        </Card>
+
         {/* File transcription */}
         <Card
           title="File transcription"
@@ -491,6 +627,105 @@ export default function SpeechToText() {
               </View>
             )}
           </View>
+        </Card>
+
+        {/* Captions & speaker segments (2.4.0) */}
+        <Card
+          title="Captions & speakers"
+          subtitle="Export SRT / WebVTT subtitles and split by speaker"
+        >
+          <Button
+            title={
+              captionsLoading
+                ? 'Transcribing…'
+                : captionsFileName
+                  ? 'Pick another file'
+                  : 'Pick audio for captions'
+            }
+            variant="secondary"
+            onPress={pickForCaptions}
+            loading={captionsLoading}
+            disabled={captionsLoading}
+            iconLeft="🎬"
+          />
+          {captionsFileName ? (
+            <Text style={styles.fileName}>{captionsFileName}</Text>
+          ) : null}
+
+          {captionsError ? (
+            <View style={[styles.errorBanner, { marginTop: spacing.md }]}>
+              <Text style={styles.errorText}>⚠ {captionsError}</Text>
+            </View>
+          ) : null}
+
+          {captionSrt ? (
+            <>
+              <View style={styles.captionTabs}>
+                {(
+                  [
+                    { key: 'srt', label: 'SRT' },
+                    { key: 'vtt', label: 'WebVTT' },
+                    { key: 'speakers', label: 'Speakers' },
+                  ] as const
+                ).map(({ key, label }) => (
+                  <Button
+                    key={key}
+                    title={label}
+                    size="sm"
+                    variant={captionView === key ? 'primary' : 'secondary'}
+                    onPress={() => setCaptionView(key)}
+                  />
+                ))}
+              </View>
+
+              {captionView === 'speakers' ? (
+                speakerSegments.length > 0 ? (
+                  speakerSegments.map((segment, index) => (
+                    <View
+                      key={`${segment.speaker}-${index}`}
+                      style={styles.speakerRow}
+                    >
+                      <View style={styles.speakerBadge}>
+                        <Text style={styles.speakerBadgeText}>
+                          S{segment.speaker}
+                        </Text>
+                      </View>
+                      <View style={styles.speakerBody}>
+                        <Text style={styles.speakerMeta}>
+                          {formatClock(segment.start)} –{' '}
+                          {formatClock(segment.end)} · conf{' '}
+                          {(segment.confidence * 100).toFixed(0)}%
+                        </Text>
+                        <Text style={styles.transcript}>{segment.text}</Text>
+                      </View>
+                    </View>
+                  ))
+                ) : (
+                  <Text style={styles.recordHint}>
+                    No speaker data in this response.
+                  </Text>
+                )
+              ) : (
+                <ScrollView
+                  style={styles.captionScroll}
+                  nestedScrollEnabled
+                  horizontal={false}
+                >
+                  <Text style={styles.captionMono}>
+                    {captionView === 'srt' ? captionSrt : captionVtt}
+                  </Text>
+                </ScrollView>
+              )}
+            </>
+          ) : !captionsLoading && !captionsError ? (
+            <View style={styles.empty}>
+              <Text style={styles.emptyIcon}>🎬</Text>
+              <Text style={styles.emptyText}>
+                Pick an audio file to generate subtitles (SRT / WebVTT) and a
+                speaker-attributed transcript.
+              </Text>
+            </View>
+          ) : null}
         </Card>
       </ScrollView>
     </View>
@@ -694,5 +929,75 @@ const styles = StyleSheet.create({
     ...type.small,
     color: colors.textMuted,
     textAlign: 'center',
+  },
+  statsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  statCell: {
+    flexBasis: '30%',
+    flexGrow: 1,
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+    alignItems: 'center',
+  },
+  statValue: {
+    ...type.smallMedium,
+    color: colors.text,
+  },
+  statLabel: {
+    ...type.small,
+    color: colors.textMuted,
+    fontSize: 11,
+    marginTop: 2,
+  },
+  captionTabs: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    marginBottom: spacing.md,
+  },
+  captionScroll: {
+    maxHeight: 240,
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+  },
+  captionMono: {
+    ...type.mono,
+    color: colors.text,
+    lineHeight: 18,
+  },
+  speakerRow: {
+    flexDirection: 'row',
+    gap: spacing.md,
+    marginBottom: spacing.md,
+  },
+  speakerBadge: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.accentMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  speakerBadgeText: {
+    ...type.smallMedium,
+    color: colors.accent,
+    fontSize: 12,
+  },
+  speakerBody: { flex: 1 },
+  speakerMeta: {
+    ...type.small,
+    color: colors.textMuted,
+    fontSize: 11,
+    marginBottom: 2,
   },
 });

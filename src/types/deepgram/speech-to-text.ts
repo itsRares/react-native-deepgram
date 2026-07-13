@@ -445,6 +445,25 @@ export type DeepgramTranscriptEvent = {
 };
 
 /**
+ * Client-side microphone silence handling shared by the live STT and Voice
+ * Agent hooks. Nothing is enabled unless `gate` or `autoStopMs` is set.
+ */
+export type DeepgramSilenceOptions = {
+  /**
+   * Stop forwarding microphone frames while silent. The socket remains open
+   * with periodic KeepAlive messages and forwarding resumes on speech.
+   * @default false
+   */
+  gate?: boolean;
+  /** Normalized RMS level (0..1) at or below which audio counts as silence. @default 0.02 */
+  threshold?: number;
+  /** How long input must remain below `threshold` before it is silent, in ms. @default 800 */
+  hangoverMs?: number;
+  /** End the active hook session after this much continuous silence, in ms. */
+  autoStopMs?: number;
+};
+
+/**
  * Props for the `useDeepgramSpeechToText` hook.
  */
 export type UseDeepgramSpeechToTextProps = {
@@ -509,6 +528,25 @@ export type UseDeepgramSpeechToTextProps = {
   onAudioLevel?: (level: number) => void;
 
   /**
+   * Client-side silence handling, driven by the native metering events. When
+   * `gate` or `autoStopMs` is set the hook enables metering internally for the
+   * session (restored on stop) and tracks silence: the input is considered
+   * silent once the audio level stays below `threshold` for longer than
+   * `hangoverMs`.
+   *
+   * Designed for long-idle UIs (kiosks, dictation apps left open) — the
+   * defaults are deliberately conservative so mid-utterance pauses are not
+   * affected. Nothing is enabled by default; a user-initiated `pause()` always
+   * wins over gating (gating never resumes a paused session).
+   */
+  silence?: DeepgramSilenceOptions;
+  /**
+   * Called when the silence state changes (fires only on transitions).
+   * Requires `silence.gate` or `silence.autoStopMs` to be set.
+   */
+  onSilenceChange?: (silent: boolean) => void;
+
+  /**
    * Persist the captured microphone audio to a file while it is simultaneously
    * streamed to Deepgram. The resulting `file://` URI is delivered via
    * {@link onRecordingComplete} and
@@ -525,8 +563,8 @@ export type UseDeepgramSpeechToTextProps = {
      */
     path?: string;
     /**
-     * Container format. Only uncompressed `wav` (16 kHz PCM16 mono, mirroring
-     * the streamed audio) is currently supported.
+     * Container format. Only uncompressed `wav` (PCM16 mono at the active
+     * capture rate, mirroring the streamed audio) is currently supported.
      */
     format?: 'wav';
   };

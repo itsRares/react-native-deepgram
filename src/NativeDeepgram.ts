@@ -14,9 +14,9 @@ export interface RecordToFileOptions {
    */
   path?: string;
   /**
-   * Container format for the recording. Only uncompressed `wav` (16 kHz PCM16
-   * mono) is currently supported; this mirrors the audio that is streamed to
-   * Deepgram.
+   * Container format for the recording. Only uncompressed `wav` (PCM16 mono
+   * at the active capture rate) is currently supported; this mirrors the
+   * audio that is streamed to Deepgram.
    */
   format?: 'wav';
 }
@@ -41,6 +41,23 @@ export interface StartRecordingOptions {
    * {@link DeepgramNative.stopRecording}.
    */
   recordToFile?: RecordToFileOptions;
+  /**
+   * Capture sample rate in Hz. Supported values: `16000` (default), `24000`
+   * and `48000`. Other values are rejected with the `invalid_data` code. If
+   * the device cannot capture at the requested rate the native module falls
+   * back to 16 kHz rather than failing the session — the rate actually in
+   * effect is reported via {@link DeepgramStartRecordingResult.sampleRate}
+   * and tagged on every emitted audio chunk event.
+   */
+  sampleRate?: 16000 | 24000 | 48000;
+}
+
+/**
+ * Resolved value of {@link DeepgramNative.startRecording}.
+ */
+export interface DeepgramStartRecordingResult {
+  /** The capture sample rate (Hz) actually in effect for the session. */
+  sampleRate?: number;
 }
 
 /**
@@ -71,7 +88,9 @@ export type DeepgramActiveAudioRoute =
   | 'wired';
 
 interface DeepgramNative {
-  startRecording(options?: StartRecordingOptions): Promise<void>;
+  startRecording(
+    options?: StartRecordingOptions
+  ): Promise<DeepgramStartRecordingResult | null | void>;
   stopRecording(): Promise<DeepgramRecordingResult | null>;
   startAudio(): Promise<void>;
   stopAudio(): Promise<void>;

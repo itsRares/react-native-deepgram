@@ -44,6 +44,8 @@ const THINK_MODEL_OPTIONS = [
 
 const SAMPLE_RATE_OPTIONS = [
   { label: '16 kHz (recommended)', value: '16000' },
+  { label: '24 kHz (native capture)', value: '24000' },
+  { label: '48 kHz (native capture)', value: '48000' },
   { label: '8 kHz (lower quality)', value: '8000' },
 ];
 
@@ -66,6 +68,8 @@ export default function VoiceAgent() {
   const [autoStartMic, setAutoStartMic] = useState(true);
   const [bargeInEnabled, setBargeInEnabled] = useState(true);
   const [bargeInCount, setBargeInCount] = useState(0);
+  const [silenceGateEnabled, setSilenceGateEnabled] = useState(false);
+  const [isSilent, setIsSilent] = useState(false);
   const [inputSampleRate, setInputSampleRate] = useState('16000');
   const [temperature, setTemperature] = useState('0.7');
   const [customMessage, setCustomMessage] = useState('');
@@ -151,6 +155,8 @@ export default function VoiceAgent() {
     trackAgentStatus: true,
     trackStats: true,
     bargeIn: bargeInEnabled,
+    silence: { gate: silenceGateEnabled },
+    onSilenceChange: setIsSilent,
     onBargeIn: () => {
       setBargeInCount((count) => count + 1);
     },
@@ -210,6 +216,7 @@ export default function VoiceAgent() {
       setReconnectAttempt(null);
       setErrorCode(null);
       setBargeInCount(0);
+      setIsSilent(false);
       await connect();
     } catch (err) {
       console.error('Start agent failed', err);
@@ -218,6 +225,7 @@ export default function VoiceAgent() {
 
   const stopAgent = () => {
     setReconnectAttempt(null);
+    setIsSilent(false);
     disconnect();
   };
 
@@ -259,9 +267,11 @@ export default function VoiceAgent() {
         ? 'connecting'
         : isMuted
           ? 'warning'
-          : connected
-            ? 'live'
-            : 'idle';
+          : isSilent
+            ? 'warning'
+            : connected
+              ? 'live'
+              : 'idle';
   const toneLabel = state?.error
     ? 'Error'
     : isReconnecting
@@ -270,9 +280,11 @@ export default function VoiceAgent() {
         ? 'Connecting'
         : isMuted
           ? 'Muted'
-          : connected
-            ? 'Live'
-            : 'Disconnected';
+          : isSilent
+            ? 'Silent'
+            : connected
+              ? 'Live'
+              : 'Disconnected';
 
   const pulseScale = pulse.interpolate({
     inputRange: [0, 1],
@@ -327,7 +339,9 @@ export default function VoiceAgent() {
             {connected
               ? isMuted
                 ? 'Muted'
-                : 'Listening — talk to the agent'
+                : isSilent
+                  ? 'Silent — saving mic data'
+                  : 'Listening — talk to the agent'
               : isReconnecting
                 ? 'Reconnecting…'
                 : connecting
@@ -388,6 +402,23 @@ export default function VoiceAgent() {
                 ✂️ Barge-in
               </Text>
             </View>
+            {silenceGateEnabled ? (
+              <View
+                style={[
+                  styles.capabilityChip,
+                  isSilent && styles.capabilityChipActive,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.capabilityChipText,
+                    isSilent && styles.capabilityChipTextActive,
+                  ]}
+                >
+                  🤫 {isSilent ? 'Mic gated' : 'Silence gate'}
+                </Text>
+              </View>
+            ) : null}
             <View style={styles.capabilityChip}>
               <Text style={styles.capabilityChipText}>✎ Live updates</Text>
             </View>
@@ -487,10 +518,10 @@ export default function VoiceAgent() {
           </Text>
         </Card>
 
-        {/* Barge-in & session stats (2.4.0) */}
+        {/* Barge-in, silence gating & session stats */}
         <Card
-          title="Barge-in & session stats"
-          subtitle="Interrupt the agent by talking over it · live telemetry"
+          title="Mic behavior & session stats"
+          subtitle="Interrupt playback, gate quiet mic frames · live telemetry"
         >
           <View style={styles.switchRow}>
             <Text style={styles.switchLabel}>
@@ -506,11 +537,29 @@ export default function VoiceAgent() {
               }}
             />
           </View>
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>
+              Gate silent mic frames (saves bandwidth)
+            </Text>
+            <Switch
+              value={silenceGateEnabled}
+              onValueChange={setSilenceGateEnabled}
+              disabled={connected || connecting || isReconnecting}
+              thumbColor={silenceGateEnabled ? colors.success : '#888'}
+              trackColor={{
+                false: colors.surfaceMuted,
+                true: colors.accentMuted,
+              }}
+            />
+          </View>
           <Text style={styles.routeHint}>
             While the agent is speaking, start talking — its audio stops
             immediately instead of finishing the sentence. Barge-ins so far:{' '}
-            {bargeInCount}. Needs hardware echo cancellation, so test on a
-            physical device (simulators have no VPIO).
+            {bargeInCount}. Silence gating waits for the current user turn to
+            reach the agent before it stops quiet frames, then keeps the socket
+            warm with KeepAlives. “Mic sent” stops increasing while idle. Needs
+            hardware echo cancellation, so test barge-in on a physical device
+            (simulators have no VPIO).
           </Text>
 
           <View style={styles.statsGrid}>

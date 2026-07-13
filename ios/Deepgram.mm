@@ -189,6 +189,28 @@ RCT_EXPORT_METHOD(startRecording : (NSDictionary *)options resolver : (
         enableVoiceProcessing = [(NSNumber *)raw boolValue];
       }
     }
+
+    int requestedSampleRate = 16000;
+    if ([options isKindOfClass:[NSDictionary class]]) {
+      id rawRate = options[@"sampleRate"];
+      if ([rawRate isKindOfClass:[NSNumber class]]) {
+        int candidate = [(NSNumber *)rawRate intValue];
+        if (candidate != 16000 && candidate != 24000 && candidate != 48000) {
+          DGLogError(@"[Deepgram] startRecording: unsupported sampleRate %d",
+                     candidate);
+          DGRejectPromise(
+              reject, @"invalid_data",
+              [NSString stringWithFormat:
+                            @"Unsupported sampleRate %d. Supported capture "
+                            @"rates: 16000, 24000, 48000.",
+                            candidate],
+              nil);
+          return;
+        }
+        requestedSampleRate = candidate;
+      }
+    }
+
     self.voiceProcessingRequested = enableVoiceProcessing;
     self.audioQueueCaptureRequested = !enableVoiceProcessing;
 
@@ -202,9 +224,9 @@ RCT_EXPORT_METHOD(startRecording : (NSDictionary *)options resolver : (
     // Drop any file left open by a previous, incompletely stopped session.
     [self discardRecordingFile];
 
-    self.currentSampleRate = 16000;
+    self.captureSampleRate = requestedSampleRate;
     DGLogDebug(@"[Deepgram] startRecording: targetSampleRate=%d vp=%@",
-               self.currentSampleRate, enableVoiceProcessing ? @"YES" : @"NO");
+               self.captureSampleRate, enableVoiceProcessing ? @"YES" : @"NO");
     NSError *sessionError = nil;
     if (![self activateAudioSession:&sessionError]) {
       NSString *message = sessionError.localizedDescription
@@ -250,7 +272,7 @@ RCT_EXPORT_METHOD(startRecording : (NSDictionary *)options resolver : (
       }
       DGLogDebug(@"[Deepgram] startRecording: engine capture started");
       if (resolve)
-        resolve(nil);
+        resolve(@{@"sampleRate" : @(self.captureSampleRate)});
       return;
     }
 
@@ -266,7 +288,7 @@ RCT_EXPORT_METHOD(startRecording : (NSDictionary *)options resolver : (
     memset(&_recordState, 0, sizeof(DGRecordState));
     _recordState.mSelf = self;
 
-    _recordState.dataFormat.mSampleRate = self.currentSampleRate;
+    _recordState.dataFormat.mSampleRate = self.captureSampleRate;
     _recordState.dataFormat.mChannelsPerFrame = 1;
     _recordState.dataFormat.mBitsPerChannel = 16;
     _recordState.dataFormat.mBytesPerPacket =
@@ -316,7 +338,7 @@ RCT_EXPORT_METHOD(startRecording : (NSDictionary *)options resolver : (
       DGLogDebug(@"[Deepgram] startRecording: actual sampleRate=%f (%d)",
                  actualFormat.mSampleRate, resolvedSampleRate);
       if (resolvedSampleRate > 0) {
-        self.currentSampleRate = resolvedSampleRate;
+        self.captureSampleRate = resolvedSampleRate;
       }
 
       UInt32 bytesPerFrame = actualFormat.mBytesPerFrame
@@ -389,7 +411,7 @@ RCT_EXPORT_METHOD(startRecording : (NSDictionary *)options resolver : (
     DGLogDebug(@"[Deepgram] startRecording: success");
     self.audioQueueCaptureRequested = NO;
     if (resolve)
-      resolve(nil);
+      resolve(@{@"sampleRate" : @(self.captureSampleRate)});
   } @catch (NSException *e) {
     DGLogError(@"[Deepgram] startRecording: exception %@", e);
     [self cleanupRecordingQueue];

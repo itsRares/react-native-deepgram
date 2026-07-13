@@ -40,6 +40,7 @@ import type {
   DeepgramVoiceAgentSpeakConfig,
   DeepgramVoiceAgentAgentConfig,
   DeepgramReconnectOptions,
+  DeepgramSilenceOptions,
   SessionStats,
 } from './types';
 import { createEmptySessionStats } from './types/deepgram/stats';
@@ -47,9 +48,19 @@ import { createEmptySessionStats } from './types/deepgram/stats';
 const DEFAULT_INPUT_SAMPLE_RATE = 16_000;
 const BASE_NATIVE_SAMPLE_RATE = 16_000;
 
-const AGENT_KEEPALIVE_INTERVAL_MS = 5_000;
+/** Capture rates the native recorders accept. */
+const SUPPORTED_CAPTURE_SAMPLE_RATES = [16_000, 24_000, 48_000] as const;
+
+// Voice Agent documents an 8-second idle KeepAlive cadence. Audio remains
+// continuous during an active user turn so server-side VAD can finish it.
+const AGENT_KEEPALIVE_INTERVAL_MS = 8_000;
+const USER_TURN_GUARD_MS = 6_000;
 
 const STATS_PUBLISH_INTERVAL_MS = 1_000;
+
+const DEFAULT_SILENCE_THRESHOLD = 0.02;
+const DEFAULT_SILENCE_HANGOVER_MS = 800;
+const DEFAULT_METERING_INTERVAL_MS = 100;
 
 const DEFAULT_AGENT_RECONNECT = {
   enabled: false,
@@ -62,6 +73,11 @@ const eventName = Platform.select({
   ios: 'DeepgramAudioPCM',
   android: 'AudioChunk',
   default: 'DeepgramAudioPCM',
+});
+const levelEventName = Platform.select({
+  ios: 'DeepgramAudioLevel',
+  android: 'AudioLevel',
+  default: 'DeepgramAudioLevel',
 });
 
 let cachedEmitter: NativeEventEmitter | null = null;
@@ -192,6 +208,38 @@ const resolveDownsampleFactor = (
   return normalized;
 };
 
+const normalizeInputSampleRate = (value: unknown) =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : DEFAULT_INPUT_SAMPLE_RATE;
+
+/** Calculate RMS from an emitted base64 PCM16 frame without sending it. */
+const getPcm16Rms = (base64: unknown): number | null => {
+  if (typeof base64 !== 'string') {
+    return null;
+  }
+
+  try {
+    const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+    const sampleCount = Math.floor(
+      bytes.byteLength / Int16Array.BYTES_PER_ELEMENT
+    );
+    if (sampleCount === 0) {
+      return null;
+    }
+
+    const samples = new Int16Array(bytes.buffer, bytes.byteOffset, sampleCount);
+    let sumSquares = 0;
+    for (const sample of samples) {
+      const normalized = sample / 32768;
+      sumSquares += normalized * normalized;
+    }
+    return Math.sqrt(sumSquares / sampleCount);
+  } catch {
+    return null;
+  }
+};
+
 type WebSocketLike = Pick<
   WebSocket,
   | 'readyState'
@@ -207,6 +255,14 @@ export interface UseDeepgramVoiceAgentProps {
   endpoint?: string;
   defaultSettings?: DeepgramVoiceAgentSettings;
   autoStartMicrophone?: boolean;
+  /**
+   * Client-side microphone silence handling. When `gate` is enabled, silent
+   * native mic frames are not sent to the agent and KeepAlive keeps the
+   * socket open. `autoStopMs` disconnects after continuous silence.
+   */
+  silence?: DeepgramSilenceOptions;
+  /** Fires only when the microphone silence state changes. */
+  onSilenceChange?: (silent: boolean) => void;
   downsampleFactor?: number;
   autoPlayAudio?: boolean;
   trackState?: boolean;
@@ -286,6 +342,12 @@ export interface UseDeepgramVoiceAgentReturn {
   connect: (settings?: DeepgramVoiceAgentSettings) => Promise<void>;
   disconnect: () => void;
   sendMessage: (message: DeepgramVoiceAgentClientMessage) => boolean;
+  /**
+   * Send a `Settings` envelope. Deepgram uses Settings to initialize a
+   * connection; prefer the `update*` methods for supported mid-session
+   * changes. While native microphone capture is active, its PCM16 encoding
+   * and effective sample rate are preserved.
+   */
   sendSettings: (settings: DeepgramVoiceAgentSettings) => boolean;
   injectUserMessage: (content: string) => boolean;
   injectAgentMessage: (message: string, behavior?: string) => boolean;
@@ -312,6 +374,8 @@ export interface UseDeepgramVoiceAgentReturn {
   };
   /** Whether the microphone is currently muted (only when trackState is enabled). */
   isMuted?: boolean;
+  /** Whether the microphone is currently below the configured silence threshold. */
+  isSilent?: boolean;
   conversation?: Array<{ role: string; content: string }>;
   clearConversation?: () => void;
   agentStatus?: {
@@ -326,6 +390,8 @@ export function useDeepgramVoiceAgent({
   endpoint,
   defaultSettings,
   autoStartMicrophone = true,
+  silence,
+  onSilenceChange,
   autoPlayAudio = true,
   trackState = false,
   trackConversation = false,
@@ -367,6 +433,9 @@ export function useDeepgramVoiceAgent({
   const audioSub = useRef<ReturnType<NativeEventEmitter['addListener']> | null>(
     null
   );
+  const meterSub = useRef<ReturnType<NativeEventEmitter['addListener']> | null>(
+    null
+  );
   const nativeInputSampleRate = useRef(BASE_NATIVE_SAMPLE_RATE);
   const targetInputSampleRate = useRef(DEFAULT_INPUT_SAMPLE_RATE);
   const currentDownsample = useRef(
@@ -378,6 +447,20 @@ export function useDeepgramVoiceAgent({
   );
   const microphoneActive = useRef(false);
   const mutedRef = useRef(false);
+  const gatedRef = useRef(false);
+  const silentRef = useRef(false);
+  const silenceBelowSinceRef = useRef<number | null>(null);
+  const silenceAutoStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  // A Voice Agent needs trailing audio to let its own STT/VAD complete a
+  // spoken turn. This stays true from local speech detection until the agent
+  // starts processing the user turn (or the safety guard expires).
+  const userTurnActiveRef = useRef(false);
+  const userTurnGuardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const disconnectRef = useRef<() => void>(() => {});
   const muteKeepAliveTimerRef = useRef<ReturnType<typeof setInterval> | null>(
     null
   );
@@ -434,6 +517,8 @@ export function useDeepgramVoiceAgent({
   const onAudioConfigRef = useRef(onAudioConfig);
   const onAudioRef = useRef(onAudio);
   const onBargeInRef = useRef(onBargeIn);
+  const silenceRef = useRef(silence);
+  const onSilenceChangeRef = useRef(onSilenceChange);
   const autoStartMicRef = useRef(autoStartMicrophone);
 
   const onInterruptionRef = useRef(onInterruption);
@@ -462,6 +547,7 @@ export function useDeepgramVoiceAgent({
   }));
 
   const [internalIsMuted, setInternalIsMuted] = useState(false);
+  const [internalIsSilent, setInternalIsSilent] = useState(false);
 
   const [internalStats, setInternalStats] = useState<SessionStats>(
     createEmptySessionStats
@@ -485,6 +571,75 @@ export function useDeepgramVoiceAgent({
       statsDirtyRef.current = false;
       setInternalStats({ ...statsRef.current });
     }, STATS_PUBLISH_INTERVAL_MS);
+  }, []);
+
+  const startMicIdleKeepAlive = useCallback(() => {
+    if (muteKeepAliveTimerRef.current != null) {
+      return;
+    }
+    muteKeepAliveTimerRef.current = setInterval(() => {
+      const socket = ws.current;
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      try {
+        socket.send(JSON.stringify({ type: 'KeepAlive' }));
+      } catch {}
+    }, AGENT_KEEPALIVE_INTERVAL_MS);
+  }, []);
+
+  const stopMicIdleKeepAlive = useCallback(() => {
+    if (muteKeepAliveTimerRef.current != null) {
+      clearInterval(muteKeepAliveTimerRef.current);
+      muteKeepAliveTimerRef.current = null;
+    }
+  }, []);
+
+  const resumeSilenceGate = useCallback(() => {
+    silenceBelowSinceRef.current = null;
+    if (silenceAutoStopTimerRef.current != null) {
+      clearTimeout(silenceAutoStopTimerRef.current);
+      silenceAutoStopTimerRef.current = null;
+    }
+
+    const wasSilent = silentRef.current;
+    silentRef.current = false;
+    if (gatedRef.current) {
+      gatedRef.current = false;
+      if (!mutedRef.current) {
+        stopMicIdleKeepAlive();
+      }
+    }
+
+    if (wasSilent) {
+      if (trackState) {
+        setInternalIsSilent(false);
+      }
+      onSilenceChangeRef.current?.(false);
+    }
+  }, [stopMicIdleKeepAlive, trackState]);
+
+  const finishUserTurn = useCallback(() => {
+    userTurnActiveRef.current = false;
+    if (userTurnGuardTimerRef.current != null) {
+      clearTimeout(userTurnGuardTimerRef.current);
+      userTurnGuardTimerRef.current = null;
+    }
+    // Start a fresh hangover after the server has enough audio to recognize
+    // the turn, rather than immediately cutting off a VAD boundary.
+    silenceBelowSinceRef.current = null;
+  }, []);
+
+  const markUserTurnActive = useCallback(() => {
+    userTurnActiveRef.current = true;
+    if (userTurnGuardTimerRef.current != null) {
+      clearTimeout(userTurnGuardTimerRef.current);
+    }
+    userTurnGuardTimerRef.current = setTimeout(() => {
+      userTurnGuardTimerRef.current = null;
+      userTurnActiveRef.current = false;
+      silenceBelowSinceRef.current = null;
+    }, USER_TURN_GUARD_MS);
   }, []);
 
   const sanitizeAudioSettings = useCallback(
@@ -630,6 +785,8 @@ export function useDeepgramVoiceAgent({
   onAudioConfigRef.current = onAudioConfig;
   onAudioRef.current = onAudio;
   onBargeInRef.current = onBargeIn;
+  silenceRef.current = silence;
+  onSilenceChangeRef.current = onSilenceChange;
   bargeInRef.current = bargeIn;
   autoStartMicRef.current = autoStartMicrophone;
   if (downsampleFactor != null) {
@@ -637,12 +794,22 @@ export function useDeepgramVoiceAgent({
   }
 
   const cleanup = useCallback(() => {
-    if (muteKeepAliveTimerRef.current != null) {
-      clearInterval(muteKeepAliveTimerRef.current);
-      muteKeepAliveTimerRef.current = null;
-    }
+    stopMicIdleKeepAlive();
     mutedRef.current = false;
+    gatedRef.current = false;
+    silentRef.current = false;
+    silenceBelowSinceRef.current = null;
+    if (silenceAutoStopTimerRef.current != null) {
+      clearTimeout(silenceAutoStopTimerRef.current);
+      silenceAutoStopTimerRef.current = null;
+    }
+    userTurnActiveRef.current = false;
+    if (userTurnGuardTimerRef.current != null) {
+      clearTimeout(userTurnGuardTimerRef.current);
+      userTurnGuardTimerRef.current = null;
+    }
     setInternalIsMuted(false);
+    setInternalIsSilent(false);
 
     stopStatsPublisher();
 
@@ -664,6 +831,9 @@ export function useDeepgramVoiceAgent({
 
     audioSub.current?.remove();
     audioSub.current = null;
+    meterSub.current?.remove();
+    meterSub.current = null;
+    Deepgram.setMeteringEnabled?.(false, 0);
 
     if (microphoneActive.current) {
       Deepgram.stopRecording().catch(() => {});
@@ -688,7 +858,7 @@ export function useDeepgramVoiceAgent({
         // ignore socket close errors
       }
     }
-  }, [stopStatsPublisher]);
+  }, [stopMicIdleKeepAlive, stopStatsPublisher]);
 
   useEffect(
     () => () => {
@@ -704,6 +874,26 @@ export function useDeepgramVoiceAgent({
         statsRef.current.framesDropped += 1;
         statsDirtyRef.current = true;
         return;
+      }
+      if (gatedRef.current) {
+        const threshold = silenceRef.current?.threshold;
+        const silenceThreshold =
+          typeof threshold === 'number' && Number.isFinite(threshold)
+            ? Math.min(1, Math.max(0, threshold))
+            : DEFAULT_SILENCE_THRESHOLD;
+        const level = getPcm16Rms(ev?.b64);
+
+        // Android emits the PCM event before its throttled meter event. Probe
+        // this frame so the first sound of a new utterance reopens the stream
+        // instead of being discarded while waiting for a later level event.
+        if (level == null || level <= silenceThreshold) {
+          statsRef.current.framesDropped += 1;
+          statsDirtyRef.current = true;
+          return;
+        }
+
+        markUserTurnActive();
+        resumeSilenceGate();
       }
       const socket = ws.current;
       if (!socket || socket.readyState !== WebSocket.OPEN) {
@@ -753,7 +943,7 @@ export function useDeepgramVoiceAgent({
         onErrorRef.current?.(toDeepgramError(err));
       }
     },
-    [downsampleFactor]
+    [downsampleFactor, markUserTurnActive, resumeSilenceGate]
   );
 
   const handleSocketMessage = useCallback(
@@ -783,6 +973,10 @@ export function useDeepgramVoiceAgent({
                 const convMsg =
                   message as DeepgramVoiceAgentConversationTextMessage;
 
+                if (convMsg.role === 'user') {
+                  finishUserTurn();
+                }
+
                 if (trackConversation) {
                   setInternalConversation((prev) => [
                     ...prev,
@@ -797,6 +991,8 @@ export function useDeepgramVoiceAgent({
               if (hasKeys(message, ['content'])) {
                 const thinkMsg =
                   message as DeepgramVoiceAgentAgentThinkingMessage;
+
+                finishUserTurn();
 
                 if (trackAgentStatus) {
                   setInternalAgentStatus((prev) => ({
@@ -845,6 +1041,7 @@ export function useDeepgramVoiceAgent({
               }
               break;
             case 'UserStartedSpeaking':
+              markUserTurnActive();
               // Barge-in: flush native playback so the agent stops when the
               // user talks over it (skipped while muted).
               if (
@@ -1005,7 +1202,14 @@ export function useDeepgramVoiceAgent({
         onAudioRef.current?.(buffer);
       }
     },
-    [autoPlayAudio, trackAgentStatus, trackConversation, trackState]
+    [
+      autoPlayAudio,
+      finishUserTurn,
+      markUserTurnActive,
+      trackAgentStatus,
+      trackConversation,
+      trackState,
+    ]
   );
 
   const sendJsonMessage = useCallback(
@@ -1242,6 +1446,7 @@ export function useDeepgramVoiceAgent({
           warning: null,
         });
         setInternalIsMuted(false);
+        setInternalIsSilent(false);
       }
 
       if (trackConversation) {
@@ -1255,19 +1460,123 @@ export function useDeepgramVoiceAgent({
 
       if (!hasAuthConfigured()) throw new Error('Deepgram API key missing');
 
+      // Derive the native capture rate from the session's input settings so
+      // the mic is captured at the rate the Settings message declares. Rates
+      // the native recorders support are captured directly; anything else
+      // keeps the 16 kHz base capture (lower rates are downsampled in JS).
+      const targetSampleRate = normalizeInputSampleRate(
+        overrideSettings?.audio?.input?.sample_rate ??
+          defaultSettingsRef.current?.audio?.input?.sample_rate ??
+          DEFAULT_INPUT_SAMPLE_RATE
+      );
+      const wantsNativeRate = (
+        SUPPORTED_CAPTURE_SAMPLE_RATES as readonly number[]
+      ).includes(targetSampleRate);
+      const requestedCaptureRate = (
+        wantsNativeRate ? targetSampleRate : BASE_NATIVE_SAMPLE_RATE
+      ) as 16000 | 24000 | 48000;
+      let actualCaptureRate: number = requestedCaptureRate;
+
       const shouldCaptureMic = autoStartMicRef.current;
+      const silenceCfg = silenceRef.current;
+      const silenceGate = silenceCfg?.gate === true;
+      const silenceAutoStopMs =
+        typeof silenceCfg?.autoStopMs === 'number' && silenceCfg.autoStopMs > 0
+          ? silenceCfg.autoStopMs
+          : 0;
+      const silenceActive =
+        shouldCaptureMic && (silenceGate || silenceAutoStopMs > 0);
+      const silenceThreshold =
+        typeof silenceCfg?.threshold === 'number' &&
+        Number.isFinite(silenceCfg.threshold)
+          ? Math.min(1, Math.max(0, silenceCfg.threshold))
+          : DEFAULT_SILENCE_THRESHOLD;
+      const silenceHangoverMs =
+        typeof silenceCfg?.hangoverMs === 'number' && silenceCfg.hangoverMs >= 0
+          ? silenceCfg.hangoverMs
+          : DEFAULT_SILENCE_HANGOVER_MS;
       if (shouldCaptureMic) {
         const granted = await askMicPermission();
         if (!granted) {
           throw new Error('Microphone permission denied');
         }
-        await Deepgram.startRecording({ enableVoiceProcessing: true });
+        const recordingResult = await Deepgram.startRecording({
+          enableVoiceProcessing: true,
+          sampleRate: requestedCaptureRate,
+        });
+        if (
+          typeof recordingResult?.sampleRate === 'number' &&
+          recordingResult.sampleRate > 0
+        ) {
+          actualCaptureRate = recordingResult.sampleRate;
+        }
         microphoneActive.current = true;
+
+        if (silenceActive) {
+          Deepgram.setMeteringEnabled?.(true, DEFAULT_METERING_INTERVAL_MS);
+        }
 
         if (eventName) {
           audioSub.current = getEmitter().addListener(
             eventName,
             handleMicChunk
+          );
+        }
+        if (silenceActive && levelEventName) {
+          meterSub.current = getEmitter().addListener(
+            levelEventName,
+            (ev: any) => {
+              const level =
+                typeof ev?.level === 'number' && Number.isFinite(ev.level)
+                  ? ev.level
+                  : 0;
+              const now = Date.now();
+
+              if (level > silenceThreshold) {
+                markUserTurnActive();
+                resumeSilenceGate();
+                return;
+              }
+
+              if (silenceBelowSinceRef.current == null) {
+                silenceBelowSinceRef.current = now;
+              }
+
+              // Voice Agent's server-side VAD needs real trailing PCM after
+              // speech. Keep sending through the active user turn; the agent
+              // clears this guard with ConversationText/AgentThinking once it
+              // has accepted the turn.
+              if (userTurnActiveRef.current) {
+                return;
+              }
+
+              if (silenceAutoStopMs > 0) {
+                const silentSince = silenceBelowSinceRef.current;
+                if (silenceAutoStopTimerRef.current == null) {
+                  silenceAutoStopTimerRef.current = setTimeout(() => {
+                    silenceAutoStopTimerRef.current = null;
+                    if (silenceBelowSinceRef.current === silentSince) {
+                      disconnectRef.current();
+                    }
+                  }, silenceAutoStopMs);
+                }
+              }
+
+              if (
+                !silentRef.current &&
+                now - silenceBelowSinceRef.current >= silenceHangoverMs
+              ) {
+                silentRef.current = true;
+                if (trackState) {
+                  setInternalIsSilent(true);
+                }
+                if (silenceGate) {
+                  gatedRef.current = true;
+                  startMicIdleKeepAlive();
+                }
+                onSilenceChangeRef.current?.(true);
+              }
+            }
           );
         }
       } else {
@@ -1291,11 +1600,24 @@ export function useDeepgramVoiceAgent({
         ...(merged ?? {}),
       };
 
-      const targetSampleRate =
-        overrideSettings?.audio?.input?.sample_rate ??
-        defaultSettingsRef.current?.audio?.input?.sample_rate ??
-        DEFAULT_INPUT_SAMPLE_RATE;
-      targetInputSampleRate.current = targetSampleRate;
+      nativeInputSampleRate.current = actualCaptureRate;
+      // Never advertise a rate above the PCM rate actually emitted by native
+      // capture. Lower targets (for example 8 kHz) remain valid because the
+      // mic frame handler downsamples before sending them to Deepgram.
+      const effectiveTargetSampleRate = shouldCaptureMic
+        ? Math.min(targetSampleRate, actualCaptureRate)
+        : targetSampleRate;
+      if (shouldCaptureMic) {
+        mergedSettingsRef.current.audio = {
+          ...mergedSettingsRef.current.audio,
+          input: {
+            ...mergedSettingsRef.current.audio?.input,
+            encoding: 'linear16',
+            sample_rate: effectiveTargetSampleRate,
+          },
+        };
+      }
+      targetInputSampleRate.current = effectiveTargetSampleRate;
       currentDownsample.current = resolveDownsampleFactor(
         downsampleFactor,
         targetInputSampleRate.current,
@@ -1342,9 +1664,12 @@ export function useDeepgramVoiceAgent({
       cleanup,
       downsampleFactor,
       handleMicChunk,
+      markUserTurnActive,
       mergeSettings,
       openSocket,
+      resumeSilenceGate,
       sanitizeSettings,
+      startMicIdleKeepAlive,
       startStatsPublisher,
       trackAgentStatus,
       trackConversation,
@@ -1358,9 +1683,25 @@ export function useDeepgramVoiceAgent({
     cleanup();
   }, [cleanup]);
 
+  disconnectRef.current = disconnect;
+
   const sendSettings = useCallback(
     (settings: DeepgramVoiceAgentSettings) => {
-      const sanitized = sanitizeSettings(settings);
+      const sanitized = sanitizeSettings(settings) ?? {};
+      // The native microphone always emits raw PCM16 at the target rate
+      // established by connect(). Do not let a later Settings envelope label
+      // those bytes as another format or rate; changing input media requires a
+      // new session so capture can be reconfigured first.
+      if (microphoneActive.current) {
+        sanitized.audio = {
+          ...sanitized.audio,
+          input: {
+            ...sanitized.audio?.input,
+            encoding: 'linear16',
+            sample_rate: targetInputSampleRate.current,
+          },
+        };
+      }
       const message: DeepgramVoiceAgentSettingsMessage = {
         type: 'Settings',
         ...(sanitized ?? {}),
@@ -1409,23 +1750,12 @@ export function useDeepgramVoiceAgent({
       return;
     }
     mutedRef.current = true;
-
-    if (muteKeepAliveTimerRef.current == null) {
-      muteKeepAliveTimerRef.current = setInterval(() => {
-        const socket = ws.current;
-        if (!socket || socket.readyState !== WebSocket.OPEN) {
-          return;
-        }
-        try {
-          socket.send(JSON.stringify({ type: 'KeepAlive' }));
-        } catch {}
-      }, AGENT_KEEPALIVE_INTERVAL_MS);
-    }
+    startMicIdleKeepAlive();
 
     if (trackState) {
       setInternalIsMuted(true);
     }
-  }, [trackState]);
+  }, [startMicIdleKeepAlive, trackState]);
 
   const unmute = useCallback(() => {
     if (!mutedRef.current) {
@@ -1433,15 +1763,14 @@ export function useDeepgramVoiceAgent({
     }
     mutedRef.current = false;
 
-    if (muteKeepAliveTimerRef.current != null) {
-      clearInterval(muteKeepAliveTimerRef.current);
-      muteKeepAliveTimerRef.current = null;
+    if (!gatedRef.current) {
+      stopMicIdleKeepAlive();
     }
 
     if (trackState) {
       setInternalIsMuted(false);
     }
-  }, [trackState]);
+  }, [stopMicIdleKeepAlive, trackState]);
 
   const patchAgentSettings = useCallback(
     (patch: Partial<DeepgramVoiceAgentAgentConfig>) => {
@@ -1541,7 +1870,13 @@ export function useDeepgramVoiceAgent({
     unmute,
     getStats,
     isConnected,
-    ...(trackState ? { state: internalState, isMuted: internalIsMuted } : {}),
+    ...(trackState
+      ? {
+          state: internalState,
+          isMuted: internalIsMuted,
+          isSilent: internalIsSilent,
+        }
+      : {}),
     ...(trackConversation
       ? { conversation: internalConversation, clearConversation }
       : {}),

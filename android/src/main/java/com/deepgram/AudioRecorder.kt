@@ -16,9 +16,10 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * Microphone capture. Records 16 kHz PCM16 mono and streams the raw bytes back
- * to the owner via [onAudioChunk]; the JS side downsamples to whatever Deepgram
- * is configured for.
+ * Microphone capture. Records PCM16 mono at the session capture rate (16 kHz
+ * by default; 24/48 kHz supported) and streams the raw bytes back to the owner
+ * via [onAudioChunk]; the JS side downsamples to whatever Deepgram is
+ * configured for.
  *
  * Two capture profiles are supported:
  *   - STT-only (`enableVoiceProcessing = false`): `VOICE_RECOGNITION`, which
@@ -39,6 +40,16 @@ internal class AudioRecorder(
 
   @Volatile
   var isActive: Boolean = false
+    private set
+
+  /**
+   * Sample rate (Hz) of the active (or most recent) capture session. May
+   * differ from the requested rate when the device rejects it and capture
+   * falls back to [RECORD_SAMPLE_RATE]; the module tags every `AudioChunk`
+   * event with this value so JS always knows the true rate.
+   */
+  @Volatile
+  var currentSampleRate: Int = RECORD_SAMPLE_RATE
     private set
 
   @Volatile
@@ -84,10 +95,10 @@ internal class AudioRecorder(
 
   private val minRecordBufferSize: Int
     get() {
-      val min = AudioRecord.getMinBufferSize(RECORD_SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
+      val min = AudioRecord.getMinBufferSize(currentSampleRate, CHANNEL_CONFIG, AUDIO_FORMAT)
       if (min > 0) return min
 
-      val fallback = maxOf((RECORD_SAMPLE_RATE / 5) * 2, 4096)
+      val fallback = maxOf((currentSampleRate / 5) * 2, 4096)
       Log.w(TAG, "Invalid AudioRecord min buffer ($min), using fallback=$fallback")
       return fallback
     }
@@ -100,9 +111,29 @@ internal class AudioRecorder(
    * exception is propagated: [InitializationException] for a failed
    * `AudioRecord` init, `SecurityException` for a missing permission, or the
    * original exception otherwise.
+   *
+   * [sampleRate] is the requested capture rate. Only 44.1 kHz is universally
+   * guaranteed by Android, so if the device rejects the requested rate
+   * (`getMinBufferSize` error, `Builder.build()` throwing, or a failed init)
+   * capture falls back to [RECORD_SAMPLE_RATE] with a warning instead of
+   * failing the session; the rate in effect is exposed as [currentSampleRate].
    */
-  fun start(enableVoiceProcessing: Boolean, recordToFilePath: String? = null) {
+  fun start(
+    enableVoiceProcessing: Boolean,
+    recordToFilePath: String? = null,
+    sampleRate: Int = RECORD_SAMPLE_RATE,
+  ) {
     lastRecordingUri = null
+
+    currentSampleRate = if (
+      sampleRate == RECORD_SAMPLE_RATE ||
+      AudioRecord.getMinBufferSize(sampleRate, CHANNEL_CONFIG, AUDIO_FORMAT) > 0
+    ) {
+      sampleRate
+    } else {
+      Log.w(TAG, "Sample rate $sampleRate Hz unsupported; falling back to $RECORD_SAMPLE_RATE Hz")
+      RECORD_SAMPLE_RATE
+    }
 
     // Voice Agent / duplex usage: route capture through the telephony stack so
     // the platform's hardware AEC engages with the active playback signal as
@@ -120,17 +151,27 @@ internal class AudioRecorder(
     }
 
     try {
-      val recorder = AudioRecord.Builder()
-        .setAudioSource(audioSource)
-        .setAudioFormat(
-          AudioFormat.Builder()
-            .setEncoding(AUDIO_FORMAT)
-            .setSampleRate(RECORD_SAMPLE_RATE)
-            .setChannelMask(CHANNEL_CONFIG)
-            .build()
-        )
-        .setBufferSizeInBytes(bufferSize)
-        .build()
+      // `AudioRecord.Builder.build()` throws UnsupportedOperationException and
+      // a fresh recorder can report a failed init when the device cannot
+      // capture at the requested rate — retry once at the guaranteed-safe
+      // 16 kHz before giving up so an exotic rate never kills the session.
+      var recorder = try {
+        buildAudioRecord(audioSource)
+      } catch (e: UnsupportedOperationException) {
+        if (currentSampleRate == RECORD_SAMPLE_RATE) throw e
+        Log.w(TAG, "AudioRecord rejected $currentSampleRate Hz; falling back to $RECORD_SAMPLE_RATE Hz", e)
+        currentSampleRate = RECORD_SAMPLE_RATE
+        buildAudioRecord(audioSource)
+      }
+
+      if (recorder.state != AudioRecord.STATE_INITIALIZED &&
+        currentSampleRate != RECORD_SAMPLE_RATE
+      ) {
+        Log.w(TAG, "AudioRecord init failed at $currentSampleRate Hz; falling back to $RECORD_SAMPLE_RATE Hz")
+        recorder.release()
+        currentSampleRate = RECORD_SAMPLE_RATE
+        recorder = buildAudioRecord(audioSource)
+      }
       audioRecord = recorder
 
       if (recorder.state != AudioRecord.STATE_INITIALIZED) {
@@ -464,7 +505,7 @@ internal class AudioRecorder(
   private fun buildWavHeader(dataBytes: Int): ByteArray {
     val channels = 1
     val bitsPerSample = 16
-    val byteRate = RECORD_SAMPLE_RATE * channels * bitsPerSample / 8
+    val byteRate = currentSampleRate * channels * bitsPerSample / 8
     val blockAlign = channels * bitsPerSample / 8
 
     return ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN).apply {
@@ -475,7 +516,7 @@ internal class AudioRecorder(
       putInt(16) // PCM fmt chunk size
       putShort(1) // PCM
       putShort(channels.toShort())
-      putInt(RECORD_SAMPLE_RATE)
+      putInt(currentSampleRate)
       putInt(byteRate)
       putShort(blockAlign.toShort())
       putShort(bitsPerSample.toShort())
@@ -484,14 +525,27 @@ internal class AudioRecorder(
     }.array()
   }
 
+  private fun buildAudioRecord(audioSource: Int): AudioRecord =
+    AudioRecord.Builder()
+      .setAudioSource(audioSource)
+      .setAudioFormat(
+        AudioFormat.Builder()
+          .setEncoding(AUDIO_FORMAT)
+          .setSampleRate(currentSampleRate)
+          .setChannelMask(CHANNEL_CONFIG)
+          .build()
+      )
+      .setBufferSizeInBytes(bufferSize)
+      .build()
+
   private fun intToLittleEndian(value: Int): ByteArray =
     ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(value).array()
 
   companion object {
     private const val TAG = "DeepgramRecorder"
 
-    // Recording is locked to 16 kHz PCM16 mono — exposed so the module can tag
-    // the `AudioChunk` event it emits to JS with the matching sample rate.
+    // Default (and fallback) capture rate. Exposed so the module can default
+    // the rate when JS does not request one.
     const val RECORD_SAMPLE_RATE = 16000
     private const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
     private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT

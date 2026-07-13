@@ -32,6 +32,15 @@ NS_ASSUME_NONNULL_BEGIN
 @property(atomic, assign) BOOL hasListeners;
 @property(atomic, assign) BOOL appIsActive;
 
+// Capture-side sample rate (Hz) for the active recording session, set by
+// `startRecording` (16000/24000/48000; default 16000). Deliberately separate
+// from `currentSampleRate`, which the playback path overwrites with the
+// TTS/Voice-Agent output rate mid-session — sharing one field would mislabel
+// mic chunks and WAV headers during duplex sessions. Survives engine rebuilds
+// (`handleEngineConfigurationChange`) so a configuration change never silently
+// resets the capture rate.
+@property(atomic, assign) int captureSampleRate;
+
 // Microphone metering: when enabled, the recording sink computes a normalized
 // RMS amplitude (0..1) and emits `DeepgramAudioLevel` at most once per
 // interval (`lastMeterEmitTime` throttles via CACurrentMediaTime()).

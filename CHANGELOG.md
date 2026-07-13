@@ -5,6 +5,51 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0] - 2026-07-09
+
+### Added
+
+- **Silence gating & auto-stop for live STT.** New opt-in `silence` prop on
+  `useDeepgramSpeechToText` (`{ gate, threshold, hangoverMs, autoStopMs }`).
+  With `gate: true` the hook stops forwarding mic frames once the audio level
+  stays below `threshold` (default `0.02` normalized RMS) for `hangoverMs`
+  (default `800`), keeping the socket warm with `KeepAlive` frames and sending
+  a `Finalize` (v1) to flush buffered audio. `autoStopMs` ends the session
+  after that much continuous silence. New `onSilenceChange(silent)` callback
+  reports transitions. Gated frames are counted in `getStats().framesDropped`;
+  a user `pause()` always takes precedence over the gate.
+- **Silence gating & auto-stop for Voice Agent.** The same opt-in `silence`
+  configuration is now available on `useDeepgramVoiceAgent`. Quiet native-mic
+  frames are dropped after the configured hangover while `KeepAlive` retains
+  the agent connection; active user turns continue streaming their trailing
+  silence until server-side VAD accepts the turn. `autoStopMs` disconnects an
+  idle agent session. The new `isSilent` tracked state and
+  `onSilenceChange(silent)` callback expose the detector state to the app.
+- **Configurable capture sample rate.** Live STT (`live.sampleRate`) and the
+  Voice Agent (`settings.audio.input.sample_rate`) now capture natively at
+  `16000`, `24000`, or `48000` Hz on both platforms instead of always 16 kHz.
+  Devices that can't open the requested rate fall back to 16 kHz and the
+  native `startRecording` reports the actual rate back to JS, so the stream is
+  always labeled correctly. Other native-unsupported rates reject with
+  `invalid_data`.
+
+### Fixed
+
+- Live STT `sample_rate` query parameter now always matches the audio actually
+  streamed. Previously a `live.sampleRate` above 16 kHz (e.g. `44100`) was
+  sent to Deepgram while the mic still captured at 16 kHz, mislabeling the
+  stream and producing garbage transcripts; the effective rate is now clamped
+  to the real capture rate.
+- Voice Agent Settings now preserve the active native microphone's PCM16
+  encoding and effective input rate, including when a requested rate falls
+  back to 16 kHz. This prevents an initial or later Settings envelope from
+  mislabeling the bytes sent to Deepgram.
+- iOS: microphone chunk events no longer inherit the playback sample rate.
+  Capture now tracks its own rate (`captureSampleRate`), fixing a latent bug
+  where starting TTS/agent playback mid-session could mislabel mic audio.
+
+All additions are backwards compatible and opt-in; no breaking changes.
+
 ## [2.4.0] - 2026-07-08
 
 ### Added

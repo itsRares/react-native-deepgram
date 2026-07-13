@@ -569,7 +569,7 @@ const {
   // Connection
   connect, disconnect, isConnected,
   // Mic control
-  mute, unmute, isMuted,
+  mute, unmute, isMuted, isSilent,
   // Messaging
   sendMessage, sendSettings, sendMedia, sendKeepAlive,
   injectUserMessage, injectAgentMessage, updatePrompt,
@@ -590,6 +590,7 @@ const {
 | `defaultSettings` | `DeepgramVoiceAgentSettings` | – | Base `Settings` payload sent on connect; merge per-call overrides via `connect(override)`. |
 | `autoStartMicrophone` | `boolean` | `true` | Automatically requests mic access and starts streaming PCM. |
 | `autoPlayAudio` | `boolean` | `true` | Plays received audio using the native player. |
+| `silence` | `{ gate?: boolean; threshold?: number; hangoverMs?: number; autoStopMs?: number }` | – | Client-side native-mic silence handling. `gate: true` stops sending quiet mic frames after `hangoverMs` (default `800`) below the normalized RMS `threshold` (default `0.02`); periodic `KeepAlive` frames retain the connection. To preserve server-side VAD, a detected user turn continues streaming through its trailing silence until the agent accepts it. `autoStopMs` disconnects after continuous idle silence. |
 | `bargeIn` | `boolean` | `false` | Flush the agent's queued playback when the server reports `UserStartedSpeaking`, so the agent audibly stops when the user talks over it. Only flushes while agent audio is actually playing and the mic is not muted; the player stays usable for the next agent turn. Requires `autoPlayAudio`. Barge-in depends on hardware echo cancellation — test on a physical device (simulators have no VPIO, so the agent's own audio can trigger the VAD). |
 | `downsampleFactor` | `number` | heuristic | Manually override the downsample ratio applied to captured audio. |
 | `reconnect` | `DeepgramReconnectOptions` | `{ enabled: false }` | Auto-reconnect config for the agent socket. The stored `Settings` payload is re-sent on every successful reconnect. |
@@ -616,6 +617,7 @@ const {
 | `onReconnecting` | `(attempt: number) => void` | A reconnect attempt begins (1-based attempt number). Requires `reconnect.enabled`. |
 | `onReconnected` | `() => void` | The socket reconnects and the stored settings are re-sent. |
 | `onBargeIn` | `() => void` | A `bargeIn` flush actually happened (agent audio was cut short by the user speaking). |
+| `onSilenceChange` | `(silent: boolean) => void` | The native-mic silence detector changes state. Requires `silence.gate` or `silence.autoStopMs`. |
 | `onServerError` | `(message: DeepgramVoiceAgentErrorMessage) => void` | API reports a structured error (`description` + `code`). |
 | `onWarning` | `(message: DeepgramVoiceAgentWarningMessage) => void` | Non-fatal warning (e.g. degraded audio quality). |
 
@@ -671,7 +673,7 @@ const {
 | Method | Signature | Description |
 | ------ | --------- | ----------- |
 | `sendMessage` | `(message: DeepgramVoiceAgentClientMessage) => boolean` | Send a pre-built client envelope (custom message types). |
-| `sendSettings` | `(settings: DeepgramVoiceAgentSettings) => boolean` | Update settings mid-session. |
+| `sendSettings` | `(settings: DeepgramVoiceAgentSettings) => boolean` | Send a `Settings` envelope. Settings initialize a connection; use `updatePrompt`, `updateListen`, `updateThink`, or `updateSpeak` for supported mid-session changes. While the native mic is active, its PCM16 encoding and capture rate are retained. |
 | `sendMedia` | `(chunk: ArrayBuffer \| Uint8Array \| number[]) => boolean` | Stream additional PCM (e.g. pre-recorded buffer). |
 | `sendKeepAlive` | `() => boolean` | Emit a `KeepAlive` ping. |
 | `injectUserMessage` | `(content: string) => boolean` | Inject a user-side text turn. |
@@ -695,6 +697,7 @@ Each value is `undefined` unless its corresponding `track*` flag is `true`.
 | ------ | ---- | -------- |
 | `state` | `{ connectionState: 'idle' \| 'connecting' \| 'connected' \| 'disconnected'; error: string \| null; warning: string \| null }` | `trackState: true` |
 | `isMuted` | `boolean` | `trackState: true` |
+| `isSilent` | `boolean` | `trackState: true` and `silence.gate` or `silence.autoStopMs` |
 | `conversation` | `Array<{ role: string; content: string }>` | `trackConversation: true` |
 | `agentStatus` | `{ thinking: string \| null; latency: { total?: number; tts?: number; ttt?: number } \| null }` | `trackAgentStatus: true` |
 | `clearConversation` | `() => void` | `trackConversation: true` |
@@ -805,6 +808,7 @@ const {
 | `reconnect` | `DeepgramReconnectOptions` | Auto-reconnect config for the live socket. Disabled unless `reconnect.enabled` is `true`. |
 | `metering` | `{ enabled?: boolean; intervalMs?: number }` | Microphone audio-level (VU meter) events. Disabled by default; set `enabled: true` to emit a normalized RMS level (~10 Hz, tune with `intervalMs`). |
 | `recordToFile` | `{ enabled?: boolean; path?: string; format?: 'wav' }` | Persist the captured mic audio to a WAV file while it streams. Disabled by default. Omit `path` to let the native module pick an app-specific location. |
+| `silence` | `{ gate?: boolean; threshold?: number; hangoverMs?: number; autoStopMs?: number }` | Client-side silence handling. Off by default. `gate: true` stops sending audio frames while you're silent (the socket stays alive via `KeepAlive`); `autoStopMs` ends the session after that much continuous silence. `threshold` (default `0.02`) is the normalized RMS level from `0` to `1` at or below which audio counts as silence; `hangoverMs` (default `800`) is how long the level must stay below the threshold before gating engages. |
 
 **Live streaming callbacks**
 
@@ -815,6 +819,7 @@ const {
 | `onTranscript` | `(transcript: string, event?: DeepgramTranscriptEvent) => void` | Every transcript update (partial and final). |
 | `onError` | `(error: unknown) => void` | A streaming error occurs. |
 | `onAudioLevel` | `(level: number) => void` | A new mic audio level (`0..1` normalized RMS) is available. Requires `metering.enabled`. |
+| `onSilenceChange` | `(silent: boolean) => void` | The silence detector flips between silent and voiced. Requires `silence.gate` or `silence.autoStopMs`. |
 | `onRecordingComplete` | `(uri: string) => void` | A `recordToFile` session finished; receives the `file://` URI of the saved WAV. Requires `recordToFile.enabled`. |
 | `onReconnecting` | `(attempt: number) => void` | A reconnect attempt begins (1-based attempt number). Requires `reconnect.enabled`. |
 | `onReconnected` | `() => void` | The live socket successfully reconnects. |
@@ -876,7 +881,7 @@ const {
 | Option | Type | Default | Purpose |
 | ------ | ---- | ------- | ------- |
 | `encoding` | `DeepgramLiveListenEncoding` | `'linear16'` | Codec supplied to Deepgram. |
-| `sampleRate` | `number` | `16000` | PCM sample rate. |
+| `sampleRate` | `number` | `16000` | PCM sample rate sent to Deepgram. When set to `16000`, `24000`, or `48000` the microphone captures natively at that rate (falling back to 16 kHz if the device can't). Other lower values are downsampled client-side from a 16 kHz capture; values above the actual capture rate are clamped so the stream is labeled correctly. |
 | `channels` | `number` | – | Channel count. |
 | `multichannel` | `boolean` | `false` | Transcribe each channel independently. |
 
@@ -1464,8 +1469,44 @@ const stt = useDeepgramSpeechToText({
 });
 ```
 
-### Pause and resume a live stream
+### Gate silence and auto-stop idle sessions
 
+```tsx
+const stt = useDeepgramSpeechToText({
+  silence: {
+    gate: true, // stop sending audio while silent (KeepAlive keeps the socket warm)
+    threshold: 0.02, // normalized RMS level treated as silence (default)
+    hangoverMs: 800, // silence must persist this long before gating (default)
+    autoStopMs: 30_000, // end the session after 30s of continuous silence
+  },
+  onSilenceChange: (silent) => console.log(silent ? 'shh…' : 'voice detected'),
+});
+```
+
+> Gating saves bandwidth without dropping the connection: a `Finalize` flushes
+> buffered audio when the gate engages (v1), and streaming resumes instantly
+> when you speak again. A user `pause()` always wins over the gate.
+
+### Capture at a higher sample rate
+
+```tsx
+const stt = useDeepgramSpeechToText({
+  live: { sampleRate: 48_000 }, // 16000 | 24000 | 48000 capture natively
+});
+
+// Voice Agent: the mic captures at the rate in your audio input settings.
+const agent = useDeepgramVoiceAgent({
+  defaultSettings: createAgentSettings({ sampleRate: 24_000 }),
+});
+```
+
+> Devices that can't capture at the requested rate fall back to 16 kHz — the
+> hook detects this and labels the stream with the actual rate, so transcripts
+> stay correct. The direct native `Deepgram.startRecording()` API accepts only
+> 16/24/48 kHz and rejects other rates with `invalid_data`; live-hook targets
+> below the active capture rate are downsampled instead.
+
+### Pause and resume a live stream
 ```tsx
 const { startListening, pause, resume, isPaused } = useDeepgramSpeechToText({
   trackState: true,
@@ -1908,6 +1949,8 @@ If the app gets into a weird state, `yarn example:clean` wipes the generated nat
 - ✅ Record the microphone to a WAV file while streaming
 - ✅ Audio output route control (speaker / earpiece / Bluetooth) with route-change events
 - ✅ Typed error codes (`DeepgramError` / `DeepgramErrorCode`)
+- ✅ Client-side silence gating & auto-stop for live STT
+- ✅ Configurable native capture sample rate (16 / 24 / 48 kHz)
 - 🚧 Detox E2E tests for the example app
 
 ---

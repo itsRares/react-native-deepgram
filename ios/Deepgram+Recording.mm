@@ -230,7 +230,7 @@ static NSData *DGMakeWavHeader(uint32_t sampleRate, uint16_t channels,
                @"bytes remaining=%lu",
                (unsigned long)chunk.length,
                (unsigned long)self.pendingPCMBuffer.length);
-    [self emitPCMChunk:chunk sampleRate:self.currentSampleRate];
+    [self emitPCMChunk:chunk sampleRate:self.captureSampleRate];
   }
 }
 
@@ -244,7 +244,7 @@ static NSData *DGMakeWavHeader(uint32_t sampleRate, uint16_t channels,
   [self.pendingPCMBuffer setLength:0];
   DGLogDebug(@"[Deepgram] flushPendingPCM: flushing %lu bytes",
              (unsigned long)remaining.length);
-  [self emitPCMChunk:remaining sampleRate:self.currentSampleRate];
+  [self emitPCMChunk:remaining sampleRate:self.captureSampleRate];
 }
 
 - (void)cleanupRecordingQueue {
@@ -318,7 +318,7 @@ static NSData *DGMakeWavHeader(uint32_t sampleRate, uint16_t channels,
   }
 
   // (Re)create the file and write the placeholder header (data size = 0).
-  NSData *header = DGMakeWavHeader((uint32_t)MAX(1, self.currentSampleRate), 1,
+  NSData *header = DGMakeWavHeader((uint32_t)MAX(1, self.captureSampleRate), 1,
                                    16, 0);
   if (![fm createFileAtPath:path contents:header attributes:nil]) {
     if (outError) {
@@ -368,7 +368,7 @@ static NSData *DGMakeWavHeader(uint32_t sampleRate, uint16_t channels,
   @try {
     // Patch the header with the final size and sample rate.
     NSData *header =
-        DGMakeWavHeader((uint32_t)MAX(1, self.currentSampleRate), 1, 16,
+        DGMakeWavHeader((uint32_t)MAX(1, self.captureSampleRate), 1, 16,
                         dataBytes);
     [handle seekToFileOffset:0];
     [handle writeData:header];
@@ -416,11 +416,16 @@ static NSData *DGMakeWavHeader(uint32_t sampleRate, uint16_t channels,
  * AudioQueue path remains for STT-only usage where AEC is undesirable.
  */
 - (BOOL)startEngineCaptureAndReturnError:(NSError **)outError {
-  self.currentSampleRate = 16000;
+  // The requested capture rate is set by startRecording and must survive
+  // engine rebuilds — handleEngineConfigurationChange re-runs this method, so
+  // never re-hardcode it here.
+  if (self.captureSampleRate <= 0) {
+    self.captureSampleRate = 16000;
+  }
 
   if (!self.audioEngine) {
     NSError *engineError = nil;
-    if (![self setupAudioEngineWithSampleRate:self.currentSampleRate
+    if (![self setupAudioEngineWithSampleRate:self.captureSampleRate
                                      channels:1
                         enableVoiceProcessing:YES
                                         error:&engineError]) {
@@ -487,7 +492,7 @@ static NSData *DGMakeWavHeader(uint32_t sampleRate, uint16_t channels,
 
   AVAudioFormat *outputFormat =
       [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatInt16
-                                       sampleRate:self.currentSampleRate
+                                       sampleRate:self.captureSampleRate
                                          channels:1
                                       interleaved:YES];
   self.captureOutputFormat = outputFormat;
@@ -589,7 +594,7 @@ static NSData *DGMakeWavHeader(uint32_t sampleRate, uint16_t channels,
   }
 
   self.chunkSizeBytes =
-      (NSUInteger)MAX(1, (int)round(self.currentSampleRate * 2 * 0.2));
+      (NSUInteger)MAX(1, (int)round(self.captureSampleRate * 2 * 0.2));
   self.engineCaptureActive = YES;
 
   if (!self.audioEngine.isRunning) {

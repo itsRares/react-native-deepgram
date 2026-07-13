@@ -56,6 +56,14 @@ export default function SpeechToText() {
   const [captionVtt, setCaptionVtt] = useState('');
   const [speakerSegments, setSpeakerSegments] = useState<SpeakerSegment[]>([]);
 
+  // Silence gating & auto-stop
+  const [silenceGateEnabled, setSilenceGateEnabled] = useState(false);
+  const [autoStopEnabled, setAutoStopEnabled] = useState(false);
+  const [isSilent, setIsSilent] = useState(false);
+
+  // Capture sample rate
+  const [captureRate, setCaptureRate] = useState<16000 | 24000 | 48000>(16000);
+
   // Record-to-file is opt-in: the user chooses whether to save and where.
   const [recordEnabled, setRecordEnabled] = useState(false);
   const [recordFolder, setRecordFolder] = useState<'documents' | 'cache'>(
@@ -89,10 +97,16 @@ export default function SpeechToText() {
     reconnect: { enabled: true },
     metering: { enabled: true },
     recordToFile: { enabled: recordEnabled, path: recordPath },
+    silence: {
+      gate: silenceGateEnabled,
+      ...(autoStopEnabled ? { autoStopMs: 10_000 } : {}),
+    },
+    onSilenceChange: setIsSilent,
     onBeforeStart: () => {
       setLiveTranscript('');
       setLiveInterimTranscript('');
       setReconnectAttempt(null);
+      setIsSilent(false);
     },
     onTranscript: (text, info) => {
       if (info?.isFinal) {
@@ -114,6 +128,7 @@ export default function SpeechToText() {
     onEnd: () => {
       setLiveInterimTranscript('');
       setReconnectAttempt(null);
+      setIsSilent(false);
     },
     onRecordingComplete: (uri) => {
       console.log('Saved mic recording to', uri);
@@ -122,6 +137,7 @@ export default function SpeechToText() {
       model: 'nova-3',
       interimResults: true,
       punctuate: true,
+      sampleRate: captureRate,
     },
   });
 
@@ -403,6 +419,23 @@ export default function SpeechToText() {
                 💾 Record to file
               </Text>
             </View>
+            {silenceGateEnabled || autoStopEnabled ? (
+              <View
+                style={[
+                  styles.capabilityChip,
+                  isSilent && styles.capabilityChipActive,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.capabilityChipText,
+                    isSilent && styles.capabilityChipTextActive,
+                  ]}
+                >
+                  🤫 {isSilent ? 'Silent' : 'Silence watch'}
+                </Text>
+              </View>
+            ) : null}
           </View>
 
           <View style={styles.heroActions}>
@@ -435,6 +468,61 @@ export default function SpeechToText() {
             )}
           </View>
         </View>
+
+        {/* Silence gating & capture sample rate */}
+        <Card
+          title="Silence & capture"
+          subtitle="Gate silent audio, auto-stop idle sessions, pick a capture rate"
+        >
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>
+              Gate silent frames (saves bandwidth)
+            </Text>
+            <Switch
+              value={silenceGateEnabled}
+              onValueChange={setSilenceGateEnabled}
+              disabled={sessionActive}
+              thumbColor={silenceGateEnabled ? colors.success : '#888'}
+              trackColor={{
+                false: colors.surfaceMuted,
+                true: colors.accentMuted,
+              }}
+            />
+          </View>
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>Auto-stop after 10s silence</Text>
+            <Switch
+              value={autoStopEnabled}
+              onValueChange={setAutoStopEnabled}
+              disabled={sessionActive}
+              thumbColor={autoStopEnabled ? colors.success : '#888'}
+              trackColor={{
+                false: colors.surfaceMuted,
+                true: colors.accentMuted,
+              }}
+            />
+          </View>
+          <OptionSelect
+            label="Capture sample rate"
+            value={String(captureRate)}
+            onChange={(v) =>
+              setCaptureRate(
+                v === '48000' ? 48000 : v === '24000' ? 24000 : 16000
+              )
+            }
+            options={[
+              { label: '16 kHz', value: '16000' },
+              { label: '24 kHz', value: '24000' },
+              { label: '48 kHz', value: '48000' },
+            ]}
+          />
+          <Text style={styles.recordHint}>
+            Gating keeps the socket alive with KeepAlives while you are silent.
+            Higher capture rates improve accuracy at the cost of bandwidth —
+            devices that can’t capture at the requested rate fall back to 16 kHz
+            automatically.
+          </Text>
+        </Card>
 
         {/* Record-to-file: opt in and choose where to save */}
         <Card

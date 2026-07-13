@@ -144,7 +144,7 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
   @ReactMethod
   fun startRecording(options: ReadableMap?, promise: Promise) {
     if (recorder.isActive) {
-      promise.resolve(null)
+      promise.resolve(startRecordingResult())
       return
     }
 
@@ -163,11 +163,24 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
         it.getBoolean("enableVoiceProcessing")
     } ?: false
 
+    val requestedSampleRate = options
+      ?.takeIf { it.hasKey("sampleRate") && !it.isNull("sampleRate") }
+      ?.getInt("sampleRate")
+      ?: AudioRecorder.RECORD_SAMPLE_RATE
+    if (requestedSampleRate !in SUPPORTED_SAMPLE_RATES) {
+      promise.reject(
+        "invalid_data",
+        "Unsupported sampleRate $requestedSampleRate. Supported capture rates: " +
+          SUPPORTED_SAMPLE_RATES.joinToString() + "."
+      )
+      return
+    }
+
     val recordToFilePath = resolveRecordToFilePath(options)
 
     try {
-      recorder.start(enableVoiceProcessing, recordToFilePath)
-      promise.resolve(null)
+      recorder.start(enableVoiceProcessing, recordToFilePath, requestedSampleRate)
+      promise.resolve(startRecordingResult())
     } catch (e: SecurityException) {
       promise.reject("permission_denied", e)
     } catch (e: AudioRecorder.InitializationException) {
@@ -176,6 +189,14 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
       promise.reject("start_error", e)
     }
   }
+
+  /**
+   * Payload resolved by [startRecording]: reports the capture rate actually in
+   * effect (the recorder may have fallen back to 16 kHz) so JS can keep the
+   * Deepgram `sample_rate` query consistent with the streamed audio.
+   */
+  private fun startRecordingResult(): WritableNativeMap =
+    WritableNativeMap().apply { putInt("sampleRate", recorder.currentSampleRate) }
 
   /**
    * Resolve the WAV destination for a record-to-file session, or null when the
@@ -348,7 +369,7 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     val b64 = Base64.encodeToString(data, 0, length, Base64.NO_WRAP)
     val map = WritableNativeMap()
     map.putString("b64", b64)
-    map.putInt("sampleRate", AudioRecorder.RECORD_SAMPLE_RATE)
+    map.putInt("sampleRate", recorder.currentSampleRate)
     try {
       reactContext
         .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
@@ -417,5 +438,6 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
   companion object {
     const val NAME = "Deepgram"
     private const val TAG = "DeepgramModule"
+    private val SUPPORTED_SAMPLE_RATES = setOf(16000, 24000, 48000)
   }
 }

@@ -20,9 +20,15 @@ import { toDeepgramError } from './types';
 const DEFAULT_SAMPLE_RATE = 16_000;
 const BASE_NATIVE_SAMPLE_RATE = 16_000;
 
+/** Capture rates the native recorders accept. */
+const SUPPORTED_CAPTURE_SAMPLE_RATES = [16_000, 24_000, 48_000] as const;
+
 const KEEPALIVE_INTERVAL_MS = 5_000;
 
 const STATS_PUBLISH_INTERVAL_MS = 1_000;
+
+const DEFAULT_SILENCE_THRESHOLD = 0.02;
+const DEFAULT_SILENCE_HANGOVER_MS = 800;
 
 const DEFAULT_RECONNECT = {
   enabled: false,
@@ -92,6 +98,8 @@ export function useDeepgramSpeechToText({
   trackStats = false,
   metering = {},
   onAudioLevel = () => {},
+  silence,
+  onSilenceChange,
   recordToFile = {},
   onRecordingComplete = () => {},
   reconnect = {},
@@ -168,6 +176,21 @@ export function useDeepgramSpeechToText({
 
   const onInterruptionRef = useRef(onInterruption);
   onInterruptionRef.current = onInterruption;
+
+  // Silence gating / auto-stop (never enabled by default). `gatedRef` is
+  // deliberately separate from `pausedRef`: a user pause always wins, and
+  // gating must never resume a paused session.
+  const silenceRef = useRef(silence);
+  silenceRef.current = silence;
+  const onSilenceChangeRef = useRef(onSilenceChange);
+  onSilenceChangeRef.current = onSilenceChange;
+  const gatedRef = useRef(false);
+  const silentRef = useRef(false);
+  const silenceBelowSinceRef = useRef<number | null>(null);
+  const silenceAutoStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const stopListeningRef = useRef<() => void>(() => {});
 
   const meteringEnabled = metering.enabled === true;
   const meteringIntervalMs =
@@ -246,6 +269,13 @@ export function useDeepgramSpeechToText({
     reconnectingRef.current = false;
     pausedRef.current = false;
     interruptedRef.current = false;
+    gatedRef.current = false;
+    silentRef.current = false;
+    silenceBelowSinceRef.current = null;
+    if (silenceAutoStopTimerRef.current != null) {
+      clearTimeout(silenceAutoStopTimerRef.current);
+      silenceAutoStopTimerRef.current = null;
+    }
     if (audioSub.current) {
       audioSub.current.remove();
       audioSub.current = null;
@@ -545,6 +575,13 @@ export function useDeepgramSpeechToText({
         onBeforeStartRef.current();
         endFiredRef.current = false;
         pausedRef.current = false;
+        gatedRef.current = false;
+        silentRef.current = false;
+        silenceBelowSinceRef.current = null;
+        if (silenceAutoStopTimerRef.current != null) {
+          clearTimeout(silenceAutoStopTimerRef.current);
+          silenceAutoStopTimerRef.current = null;
+        }
         userClosedRef.current = false;
         reconnectAttemptRef.current = 0;
         reconnectingRef.current = false;
@@ -564,28 +601,6 @@ export function useDeepgramSpeechToText({
         const granted = await askMicPermission();
         if (!granted) throw new Error('Microphone permission denied');
 
-        const rtf = recordToFileRef.current;
-        if (trackState) {
-          setInternalRecordingUri(undefined);
-        }
-        await Deepgram.startRecording(
-          rtf.enabled === true
-            ? {
-                recordToFile: {
-                  enabled: true,
-                  path: rtf.path,
-                  format: rtf.format,
-                },
-              }
-            : undefined
-        );
-
-        if (!hasAuthConfigured()) throw new Error('Deepgram API key missing');
-
-        if (meteringEnabled) {
-          Deepgram.setMeteringEnabled?.(true, meteringIntervalMs);
-        }
-
         const requestedVersion: 'v1' | 'v2' =
           overrideOptions.apiVersion ?? live.apiVersion ?? 'v1';
 
@@ -598,13 +613,81 @@ export function useDeepgramSpeechToText({
           ...overrideOptions,
         };
 
-        targetSampleRateRef.current =
+        // Derive the native capture rate from the session config. Rates the
+        // native recorders support are captured directly; anything else keeps
+        // the 16 kHz base capture (lower rates are downsampled in JS).
+        const requestedTarget =
           typeof merged.sampleRate === 'number' && merged.sampleRate > 0
             ? merged.sampleRate
             : DEFAULT_SAMPLE_RATE;
+        const wantsNativeRate = (
+          SUPPORTED_CAPTURE_SAMPLE_RATES as readonly number[]
+        ).includes(requestedTarget);
+        const requestedCaptureRate = (
+          wantsNativeRate ? requestedTarget : BASE_NATIVE_SAMPLE_RATE
+        ) as 16000 | 24000 | 48000;
+
+        const rtf = recordToFileRef.current;
+        if (trackState) {
+          setInternalRecordingUri(undefined);
+        }
+        const recordingResult = await Deepgram.startRecording({
+          sampleRate: requestedCaptureRate,
+          ...(rtf.enabled === true
+            ? {
+                recordToFile: {
+                  enabled: true,
+                  path: rtf.path,
+                  format: rtf.format,
+                },
+              }
+            : {}),
+        });
+
+        if (!hasAuthConfigured()) throw new Error('Deepgram API key missing');
+
+        const silenceCfg = silenceRef.current;
+        const silenceGate = silenceCfg?.gate === true;
+        const silenceAutoStopMs =
+          typeof silenceCfg?.autoStopMs === 'number' &&
+          silenceCfg.autoStopMs > 0
+            ? silenceCfg.autoStopMs
+            : 0;
+        const silenceActive = silenceGate || silenceAutoStopMs > 0;
+        const silenceThreshold =
+          typeof silenceCfg?.threshold === 'number' &&
+          Number.isFinite(silenceCfg.threshold)
+            ? Math.min(1, Math.max(0, silenceCfg.threshold))
+            : DEFAULT_SILENCE_THRESHOLD;
+        const silenceHangoverMs =
+          typeof silenceCfg?.hangoverMs === 'number' &&
+          silenceCfg.hangoverMs >= 0
+            ? silenceCfg.hangoverMs
+            : DEFAULT_SILENCE_HANGOVER_MS;
+
+        // Silence tracking needs level events even when the app did not ask
+        // for metering; closeResources() restores metering to off either way.
+        if (meteringEnabled || silenceActive) {
+          Deepgram.setMeteringEnabled?.(true, meteringIntervalMs);
+        }
+
+        // The native module reports the capture rate it actually achieved (it
+        // falls back to 16 kHz when the device rejects a rate); never send a
+        // sample_rate query param that differs from the audio we stream.
+        const actualCaptureRate =
+          typeof recordingResult?.sampleRate === 'number' &&
+          recordingResult.sampleRate > 0
+            ? recordingResult.sampleRate
+            : requestedCaptureRate;
+        nativeInputSampleRateRef.current = actualCaptureRate;
+        const effectiveSampleRate = Math.min(
+          requestedTarget,
+          actualCaptureRate
+        );
+        targetSampleRateRef.current = effectiveSampleRate;
         downsampleFactorRef.current = computeDownsampleFactor(
-          targetSampleRateRef.current,
-          nativeInputSampleRateRef.current
+          effectiveSampleRate,
+          actualCaptureRate
         );
 
         const isV2 = merged.apiVersion === 'v2';
@@ -631,7 +714,7 @@ export function useDeepgramSpeechToText({
           ? {
               model: merged.model,
               encoding: merged.encoding,
-              sample_rate: merged.sampleRate,
+              sample_rate: effectiveSampleRate,
               eager_eot_threshold: merged.eagerEotThreshold,
               eot_threshold: merged.eotThreshold,
               eot_timeout_ms: merged.eotTimeoutMs,
@@ -665,7 +748,7 @@ export function useDeepgramSpeechToText({
               profanity_filter: merged.profanityFilter,
               punctuate: merged.punctuate,
               replace: merged.replace,
-              sample_rate: merged.sampleRate,
+              sample_rate: effectiveSampleRate,
               search: merged.search,
               smart_format: merged.smartFormat,
               tag: merged.tag,
@@ -722,7 +805,7 @@ export function useDeepgramSpeechToText({
               return;
             }
             interruptedRef.current = false;
-            if (!pausedRef.current) {
+            if (!pausedRef.current && !gatedRef.current) {
               stopKeepAlive();
             }
           } else {
@@ -734,7 +817,7 @@ export function useDeepgramSpeechToText({
         });
 
         audioSub.current = getEmitter().addListener(AUDIO_EVENT, (ev: any) => {
-          if (pausedRef.current) {
+          if (pausedRef.current || gatedRef.current) {
             statsRef.current.framesDropped += 1;
             statsDirtyRef.current = true;
             return;
@@ -771,7 +854,7 @@ export function useDeepgramSpeechToText({
           }
         });
 
-        if (meteringEnabled) {
+        if (meteringEnabled || silenceActive) {
           meterSub.current = getEmitter().addListener(
             AUDIO_LEVEL_EVENT,
             (ev: any) => {
@@ -779,10 +862,71 @@ export function useDeepgramSpeechToText({
                 typeof ev?.level === 'number' && Number.isFinite(ev.level)
                   ? ev.level
                   : 0;
-              if (trackState) {
-                setInternalAudioLevel(level);
+              if (meteringEnabled) {
+                if (trackState) {
+                  setInternalAudioLevel(level);
+                }
+                onAudioLevelRef.current(level);
               }
-              onAudioLevelRef.current(level);
+
+              if (!silenceActive) {
+                return;
+              }
+
+              const now = Date.now();
+              if (level > silenceThreshold) {
+                silenceBelowSinceRef.current = null;
+                if (silenceAutoStopTimerRef.current != null) {
+                  clearTimeout(silenceAutoStopTimerRef.current);
+                  silenceAutoStopTimerRef.current = null;
+                }
+                if (silentRef.current) {
+                  silentRef.current = false;
+                  if (gatedRef.current) {
+                    gatedRef.current = false;
+                    // A user pause or system interruption still owns KeepAlive.
+                    if (!pausedRef.current && !interruptedRef.current) {
+                      stopKeepAlive();
+                    }
+                  }
+                  onSilenceChangeRef.current?.(false);
+                }
+                return;
+              }
+
+              if (silenceBelowSinceRef.current == null) {
+                silenceBelowSinceRef.current = now;
+                if (silenceAutoStopMs > 0) {
+                  const silentSince = now;
+                  silenceAutoStopTimerRef.current = setTimeout(() => {
+                    silenceAutoStopTimerRef.current = null;
+                    if (silenceBelowSinceRef.current === silentSince) {
+                      stopListeningRef.current();
+                    }
+                  }, silenceAutoStopMs);
+                }
+              }
+              if (
+                !silentRef.current &&
+                now - silenceBelowSinceRef.current >= silenceHangoverMs
+              ) {
+                silentRef.current = true;
+                if (silenceGate) {
+                  gatedRef.current = true;
+                  // Flush buffered audio into finals (Flux is turn-based and
+                  // has no Finalize control message).
+                  if (
+                    apiVersionRef.current !== 'v2' &&
+                    ws.current?.readyState === WebSocket.OPEN
+                  ) {
+                    try {
+                      ws.current.send(JSON.stringify({ type: 'Finalize' }));
+                    } catch {}
+                  }
+                  startKeepAlive();
+                }
+                onSilenceChangeRef.current?.(true);
+              }
             }
           );
         }
@@ -830,6 +974,8 @@ export function useDeepgramSpeechToText({
     }
   }, [closeResources, trackState, fireEnd]);
 
+  stopListeningRef.current = stopListening;
+
   const pause = useCallback(() => {
     if (pausedRef.current) {
       return;
@@ -862,8 +1008,9 @@ export function useDeepgramSpeechToText({
     }
     pausedRef.current = false;
 
-    // A system interruption may still hold the mic; keep KeepAlive until it ends.
-    if (!interruptedRef.current) {
+    // A system interruption may still hold the mic, and silence gating may
+    // still be holding the socket open; keep KeepAlive until both clear.
+    if (!interruptedRef.current && !gatedRef.current) {
       stopKeepAlive();
     }
 

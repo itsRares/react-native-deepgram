@@ -584,7 +584,6 @@ export function useDeepgramTextToSpeech({
         });
         const socket = ws.current as WebSocket;
 
-        // Ensure WebSocket receives binary data as ArrayBuffer
         socket.binaryType = 'arraybuffer';
 
         socket.onopen = () => {

@@ -590,6 +590,7 @@ const {
 | `defaultSettings` | `DeepgramVoiceAgentSettings` | – | Base `Settings` payload sent on connect; merge per-call overrides via `connect(override)`. |
 | `autoStartMicrophone` | `boolean` | `true` | Automatically requests mic access and starts streaming PCM. |
 | `autoPlayAudio` | `boolean` | `true` | Plays received audio using the native player. |
+| `bargeIn` | `boolean` | `false` | Flush the agent's queued playback when the server reports `UserStartedSpeaking`, so the agent audibly stops when the user talks over it. Only flushes while agent audio is actually playing and the mic is not muted; the player stays usable for the next agent turn. Requires `autoPlayAudio`. Barge-in depends on hardware echo cancellation — test on a physical device (simulators have no VPIO, so the agent's own audio can trigger the VAD). |
 | `downsampleFactor` | `number` | heuristic | Manually override the downsample ratio applied to captured audio. |
 | `reconnect` | `DeepgramReconnectOptions` | `{ enabled: false }` | Auto-reconnect config for the agent socket. The stored `Settings` payload is re-sent on every successful reconnect. |
 
@@ -614,6 +615,7 @@ const {
 | `onError` | `(error: unknown) => void` | Unexpected client-side error (mic, playback, socket send). |
 | `onReconnecting` | `(attempt: number) => void` | A reconnect attempt begins (1-based attempt number). Requires `reconnect.enabled`. |
 | `onReconnected` | `() => void` | The socket reconnects and the stored settings are re-sent. |
+| `onBargeIn` | `() => void` | A `bargeIn` flush actually happened (agent audio was cut short by the user speaking). |
 | `onServerError` | `(message: DeepgramVoiceAgentErrorMessage) => void` | API reports a structured error (`description` + `code`). |
 | `onWarning` | `(message: DeepgramVoiceAgentWarningMessage) => void` | Non-fatal warning (e.g. degraded audio quality). |
 
@@ -1526,6 +1528,51 @@ const pick = async () => {
     await transcribeFile(f, { summarize: 'v2', topics: true, intents: true });
   }
 };
+```
+
+### Generate subtitles from a transcription
+
+`toSRT` / `toWebVTT` turn a raw pre-recorded `/listen` response into a
+subtitle document — zero dependencies, pure functions. Request
+`utterances: true` for the best cue boundaries (the helpers fall back to
+word-level chunking otherwise), and pass `speakerLabels: true` alongside
+`diarize: true` to prefix cues with `Speaker N:`.
+
+```tsx
+import { toSRT, toWebVTT } from 'react-native-deepgram';
+import type { DeepgramPrerecordedResponse } from 'react-native-deepgram';
+
+const res = await fetch(
+  'https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&utterances=true&diarize=true',
+  {
+    method: 'POST',
+    headers: {
+      'Authorization': `Token ${DEEPGRAM_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ url: 'https://dpgr.am/spacewalk.wav' }),
+  }
+);
+const response: DeepgramPrerecordedResponse = await res.json();
+
+const srt = toSRT(response, { lineLength: 32, lineCount: 2 });
+const vtt = toWebVTT(response, { speakerLabels: true });
+```
+
+### Split a transcript by speaker
+
+`toSpeakerSegments` folds the word-level diarization data of a response
+requested with `diarize: true` into per-speaker segments (it returns `[]`
+when diarization wasn't requested). Pairs naturally with the caption
+helpers' `speakerLabels` option above.
+
+```tsx
+import { toSpeakerSegments } from 'react-native-deepgram';
+
+const segments = toSpeakerSegments(response); // same response as above
+segments.forEach(({ speaker, text, start, end, confidence }) => {
+  console.log(`[${start}s–${end}s] Speaker ${speaker} (${confidence}): ${text}`);
+});
 ```
 
 ### Record the mic to a file while transcribing

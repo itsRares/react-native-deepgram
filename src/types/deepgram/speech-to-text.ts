@@ -3,6 +3,7 @@ import type {
   DeepgramCustomMode,
   DeepgramReconnectOptions,
 } from './shared';
+import type { SessionStats } from './stats';
 import type { DeepgramInterruptionEvent } from '../../interruption';
 
 /**
@@ -354,6 +355,84 @@ export type DeepgramPrerecordedSource =
   | string;
 
 /**
+ * A single word in a pre-recorded transcription response, with timing and
+ * optional punctuation/diarization metadata.
+ */
+export type DeepgramPrerecordedWord = {
+  /** The raw transcribed word. */
+  word: string;
+  /** Word start time, in seconds. */
+  start: number;
+  /** Word end time, in seconds. */
+  end: number;
+  /** Model confidence for the word (0..1). */
+  confidence?: number;
+  /** Punctuated/formatted word (present with `punctuate`/`smartFormat`). */
+  punctuated_word?: string;
+  /** Speaker index (present with `diarize`). */
+  speaker?: number;
+  /** Speaker attribution confidence (present with `diarize`). */
+  speaker_confidence?: number;
+};
+
+/**
+ * A single utterance in a pre-recorded transcription response
+ * (present when `utterances: true` was requested).
+ */
+export type DeepgramPrerecordedUtterance = {
+  /** Utterance start time, in seconds. */
+  start: number;
+  /** Utterance end time, in seconds. */
+  end: number;
+  /** Model confidence for the utterance (0..1). */
+  confidence?: number;
+  /** Audio channel the utterance was spoken on. */
+  channel?: number;
+  /** Punctuated transcript of the utterance. */
+  transcript: string;
+  /** Word-level detail for the utterance. */
+  words?: DeepgramPrerecordedWord[];
+  /** Speaker index (present with `diarize`). */
+  speaker?: number;
+  /** Unique identifier of the utterance. */
+  id?: string;
+};
+
+/**
+ * A transcription alternative for a channel in a pre-recorded response.
+ */
+export type DeepgramPrerecordedAlternative = {
+  /** Full transcript for the channel. */
+  transcript?: string;
+  /** Model confidence for the transcript (0..1). */
+  confidence?: number;
+  /** Word-level detail. */
+  words?: DeepgramPrerecordedWord[];
+};
+
+/**
+ * A single audio channel in a pre-recorded response.
+ */
+export type DeepgramPrerecordedChannel = {
+  alternatives?: DeepgramPrerecordedAlternative[];
+};
+
+/**
+ * Shape of a Deepgram pre-recorded (`/listen`) transcription response, as
+ * consumed by the caption ({@link toSRT} / {@link toWebVTT}) and diarization
+ * ({@link toSpeakerSegments}) helpers. Structural and intentionally loose —
+ * pass the parsed JSON response straight in.
+ * @see https://developers.deepgram.com/docs/pre-recorded-audio
+ */
+export type DeepgramPrerecordedResponse = {
+  metadata?: Record<string, unknown>;
+  results?: {
+    channels?: DeepgramPrerecordedChannel[];
+    utterances?: DeepgramPrerecordedUtterance[];
+  };
+};
+
+/**
  * Event data accompanying a transcript update.
  */
 export type DeepgramTranscriptEvent = {
@@ -402,6 +481,14 @@ export type UseDeepgramSpeechToTextProps = {
 
   /** Automatically accumulate transcript results. @default false */
   trackTranscript?: boolean;
+
+  /**
+   * Publish live session telemetry via the hook's `stats` return value,
+   * throttled to at most one state update per second. The imperative
+   * {@link UseDeepgramSpeechToTextReturn.getStats} snapshot is always
+   * available regardless of this flag. @default false
+   */
+  trackStats?: boolean;
 
   /**
    * Microphone audio-level (metering) configuration. When enabled the native
@@ -482,6 +569,11 @@ export type UseDeepgramSpeechToTextReturn = {
   pause: () => void;
   /** Resume streaming after {@link pause}: forward mic frames again. */
   resume: () => void;
+  /**
+   * Imperative snapshot of the current session telemetry counters. Always
+   * available (no re-renders); returns a fresh object on every call.
+   */
+  getStats: () => SessionStats;
   /** Current state of the transcription session (if trackState is enabled) */
   state?: {
     status: 'idle' | 'loading' | 'listening' | 'transcribing' | 'error';
@@ -505,4 +597,9 @@ export type UseDeepgramSpeechToTextReturn = {
   transcript?: string;
   /** Interim/partial transcript (only returned when trackTranscript is enabled for live) */
   interimTranscript?: string;
+  /**
+   * Live session telemetry, published at most once per second. Only returned
+   * when `trackStats` is enabled.
+   */
+  stats?: SessionStats;
 };

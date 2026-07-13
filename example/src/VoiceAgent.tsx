@@ -47,6 +47,13 @@ const SAMPLE_RATE_OPTIONS = [
   { label: '8 kHz (lower quality)', value: '8000' },
 ];
 
+const formatBytes = (n: number) =>
+  n < 1024
+    ? `${n} B`
+    : n < 1024 * 1024
+      ? `${(n / 1024).toFixed(1)} KB`
+      : `${(n / (1024 * 1024)).toFixed(1)} MB`;
+
 export default function VoiceAgent() {
   const [language, setLanguage] = useState('en');
   const [listenModel, setListenModel] = useState('nova-3');
@@ -57,6 +64,8 @@ export default function VoiceAgent() {
   );
   const [tagsInput, setTagsInput] = useState('demo');
   const [autoStartMic, setAutoStartMic] = useState(true);
+  const [bargeInEnabled, setBargeInEnabled] = useState(true);
+  const [bargeInCount, setBargeInCount] = useState(0);
   const [inputSampleRate, setInputSampleRate] = useState('16000');
   const [temperature, setTemperature] = useState('0.7');
   const [customMessage, setCustomMessage] = useState('');
@@ -67,9 +76,8 @@ export default function VoiceAgent() {
   const [requestedRoute, setRequestedRoute] =
     useState<DeepgramAudioRoute>('auto');
 
-  // Track the actual output route (updates on headset plug/unplug, Bluetooth
-  // connect/disconnect and speaker ↔ earpiece switches — including switches
-  // made by the user outside the app).
+  // Track the actual output route (headset plug/unplug, Bluetooth, speaker ↔
+  // earpiece — including switches made outside the app).
   useEffect(() => {
     let mounted = true;
     getAudioRoute()
@@ -133,6 +141,7 @@ export default function VoiceAgent() {
     conversation,
     agentStatus,
     isMuted,
+    stats,
   } = useDeepgramVoiceAgent({
     defaultSettings: agentSettings,
     autoStartMicrophone: autoStartMic,
@@ -140,6 +149,11 @@ export default function VoiceAgent() {
     trackState: true,
     trackConversation: true,
     trackAgentStatus: true,
+    trackStats: true,
+    bargeIn: bargeInEnabled,
+    onBargeIn: () => {
+      setBargeInCount((count) => count + 1);
+    },
     reconnect: { enabled: true },
     onReconnecting: (attempt) => {
       setReconnectAttempt(attempt);
@@ -195,6 +209,7 @@ export default function VoiceAgent() {
     try {
       setReconnectAttempt(null);
       setErrorCode(null);
+      setBargeInCount(0);
       await connect();
     } catch (err) {
       console.error('Start agent failed', err);
@@ -358,6 +373,21 @@ export default function VoiceAgent() {
                 ↻ Auto-reconnect
               </Text>
             </View>
+            <View
+              style={[
+                styles.capabilityChip,
+                bargeInEnabled && styles.capabilityChipActive,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.capabilityChipText,
+                  bargeInEnabled && styles.capabilityChipTextActive,
+                ]}
+              >
+                ✂️ Barge-in
+              </Text>
+            </View>
             <View style={styles.capabilityChip}>
               <Text style={styles.capabilityChipText}>✎ Live updates</Text>
             </View>
@@ -455,6 +485,68 @@ export default function VoiceAgent() {
             Routing is best-effort: a wired headset always wins and Bluetooth
             only engages when a headset is connected.
           </Text>
+        </Card>
+
+        {/* Barge-in & session stats (2.4.0) */}
+        <Card
+          title="Barge-in & session stats"
+          subtitle="Interrupt the agent by talking over it · live telemetry"
+        >
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>
+              Barge-in (flush agent audio when you speak)
+            </Text>
+            <Switch
+              value={bargeInEnabled}
+              onValueChange={setBargeInEnabled}
+              thumbColor={bargeInEnabled ? colors.primary : '#888'}
+              trackColor={{
+                false: colors.surfaceMuted,
+                true: colors.primaryMuted,
+              }}
+            />
+          </View>
+          <Text style={styles.routeHint}>
+            While the agent is speaking, start talking — its audio stops
+            immediately instead of finishing the sentence. Barge-ins so far:{' '}
+            {bargeInCount}. Needs hardware echo cancellation, so test on a
+            physical device (simulators have no VPIO).
+          </Text>
+
+          <View style={styles.statsGrid}>
+            <View style={styles.statCell}>
+              <Text style={styles.statValue}>
+                {formatBytes(stats?.bytesSent ?? 0)}
+              </Text>
+              <Text style={styles.statLabel}>Mic sent</Text>
+            </View>
+            <View style={styles.statCell}>
+              <Text style={styles.statValue}>
+                {formatBytes(stats?.bytesReceived ?? 0)}
+              </Text>
+              <Text style={styles.statLabel}>Agent audio</Text>
+            </View>
+            <View style={styles.statCell}>
+              <Text style={styles.statValue}>{stats?.framesDropped ?? 0}</Text>
+              <Text style={styles.statLabel}>Frames dropped</Text>
+            </View>
+            <View style={styles.statCell}>
+              <Text style={styles.statValue}>{stats?.reconnects ?? 0}</Text>
+              <Text style={styles.statLabel}>Reconnects</Text>
+            </View>
+            <View style={styles.statCell}>
+              <Text style={styles.statValue}>
+                {stats?.firstResultMs != null
+                  ? `${stats.firstResultMs} ms`
+                  : '—'}
+              </Text>
+              <Text style={styles.statLabel}>First audio</Text>
+            </View>
+            <View style={styles.statCell}>
+              <Text style={styles.statValue}>{bargeInCount}</Text>
+              <Text style={styles.statLabel}>Barge-ins</Text>
+            </View>
+          </View>
         </Card>
 
         {/* Conversation */}
@@ -824,6 +916,32 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     ...type.small,
     marginTop: spacing.sm,
+  },
+  statsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+  },
+  statCell: {
+    flexBasis: '30%',
+    flexGrow: 1,
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+    alignItems: 'center',
+  },
+  statValue: {
+    ...type.smallMedium,
+    color: colors.text,
+  },
+  statLabel: {
+    ...type.small,
+    color: colors.textMuted,
+    fontSize: 11,
+    marginTop: 2,
   },
   conversation: {
     maxHeight: 320,

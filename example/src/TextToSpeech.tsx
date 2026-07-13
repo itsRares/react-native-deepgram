@@ -295,18 +295,17 @@ export default function TextToSpeech() {
     try {
       const startedAt = Date.now();
       // The in-app HTTP player only decodes linear16 PCM, so this screen
-      // defaults to raw PCM — which has no container and isn't a self-contained
-      // file (you'd get a .pcm most apps can't open). For the export we upgrade
-      // raw PCM to a portable MP3; a real container/codec is saved as-is.
+      // defaults to raw PCM. Raw PCM isn't a self-contained file, so exports
+      // upgrade it to MP3; a real container/codec is saved as-is.
       const isRawPcm =
         (!httpEncodingValue ||
           httpEncodingValue === 'linear16' ||
           httpEncodingValue === 'mulaw' ||
           httpEncodingValue === 'alaw') &&
         httpContainerValue !== 'wav';
-      // synthesizeToBytes returns the audio WITHOUT playing it, so it's the
-      // right call for saving/caching. Identical prompts hit the in-memory LRU.
-      // mp3 takes only encoding + bit_rate (container/sample_rate are N/A).
+      // synthesizeToBytes returns audio without playing it — right call for
+      // saving/caching (identical prompts hit the in-memory LRU). mp3 takes
+      // only encoding + bit_rate.
       const { data, mimeType } = await synthesizeToBytes(
         text,
         isRawPcm

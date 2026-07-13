@@ -142,14 +142,11 @@ RCT_EXPORT_MODULE();
   self.appIsActive = YES;
 
   if (_recordState.isRunning || self.isPlaying || self.engineCaptureActive) {
-    // Siri (and some call flows) regularly ends an interruption WITHOUT ever
-    // posting AVAudioSessionInterruptionTypeEnded; becoming active again is
-    // the only reliable signal that the hardware is coming back. Clear the
-    // interruption flag and run the full retrying resume — a bare setActive:
-    // would leave the paused AudioQueue / stopped AVAudioEngine dead. If an
-    // interruption is actually still ongoing (user returned to the app
-    // mid-call), activation fails, the retries burn out harmlessly, and the
-    // real interruption-ended notification resumes later.
+    // Siri regularly ends an interruption WITHOUT posting an Ended
+    // notification; becoming active again is the only reliable signal. Clear
+    // the flag and run the retrying resume — a bare setActive: would leave
+    // the paused queue / stopped engine dead. If an interruption is still
+    // live, the retries burn out harmlessly and the real Ended resumes later.
     DGLogDebug(@"[Deepgram] handleAppDidBecomeActive: resuming session");
     self.sessionInterrupted = NO;
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -644,11 +641,9 @@ RCT_EXPORT_METHOD(setMeteringEnabled : (BOOL)enabled intervalMs : (nonnull NSNum
 }
 
 /**
- * Request a preferred output route for playback (`speaker` / `earpiece` /
- * `bluetooth` / `auto`). Best-effort and device-dependent: the OS can
- * override the request (a wired headset always wins) and `bluetooth` only
- * engages when a compatible headset is connected. Implementation lives in
- * Deepgram+AudioSession.mm (`applyAudioRoute:error:`).
+ * Request a preferred output route (`speaker` / `earpiece` / `bluetooth` /
+ * `auto`). Best-effort: the OS can override (a wired headset always wins).
+ * Implementation in Deepgram+AudioSession.mm (`applyAudioRoute:error:`).
  */
 RCT_EXPORT_METHOD(setAudioRoute : (NSString *)route resolver : (
     RCTPromiseResolveBlock)resolve rejecter : (RCTPromiseRejectBlock)reject) {
@@ -681,9 +676,8 @@ RCT_EXPORT_METHOD(setAudioRoute : (NSString *)route resolver : (
 }
 
 /**
- * Resolve the output route the system is currently using (`speaker` /
- * `earpiece` / `bluetooth` / `wired`). Reflects the *actual* route, which may
- * differ from the last `setAudioRoute` request.
+ * Resolve the output route the system is actually using (`speaker` /
+ * `earpiece` / `bluetooth` / `wired`) — may differ from the last request.
  */
 RCT_EXPORT_METHOD(getAudioRoute : (RCTPromiseResolveBlock)
                       resolve rejecter : (RCTPromiseRejectBlock)reject) {

@@ -15,7 +15,7 @@ yarn add react-native-deepgram
 | --- | --- |
 | 🗣️ **Voice Agent** | Full-duplex agents over Deepgram's WebSocket. Hardware AEC on iOS (VPIO) and Android (`VOICE_COMMUNICATION` + `MODE_IN_COMMUNICATION`). Function calling, prompt updates, latency telemetry. |
 | 🎙️ **Speech-to-Text** | Live PCM streaming over WebSocket on STT v1 *or* Flux v2 (`flux-general-en`). File transcription with summarisation, topics, intents, entities. Optionally record the mic to a WAV file while you stream. |
-| 🔊 **Text-to-Speech** | One-shot HTTP synthesis or low-latency WebSocket streaming with `Speak` / `Flush` / `Clear` / `Close` controls. |
+| 🔊 **Text-to-Speech** | One-shot HTTP synthesis or low-latency WebSocket streaming for Aura and Flux TTS voices, with `Flush` / `Clear` / `Close` controls and Flux barge-in (`interrupt()`). |
 | 🧠 **Text Intelligence** | Summaries, topics, intents, sentiment over text or URLs. |
 | 🛠️ **Management API** | Typed wrapper for projects, models, keys, usage, balances, members, invitations, scopes, purchases, and temporary tokens. |
 | ⚙️ **Expo plugin** | One-line install — handles permissions, background-audio modes, and Android foreground service automatically. |
@@ -29,20 +29,21 @@ yarn add react-native-deepgram
 1. [Quick start (5 minutes)](#quick-start-5-minutes)
 2. [Requirements](#requirements)
 3. [Installation](#installation)
-4. [Core concepts](#core-concepts)
-5. [Audio session, AEC & background](#audio-session-aec--background)
-6. [Voice Agent](#voice-agent-usedeepgramvoiceagent)
-7. [Speech-to-Text](#speech-to-text-usedeepgramspeechtotext)
-8. [Text-to-Speech](#text-to-speech-usedeepgramtexttospeech)
-9. [Text Intelligence](#text-intelligence-usedeepgramtextintelligence)
-10. [Management API](#management-api-usedeepgrammanagement)
-11. [Expo config plugin reference](#expo-config-plugin-reference)
-12. [Common recipes](#common-recipes)
-13. [Troubleshooting](#troubleshooting)
-14. [Example app](#example-app)
-15. [Roadmap](#roadmap)
-16. [Contributing](#contributing)
-17. [License](#license)
+4. [Migrating from 2.x](#migrating-from-2x)
+5. [Core concepts](#core-concepts)
+6. [Audio session, AEC & background](#audio-session-aec--background)
+7. [Voice Agent](#voice-agent-usedeepgramvoiceagent)
+8. [Speech-to-Text](#speech-to-text-usedeepgramspeechtotext)
+9. [Text-to-Speech](#text-to-speech-usedeepgramtexttospeech)
+10. [Text Intelligence](#text-intelligence-usedeepgramtextintelligence)
+11. [Management API](#management-api-usedeepgrammanagement)
+12. [Expo config plugin reference](#expo-config-plugin-reference)
+13. [Common recipes](#common-recipes)
+14. [Troubleshooting](#troubleshooting)
+15. [Example app](#example-app)
+16. [Roadmap](#roadmap)
+17. [Contributing](#contributing)
+18. [License](#license)
 
 ---
 
@@ -160,9 +161,9 @@ That's a working, low-latency conversational agent with hardware echo cancellati
 | Node | 18 |
 | React | 19.0 |
 | React Native | 0.80 (New Architecture) |
-| iOS | 13 (15+ recommended for VPIO AEC) |
+| iOS | 15.1 (React Native's minimum) |
 | Android | API 24 (Android 7.0) |
-| Xcode | 15+ if building against the iOS 17 SDK |
+| Xcode | 16.1 (React Native 0.80's minimum) |
 
 > The native module is a TurboModule and requires the New Architecture (the default since React Native 0.76). The legacy architecture is no longer supported as of 3.0.
 
@@ -216,6 +217,47 @@ npx expo run:ios   # or expo run:android
 ```
 
 > Already running an existing development build? Re-run `expo prebuild` (and `pod install` on iOS) so the new permissions, background modes, and Android foreground service are picked up.
+
+---
+
+## Migrating from 2.x
+
+3.0 drops the legacy architecture and the APIs that were deprecated in 2.x. After upgrading, rebuild the native app (`npx expo prebuild --clean` or `pod install`) — a JS-only reload is not enough.
+
+**Platform**
+
+- React Native 0.80+, React 19 and the New Architecture are required.
+- The package is ESM-only; deep imports from `react-native-deepgram/lib/commonjs` no longer exist.
+- If you listened to native device events directly (`DeepgramAudioPCM` / `AudioChunk`, `DeepgramAudioLevel`, `DeepgramRouteChange`, `DeepgramInterruption`) or called `NativeModules.Deepgram` / `MicPermission`, use the typed `Deepgram` export instead: `Deepgram.onAudioPCM`, `onAudioLevel`, `onAudioRouteChange`, `onAudioInterruption` and `Deepgram.requestRecordPermission()`. `addAudioRouteChangeListener` and `addInterruptionListener` are unchanged.
+- `Deepgram.stopPlayer()` now returns a promise.
+
+**Speech-to-Text**
+
+| 2.x | 3.0 |
+| --- | --- |
+| `diarize: true` | `diarizeModel: 'latest'` |
+
+**Text-to-Speech**
+
+| 2.x | 3.0 |
+| --- | --- |
+| `options: { model, encoding, sampleRate, speed, mipOptOut }` | `options: { http: { … }, stream: { … } }` (set per transport) |
+| `options: { bitRate, container, tag, callback, callbackMethod }` | `options: { http: { … } }` |
+| `options.format` / `http.format` | `http.container` |
+| `sendMessage({ type: 'Text', text })` | `sendMessage({ type: 'Speak', text })` or `sendText(text)` |
+| `DeepgramTextToSpeechEncoding` | `DeepgramTextToSpeechHttpEncoding` / `DeepgramTextToSpeechStreamEncoding` |
+
+`synthesize()` only plays raw `linear16` output (the default) and respects `autoPlayAudio`; compressed formats are returned without playback.
+
+**Voice Agent**
+
+| 2.x | 3.0 |
+| --- | --- |
+| `agent.language` | `agent.listen.provider.language` (Deepgram voices take the language from the model name) |
+| `audio.input.sample_rate` above 16000 | Capped at 16000, the microphone capture rate |
+| `injectAgentMessage(message, 'queue')` | Unchanged, or `injectAgentMessage(message, { behavior, dynamic })` |
+
+See the [changelog](./CHANGELOG.md) for the full list, including the new Flux, Configure and Voice Agent APIs.
 
 ---
 
@@ -606,6 +648,7 @@ const {
 | `trackState` | `false` | `state` return — connection status, error, warning. |
 | `trackConversation` | `false` | `conversation` return — running history of `{ role, content }`. |
 | `trackAgentStatus` | `false` | `agentStatus` return — thinking flag and latency metrics. |
+| `trackStats` | `false` | `stats` return — session telemetry, updated at most once per second. |
 
 #### Callbacks
 
@@ -639,6 +682,7 @@ const {
 | `onAgentStartedSpeaking` | `(message: DeepgramVoiceAgentAgentStartedSpeakingMessage) => void` | Response playback session begins (latency metrics included). |
 | `onAgentAudioDone` | `(message: DeepgramVoiceAgentAgentAudioDoneMessage) => void` | Agent finishes emitting audio for a turn. |
 | `onAudio` | `(audioData: ArrayBuffer) => void` | Raw binary audio chunk received from the socket. |
+| `onAudioConfig` | `(message: DeepgramVoiceAgentAudioConfigMessage) => void` | The server announces the output audio format (the native player is restarted at that rate). |
 | `onPromptUpdated` | `(message: DeepgramVoiceAgentPromptUpdatedMessage) => void` | Active prompt is updated (e.g. after `updatePrompt`). |
 | `onSpeakUpdated` | `(message: DeepgramVoiceAgentSpeakUpdatedMessage) => void` | Active speak configuration changes (server-driven). |
 | `onListenUpdated` | `(message: DeepgramVoiceAgentListenUpdatedMessage) => void` | Listen configuration is updated (e.g. after `updateListen`). |
@@ -675,6 +719,7 @@ const {
 | `isConnected` | `() => boolean` | Returns `true` when the socket is open. |
 | `mute` | `() => void` | Stops forwarding mic audio while keeping the socket alive with periodic `KeepAlive` frames. |
 | `unmute` | `() => void` | Resumes forwarding microphone audio. |
+| `getStats` | `() => SessionStats` | Snapshot of the session telemetry (always available, never re-renders). |
 
 **Messaging**
 
@@ -710,6 +755,7 @@ Each value is `undefined` unless its corresponding `track*` flag is `true`.
 | `conversation` | `Array<{ role: string; content: string }>` | `trackConversation: true` |
 | `agentStatus` | `{ thinking: string \| null; latency: { total?: number; tts?: number; ttt?: number } \| null }` | `trackAgentStatus: true` |
 | `clearConversation` | `() => void` | `trackConversation: true` |
+| `stats` | `SessionStats` (`bytesSent`, `bytesReceived`, `framesDropped`, `reconnects`, `connectedAtMs`, `firstResultMs`) | `trackStats: true` |
 
 #### Settings payload (`DeepgramVoiceAgentSettings`)
 
@@ -849,6 +895,7 @@ const {
 | ---- | ------- | ------- |
 | `trackState` | `false` | `state` return — status + last error. |
 | `trackTranscript` | `false` | `transcript` and `interimTranscript` returns. |
+| `trackStats` | `false` | `stats` return — session telemetry, updated at most once per second. |
 
 #### Returned methods
 
@@ -860,6 +907,7 @@ const {
 | `resume` | `() => void` | Resumes mic streaming after a `pause`. |
 | `configure` | `(options: DeepgramLiveConfigureOptions) => boolean` | Updates `keyterms` and `numerals` (Nova-3 and Flux) or Flux turn thresholds and `languageHints` mid-stream. The server replies with `ConfigureSuccess` / `ConfigureFailure` via `onMessage`. |
 | `forceEndTurn` | `() => boolean` | Flux only: ends the current turn now (e.g. push-to-talk release). |
+| `getStats` | `() => SessionStats` | Snapshot of the session telemetry (always available, never re-renders). |
 | `transcribeFile` | `(file: DeepgramPrerecordedSource, options?: DeepgramPrerecordedOptions) => Promise<void>` | Uploads a file/URI/URL and resolves via the success/error callbacks. |
 
 #### Reactive state
@@ -872,6 +920,7 @@ const {
 | `recordingUri` | `string` (last saved `file://` WAV) | `trackState: true` + `recordToFile.enabled` |
 | `transcript` | `string` | `trackTranscript: true` |
 | `interimTranscript` | `string` | `trackTranscript: true` |
+| `stats` | `SessionStats` (`bytesSent`, `bytesReceived`, `framesDropped`, `reconnects`, `connectedAtMs`, `firstResultMs`) | `trackStats: true` |
 
 #### Live transcription options (`DeepgramLiveListenOptions`)
 
@@ -1940,6 +1989,8 @@ If the app gets into a weird state, `yarn example:clean` wipes the generated nat
 - ✅ Speech-to-Text (WebSocket + REST)
 - ✅ Speech-to-Text v2 / Flux streaming support
 - ✅ Text-to-Speech (HTTP synthesis + WebSocket streaming)
+- ✅ Flux TTS (`/v2/speak`) with interrupt and mid-stream configure
+- ✅ New Architecture TurboModule with typed native events
 - ✅ Text Intelligence (summaries, topics, sentiment, intents)
 - ✅ Management API wrapper
 - ✅ Hardware echo cancellation (iOS VPIO + Android `VOICE_COMMUNICATION`)

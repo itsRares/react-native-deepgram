@@ -813,6 +813,8 @@ const {
 | `onBeforeStart` | `() => void` | Before requesting mic permissions or starting a stream. |
 | `onStart` | `() => void` | The WebSocket opens. |
 | `onTranscript` | `(transcript: string, event?: DeepgramTranscriptEvent) => void` | Every transcript update (partial and final). |
+| `onTurnInfo` | `(message: DeepgramFluxTurnInfo) => void` | Every Flux (v2) `TurnInfo` event, including `StartOfTurn`, `EagerEndOfTurn` and `TurnResumed`. |
+| `onMessage` | `(message: DeepgramListenServerMessage) => void` | Every JSON message from the live socket (`Results`, `UtteranceEnd`, `ConfigureSuccess`, `ConfigureFailure`, `Warning`, ...). |
 | `onError` | `(error: unknown) => void` | A streaming error occurs. |
 | `onAudioLevel` | `(level: number) => void` | A new mic audio level (`0..1` normalized RMS) is available. Requires `metering.enabled`. |
 | `onRecordingComplete` | `(uri: string) => void` | A `recordToFile` session finished; receives the `file://` URI of the saved WAV. Requires `recordToFile.enabled`. |
@@ -843,6 +845,8 @@ const {
 | `stopListening` | `() => void` | Stops recording and closes the active WebSocket. |
 | `pause` | `() => void` | Pauses mic streaming while keeping the socket alive via `KeepAlive`. On v1 a `Finalize` is sent first to flush buffered audio. |
 | `resume` | `() => void` | Resumes mic streaming after a `pause`. |
+| `configure` | `(options: DeepgramLiveConfigureOptions) => boolean` | Updates `keyterms` and `numerals` (Nova-3 and Flux) or Flux turn thresholds and `languageHints` mid-stream. The server replies with `ConfigureSuccess` / `ConfigureFailure` via `onMessage`. |
+| `forceEndTurn` | `() => boolean` | Flux only: ends the current turn now (e.g. push-to-talk release). |
 | `transcribeFile` | `(file: DeepgramPrerecordedSource, options?: DeepgramPrerecordedOptions) => Promise<void>` | Uploads a file/URI/URL and resolves via the success/error callbacks. |
 
 #### Reactive state
@@ -866,7 +870,8 @@ const {
 | `apiVersion` | `'v1' \| 'v2'` | `'v1'` | Selects the realtime API generation (`'v2'` unlocks Flux streaming). |
 | `model` | `DeepgramLiveListenModel` | `'nova-3'` (v1) / `'flux-general-en'` (v2) | Streaming model. Flux also supports `'flux-general-multi'` for multilingual turns. |
 | `version` | `string` | – | Specific model version. |
-| `language` | `string` | Auto | BCP-47 hint (e.g. `en-US`). |
+| `language` | `string` | Auto | BCP-47 hint (e.g. `en-US`), or `'multi'` for Nova-3 multilingual. |
+| `languageHint` | `string \| string[]` | – | Bias language detection for Nova-3 `language: 'multi'` and `flux-general-multi`. |
 
 </details>
 
@@ -913,19 +918,19 @@ const {
 | `utteranceEndMs` | `number` | – | Delay before emitting utterance-end event. |
 | `vadEvents` | `boolean` | `false` | Emit voice activity detection events. |
 | `diarizeModel` | `DeepgramLiveListenDiarizeModel` | – | Diarisation model (`'latest'` / `'v1'`). Separates speakers. |
-| `diarize` | `boolean` | `false` | **Deprecated** — use `diarizeModel`. Separate speakers. |
 
 </details>
 
 <details>
 <summary><strong>Flux v2 (only when <code>apiVersion: 'v2'</code>)</strong></summary>
 
+Flux also accepts `keyterm`, `numerals`, `profanityFilter`, `redact` (`'numbers'` / `'aggressive_numbers'`), `mipOptOut` and `tag`. Other v1 options are dropped from the URL.
+
 | Option | Type | Purpose |
 | ------ | ---- | ------- |
-| `eotThreshold` | `number` | Confidence required to finalise a turn. |
+| `eotThreshold` | `number` | Confidence required to finalise a turn (0.5–1.0; `1.0` disables automatic end-of-turn). |
 | `eagerEotThreshold` | `number` | Confidence required to emit an eager turn. |
 | `eotTimeoutMs` | `number` | Silence timeout before closing a turn. |
-| `languageHint` | `string \| string[]` | Language hint(s) — only valid with the `flux-general-multi` model. |
 
 </details>
 
@@ -951,7 +956,8 @@ const {
 | ------ | ---- | ------- | ------- |
 | `model` | `DeepgramPrerecordedModel` | API default | Transcription model. |
 | `version` | `DeepgramPrerecordedVersion` | `'latest'` | Specific model version. |
-| `language` | `string` | Auto | BCP-47 language hint. |
+| `language` | `string` | Auto | BCP-47 language hint, or `'multi'` for Nova-3 multilingual. |
+| `languageHint` | `string \| string[]` | – | Bias detection with Nova-3 `language: 'multi'`. |
 | `detectLanguage` | `boolean \| string \| string[]` | `false` | Auto-detect language or restrict detection. |
 
 </details>
@@ -993,7 +999,6 @@ const {
 | Option | Type | Default | Purpose |
 | ------ | ---- | ------- | ------- |
 | `diarizeModel` | `DeepgramPrerecordedDiarizeModel` | – | Diarisation model (`'latest'` / `'v1'` / `'v2'`). Separates speakers. |
-| `diarize` | `boolean` | `false` | **Deprecated** — use `diarizeModel`. Speaker diarisation. |
 | `utterances` | `boolean` | `false` | Utterance-level timestamps. |
 | `uttSplit` | `number` | – | Pause duration (s) used to split utterances. |
 | `detectEntities` | `boolean` | `false` | Extract entities (names, places, etc.). |
@@ -1461,7 +1466,16 @@ const stt = useDeepgramSpeechToText({
       renderInterim(text);
     }
   },
+  onTurnInfo: (turn) => {
+    if (turn.event === 'StartOfTurn') stopAgentSpeech(); // barge-in
+  },
 });
+
+// Push-to-talk release: close the turn without waiting for the model.
+stt.forceEndTurn();
+
+// Tighten turn detection mid-stream without reconnecting.
+stt.configure({ eotThreshold: 0.8, keyterms: ['Deepgram'] });
 ```
 
 ### Pause and resume a live stream
@@ -1536,14 +1550,14 @@ const pick = async () => {
 subtitle document — zero dependencies, pure functions. Request
 `utterances: true` for the best cue boundaries (the helpers fall back to
 word-level chunking otherwise), and pass `speakerLabels: true` alongside
-`diarize: true` to prefix cues with `Speaker N:`.
+`diarize_model=latest` to prefix cues with `Speaker N:`.
 
 ```tsx
 import { toSRT, toWebVTT } from 'react-native-deepgram';
 import type { DeepgramPrerecordedResponse } from 'react-native-deepgram';
 
 const res = await fetch(
-  'https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&utterances=true&diarize=true',
+  'https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&utterances=true&diarize_model=latest',
   {
     method: 'POST',
     headers: {
@@ -1562,7 +1576,7 @@ const vtt = toWebVTT(response, { speakerLabels: true });
 ### Split a transcript by speaker
 
 `toSpeakerSegments` folds the word-level diarization data of a response
-requested with `diarize: true` into per-speaker segments (it returns `[]`
+requested with `diarize_model` into per-speaker segments (it returns `[]`
 when diarization wasn't requested). Pairs naturally with the caption
 helpers' `speakerLabels` option above.
 

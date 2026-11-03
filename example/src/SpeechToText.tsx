@@ -217,7 +217,7 @@ export default function SpeechToText() {
 
   // Caption helpers need the raw prerecorded response (word timings,
   // utterances, speakers), so hit /v1/listen directly — same request the
-  // hook makes, but with utterances + diarize enabled.
+  // hook makes, but with utterances + diarization enabled.
   const pickForCaptions = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
@@ -244,7 +244,7 @@ export default function SpeechToText() {
       } as any);
 
       const res = await fetch(
-        `${base}/listen?model=nova-3&smart_format=true&utterances=true&diarize=true`,
+        `${base}/listen?model=nova-3&smart_format=true&utterances=true&diarize_model=latest`,
         {
           method: 'POST',
           headers: {

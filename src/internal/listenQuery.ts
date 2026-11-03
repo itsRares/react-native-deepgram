@@ -1,6 +1,7 @@
 import { getBaseUrl, getBaseWss, getV2BaseWss } from '../constants';
 import { buildParams, type QueryParams } from '../helpers/url';
 import type {
+  DeepgramLiveConfigureOptions,
   DeepgramLiveListenOptions,
   DeepgramPrerecordedOptions,
 } from '../types';
@@ -52,7 +53,9 @@ export function buildLiveListenUrl(options: DeepgramLiveListenOptions): string {
         eot_timeout_ms: options.eotTimeoutMs,
         keyterm,
         language_hint: options.languageHint,
+        numerals: options.numerals,
         profanity_filter: options.profanityFilter,
+        redact: options.redact ? asArray(options.redact) : undefined,
         mip_opt_out: options.mipOptOut,
         measurements: options.measurements,
         tag: options.tag,
@@ -62,7 +65,6 @@ export function buildLiveListenUrl(options: DeepgramLiveListenOptions): string {
         callback_method: options.callbackMethod,
         channels: options.channels,
         detect_entities: options.detectEntities,
-        diarize: options.diarize,
         diarize_model: options.diarizeModel,
         dictation: options.dictation,
         encoding: options.encoding,
@@ -72,6 +74,7 @@ export function buildLiveListenUrl(options: DeepgramLiveListenOptions): string {
         keyterm,
         keywords: usesKeyterm ? undefined : options.keywords,
         language: options.language,
+        language_hint: options.languageHint,
         mip_opt_out: options.mipOptOut,
         measurements: options.measurements,
         model: options.model,
@@ -98,6 +101,40 @@ export function buildLiveListenUrl(options: DeepgramLiveListenOptions): string {
   return withQuery(`${base}/listen`, query);
 }
 
+/**
+ * Build a mid-stream `Configure` message. Nova (v1) nests numerals under
+ * `features`; Flux (v2) takes them top-level next to `thresholds`.
+ */
+export function buildLiveConfigureMessage(
+  options: DeepgramLiveConfigureOptions,
+  apiVersion: 'v1' | 'v2'
+): Record<string, unknown> {
+  const message: Record<string, unknown> = { type: 'Configure' };
+  if (options.keyterms) message.keyterms = options.keyterms;
+
+  if (apiVersion === 'v1') {
+    if (options.numerals !== undefined) {
+      message.features = { numerals: options.numerals };
+    }
+    return message;
+  }
+
+  const thresholds: Record<string, number> = {};
+  if (options.eotThreshold !== undefined) {
+    thresholds.eot_threshold = options.eotThreshold;
+  }
+  if (options.eagerEotThreshold !== undefined) {
+    thresholds.eager_eot_threshold = options.eagerEotThreshold;
+  }
+  if (options.eotTimeoutMs !== undefined) {
+    thresholds.eot_timeout_ms = options.eotTimeoutMs;
+  }
+  if (Object.keys(thresholds).length > 0) message.thresholds = thresholds;
+  if (options.languageHints) message.language_hints = options.languageHints;
+  if (options.numerals !== undefined) message.numerals = options.numerals;
+  return message;
+}
+
 /** Build the pre-recorded `/listen` REST URL. */
 export function buildPrerecordedUrl(
   options: DeepgramPrerecordedOptions
@@ -116,7 +153,6 @@ export function buildPrerecordedUrl(
     custom_intent_mode: options.customIntentMode,
     detect_entities: options.detectEntities,
     detect_language: options.detectLanguage,
-    diarize: options.diarize,
     diarize_model: options.diarizeModel,
     dictation: options.dictation,
     encoding: options.encoding,
@@ -124,6 +160,7 @@ export function buildPrerecordedUrl(
     keyterm: options.keyterm,
     keywords: options.keywords,
     language: options.language,
+    language_hint: options.languageHint,
     measurements: options.measurements,
     mip_opt_out: options.mipOptOut,
     model: options.model,

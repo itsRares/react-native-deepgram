@@ -19,7 +19,7 @@ export interface SpeakerSegment {
 
 /**
  * Fold the word-level diarization data of a pre-recorded response
- * (`diarize: true`) into per-speaker segments. A new segment starts whenever
+ * (`diarizeModel: 'latest'`) into per-speaker segments. A new segment starts whenever
  * the `speaker` index changes. Returns an empty array when the response
  * carries no `speaker` fields (diarization not requested) — never throws.
  * @see https://developers.deepgram.com/docs/diarization

@@ -115,6 +115,82 @@ describe('useDeepgramSpeechToText – live session', () => {
     ]);
   });
 
+  it('forwards Flux TurnInfo and every JSON message to callbacks', async () => {
+    const onTurnInfo = jest.fn();
+    const onMessage = jest.fn();
+    harnessProps = { onTurnInfo, onMessage };
+    await startSession({ apiVersion: 'v2' });
+    const socket = MockWebSocket.last();
+
+    await act(() => {
+      socket.serverJson({ type: 'Connected', request_id: 'r1' });
+      socket.serverJson({ type: 'TurnInfo', event: 'StartOfTurn' });
+      socket.serverJson({ type: 'ConfigureSuccess', thresholds: {} });
+    });
+
+    expect(onTurnInfo.mock.calls.map(([m]) => m.event)).toEqual([
+      'StartOfTurn',
+    ]);
+    expect(onMessage.mock.calls.map(([m]) => m.type)).toEqual([
+      'Connected',
+      'TurnInfo',
+      'ConfigureSuccess',
+    ]);
+  });
+
+  it('sends Flux Configure and ForceEndTurn messages', async () => {
+    await startSession({ apiVersion: 'v2' });
+    const socket = MockWebSocket.last();
+
+    let configured = false;
+    let forced = false;
+    await act(() => {
+      configured = hookApi.configure({
+        eotThreshold: 0.8,
+        eotTimeoutMs: 3000,
+        keyterms: ['Deepgram'],
+        languageHints: ['en', 'es'],
+        numerals: true,
+      });
+      forced = hookApi.forceEndTurn();
+    });
+
+    expect(configured).toBe(true);
+    expect(forced).toBe(true);
+    expect(socket.sentJson()).toEqual([
+      {
+        type: 'Configure',
+        keyterms: ['Deepgram'],
+        thresholds: { eot_threshold: 0.8, eot_timeout_ms: 3000 },
+        language_hints: ['en', 'es'],
+        numerals: true,
+      },
+      { type: 'ForceEndTurn' },
+    ]);
+  });
+
+  it('sends the Nova Configure shape and rejects ForceEndTurn on v1', async () => {
+    await startSession();
+    const socket = MockWebSocket.last();
+
+    let forced = true;
+    await act(() => {
+      hookApi.configure({ keyterms: [], numerals: false });
+      forced = hookApi.forceEndTurn();
+    });
+
+    expect(forced).toBe(false);
+    expect(socket.sentJson()).toEqual([
+      { type: 'Configure', keyterms: [], features: { numerals: false } },
+    ]);
+  });
+
+  it('returns false from configure() when no session is active', async () => {
+    await render(createElement(Harness));
+    expect(hookApi.configure({ numerals: true })).toBe(false);
+    expect(hookApi.forceEndTurn()).toBe(false);
+  });
+
   it('tears the session down on a Flux Error without reconnecting', async () => {
     const onError = jest.fn();
     const onEnd = jest.fn();

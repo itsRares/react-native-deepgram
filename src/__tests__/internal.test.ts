@@ -5,6 +5,7 @@ import {
 } from '../internal/agentSettings';
 import { createKeepAlive } from '../internal/keepAlive';
 import {
+  buildLiveConfigureMessage,
   buildLiveListenUrl,
   buildPrerecordedUrl,
   resolveLiveOptions,
@@ -165,6 +166,53 @@ describe('listen query', () => {
     expect(query(prerecorded).get('custom_topic')).toBeNull();
     expect(query(prerecorded).get('detect_language')).toBe('true');
     expect(query(prerecorded).get('extra.a')).toBe('1');
+  });
+
+  it('passes Flux numerals/redact and Nova-3 multilingual language hints', () => {
+    const flux = buildLiveListenUrl(
+      resolveLiveOptions(
+        {
+          apiVersion: 'v2',
+          numerals: true,
+          redact: 'numbers',
+          languageHint: ['en', 'es'],
+        },
+        {}
+      )
+    );
+    expect(query(flux).get('numerals')).toBe('true');
+    expect(query(flux).getAll('redact')).toEqual(['numbers']);
+    expect(query(flux).getAll('language_hint')).toEqual(['en', 'es']);
+
+    const nova = buildLiveListenUrl(
+      resolveLiveOptions(
+        { language: 'multi', languageHint: ['en', 'es'], diarizeModel: 'v1' },
+        {}
+      )
+    );
+    expect(query(nova).getAll('language_hint')).toEqual(['en', 'es']);
+    expect(query(nova).get('diarize_model')).toBe('v1');
+    expect(query(nova).get('diarize')).toBeNull();
+
+    const prerecorded = buildPrerecordedUrl({
+      language: 'multi',
+      languageHint: 'fr',
+    });
+    expect(query(prerecorded).getAll('language_hint')).toEqual(['fr']);
+  });
+
+  it('builds Configure messages for Nova and Flux', () => {
+    expect(buildLiveConfigureMessage({ numerals: true }, 'v1')).toEqual({
+      type: 'Configure',
+      features: { numerals: true },
+    });
+    expect(
+      buildLiveConfigureMessage({ eagerEotThreshold: 0.5, keyterms: [] }, 'v2')
+    ).toEqual({
+      type: 'Configure',
+      keyterms: [],
+      thresholds: { eager_eot_threshold: 0.5 },
+    });
   });
 });
 

@@ -8,6 +8,7 @@ import {
 } from './interruption';
 import { createKeepAlive } from './internal/keepAlive';
 import {
+  buildLiveConfigureMessage,
   buildLiveListenUrl,
   buildPrerecordedUrl,
   DEFAULT_LIVE_SAMPLE_RATE,
@@ -26,6 +27,7 @@ import { useLatest } from './internal/useLatest';
 import { useSessionStats } from './internal/useSessionStats';
 import { toDeepgramError } from './types/errors';
 import type {
+  DeepgramLiveConfigureOptions,
   DeepgramLiveListenOptions,
   DeepgramPrerecordedOptions,
   DeepgramPrerecordedSource,
@@ -137,11 +139,12 @@ export function useDeepgramSpeechToText(
   );
 
   const trySendJson = useCallback(
-    (message: object) => {
+    (message: object): boolean => {
       try {
-        socket.sendJson(message);
+        return socket.sendJson(message);
       } catch {
         // The socket is closing; the frame is not needed anymore.
+        return false;
       }
     },
     [socket]
@@ -275,12 +278,16 @@ export function useDeepgramSpeechToText(
       } catch {
         return;
       }
+      if (typeof msg?.type === 'string') {
+        propsRef.current.onMessage?.(msg);
+      }
 
       if (sessionRef.current.apiVersion === 'v2') {
         // https://developers.deepgram.com/reference/speech-to-text-api/listen-flux
         if (msg.type === 'Error') {
           failSession(new Error(msg.description || 'Deepgram stream error'));
         } else if (msg.type === 'TurnInfo') {
+          propsRef.current.onTurnInfo?.(msg);
           emitTranscript(msg.transcript, msg.event === 'EndOfTurn', msg);
         }
         return;
@@ -503,6 +510,23 @@ export function useDeepgramSpeechToText(
     if (trackState) setIsPaused(false);
   }, [keepAlive, trackState]);
 
+  const configure = useCallback(
+    (options: DeepgramLiveConfigureOptions) => {
+      const session = sessionRef.current;
+      if (!session.active) return false;
+      return trySendJson(
+        buildLiveConfigureMessage(options, session.apiVersion)
+      );
+    },
+    [trySendJson]
+  );
+
+  const forceEndTurn = useCallback(() => {
+    const session = sessionRef.current;
+    if (!session.active || session.apiVersion !== 'v2') return false;
+    return trySendJson({ type: 'ForceEndTurn' });
+  }, [trySendJson]);
+
   const transcribeFile = useCallback(
     async (
       file: DeepgramPrerecordedSource,
@@ -555,6 +579,8 @@ export function useDeepgramSpeechToText(
     transcribeFile,
     pause,
     resume,
+    configure,
+    forceEndTurn,
     getStats: stats.getStats,
     ...(trackState
       ? {

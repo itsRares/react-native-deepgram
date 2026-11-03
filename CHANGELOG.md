@@ -26,6 +26,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The separate iOS `MicPermission` native module is removed; use
   `Deepgram.requestRecordPermission()`.
 - `Deepgram.stopPlayer()` now returns a `Promise<void>`.
+- Removed the deprecated `diarize` boolean from `DeepgramLiveListenOptions`
+  and `DeepgramPrerecordedOptions` (Deepgram deprecated it, and requests that
+  set both are rejected). Use `diarizeModel: 'latest'`.
+
+### Added
+
+- **Speech-to-text `configure()`** updates keyterms and numerals (Nova-3 and
+  Flux) or Flux end-of-turn thresholds and language hints mid-stream, and
+  **`forceEndTurn()`** closes a Flux turn on demand.
+- `onTurnInfo` (every Flux `TurnInfo`, including `StartOfTurn`,
+  `EagerEndOfTurn` and `TurnResumed`) and `onMessage` (every live JSON
+  message, e.g. `ConfigureSuccess` / `Warning`) callbacks, plus the
+  `DeepgramFluxTurnInfo`, `DeepgramLiveConfigureOptions` and
+  `DeepgramListenServerMessage` types.
+- Flux streams forward `numerals` and `redact`; `languageHint` now also works
+  for Nova-3 multilingual (`language: 'multi'`), live and pre-recorded.
+- `nova-3-pharma` model and the `aggressive_numbers` redaction type.
 
 ### Changed
 

@@ -1,4 +1,5 @@
 #import "Deepgram+Playback.h"
+#import "Deepgram+AudioSession.h"
 #import "Deepgram+Private.h"
 
 #import <AVFoundation/AVFoundation.h>
@@ -119,6 +120,9 @@
               @"NOT supported on the iOS Simulator. Audio output may be picked "
               @"up by the microphone. Please test on a physical device for "
               @"proper AEC behavior.");
+    // Instantiate the input node before the engine starts; created later it
+    // reports a 0 Hz format and mic capture fails.
+    (void)self.audioEngine.inputNode;
 #else
     @try {
       AVAudioInputNode *inputNode = self.audioEngine.inputNode;
@@ -163,6 +167,32 @@
     return NO;
   }
 
+  return YES;
+}
+
+/**
+ * Restart a prepared engine that stopped (mic capture ended, session
+ * deactivated by another app) so the next streamed chunk is audible.
+ */
+- (BOOL)ensurePlaybackEngineRunning {
+  if (!self.audioEngine || !self.playerNode) {
+    return NO;
+  }
+  if (self.audioEngine.isRunning) {
+    return YES;
+  }
+  if (self.sessionInterrupted) {
+    return NO; // resumed by the interruption-ended handler
+  }
+  if (![self activateAudioSession:NULL]) {
+    return NO;
+  }
+  NSError *error = nil;
+  [self.audioEngine prepare];
+  if (![self.audioEngine startAndReturnError:&error]) {
+    DGLogWarn(@"[Deepgram] playback engine restart failed: %@", error);
+    return NO;
+  }
   return YES;
 }
 

@@ -520,6 +520,19 @@ export function useDeepgramVoiceAgent(
         sanitizeSettings(overrideSettings)
       );
       session.settings = { type: 'Settings', ...(merged ?? {}) };
+      const input = session.settings.audio?.input;
+      // The mic is captured at 16 kHz and cannot be upsampled; declaring a
+      // higher rate makes Deepgram hear sped-up audio.
+      if (
+        session.microphone &&
+        input?.sample_rate &&
+        input.sample_rate > NATIVE_SAMPLE_RATE
+      ) {
+        console.warn(
+          `[VoiceAgent] audio.input.sample_rate ${input.sample_rate} is above the ${NATIVE_SAMPLE_RATE} Hz microphone capture rate; sending ${NATIVE_SAMPLE_RATE} instead.`
+        );
+        input.sample_rate = NATIVE_SAMPLE_RATE;
+      }
       session.targetSampleRate =
         session.settings.audio?.input?.sample_rate ?? DEFAULT_SAMPLE_RATE;
 

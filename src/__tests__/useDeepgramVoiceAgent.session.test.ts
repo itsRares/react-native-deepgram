@@ -79,6 +79,21 @@ describe('useDeepgramVoiceAgent – session lifecycle', () => {
     });
   });
 
+  it('caps the declared mic input rate at the 16 kHz capture rate', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await connectSession({
+        audio: { input: { encoding: 'linear16', sample_rate: 24000 } },
+      });
+      expect(MockWebSocket.last().sentJson()[0]).toMatchObject({
+        audio: { input: { sample_rate: 16000 } },
+      });
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('reconnects with backoff, re-sends the updated Settings and reports onReconnected', async () => {
     jest.useFakeTimers();
     const onConnect = jest.fn();

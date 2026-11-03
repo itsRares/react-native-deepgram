@@ -142,13 +142,26 @@ export function useDeepgramTextToSpeech(
         abortCtrl.current?.abort();
         abortCtrl.current = new AbortController();
 
+        const params = buildSpeakHttpParams(httpOptions);
         const res = await postSpeak(
-          buildSpeakHttpUrl(buildSpeakHttpParams(httpOptions)),
+          buildSpeakHttpUrl(params),
           text,
           abortCtrl.current.signal
         );
         const audio = await res.arrayBuffer();
-        await Deepgram.playAudioChunk(toBase64(audio));
+        // The native player renders raw PCM16 only; other formats would play
+        // as noise, so they are returned without playback.
+        if (
+          autoPlayAudio &&
+          params.encoding === 'linear16' &&
+          params.container === 'none'
+        ) {
+          Deepgram.startPlayer(
+            Number(params.sample_rate) || DEFAULT_TTS_SAMPLE_RATE,
+            1
+          );
+          await Deepgram.playAudioChunk(toBase64(audio));
+        }
 
         propsRef.current.onSynthesizeSuccess?.(audio);
         setStatus('idle');
@@ -163,7 +176,7 @@ export function useDeepgramTextToSpeech(
         throw dgError;
       }
     },
-    [httpOptions, propsRef, setStatus]
+    [autoPlayAudio, httpOptions, propsRef, setStatus]
   );
 
   /* ---------- HTTP (synth to bytes + LRU cache) ---------- */

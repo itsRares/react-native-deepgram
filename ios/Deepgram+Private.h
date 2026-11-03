@@ -27,8 +27,14 @@ NS_ASSUME_NONNULL_BEGIN
 // Recording
 @property(nonatomic, strong, nullable) NSMutableData *pendingPCMBuffer;
 @property(nonatomic, strong) dispatch_queue_t emitterQueue;
+// Serial queue for every spec method and system notification, so session /
+// engine state is never mutated from two threads at once.
+@property(nonatomic, strong) dispatch_queue_t audioQueue;
+@property(nonatomic, strong) NSMutableArray<id<NSObject>> *notificationTokens;
 @property(nonatomic, assign) NSUInteger chunkSizeBytes;
 @property(atomic, assign) BOOL appIsActive;
+// Rate of the emitted mic PCM; independent of the playback rate below.
+@property(atomic, assign) int captureSampleRate;
 
 // Microphone metering: when enabled, the recording sink computes a normalized
 // RMS amplitude (0..1) and emits `onAudioLevel` at most once per
@@ -51,6 +57,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, strong, nullable) AVAudioPlayerNode *playerNode;
 @property(nonatomic, strong, nullable) AVAudioFormat *playbackFormat;
 @property(atomic, assign) BOOL isPlaying;
+// Playback (player node) sample rate.
 @property(atomic, assign) int currentSampleRate;
 @property(nonatomic, assign) BOOL audioSessionConfigured;
 // YES while capturing via `audioEngine.inputNode` (Voice Agent / duplex):

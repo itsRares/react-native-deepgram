@@ -116,6 +116,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   respect their byte offset.
 - Native build warnings (unused iOS simulator variables, Android
   `Notification.Builder` deprecation).
+- iOS: microphone PCM events kept reporting the playback rate after
+  `startPlayer` (e.g. 24000 for 16 kHz audio), which made the Voice Agent
+  downsample the mic by 2 and record-to-file WAV headers carry the wrong rate.
+  Capture and playback rates are now tracked separately.
+- iOS: a streaming TTS / Voice Agent player no longer deactivates the audio
+  session whenever its queue drains or after `interruptAudio()`; that stopped
+  the engine and silently dropped the next turn's audio. A stopped engine is
+  restarted on the next chunk, and one-shot playback resolves once the audio
+  has actually been played.
+- iOS: all spec methods and audio-session notifications run on one serial
+  queue (previously main and the module queue raced on engine/session state).
+- iOS: Voice Agent capture on the simulator failed with "Invalid input
+  format".
+- iOS: rejected promises and recoverable session fallbacks no longer raise a
+  development RedBox (logged as warnings).
+- `synthesize()` sets the player to the requested sample rate (it played at
+  whatever rate the last session used), respects `autoPlayAudio`, and no
+  longer plays compressed or WAV-wrapped audio as noise.
+- Voice Agent: `audio.input.sample_rate` above the 16 kHz microphone capture
+  rate is capped at 16000 with a warning (the audio was sent sped up).
+- Android: the keep-alive service is no longer sticky (a system restart left
+  a notification with no audio behind it), and `startPlayer` cannot throw.
 
 ## [2.4.0] - 2026-07-08
 

@@ -132,7 +132,9 @@ class DeepgramAudioService : Service() {
       return START_NOT_STICKY
     }
 
-    return START_STICKY
+    // Not sticky: a restart by the system would show the notification without
+    // any audio session behind it.
+    return START_NOT_STICKY
   }
 
   private fun createNotificationChannelIfNeeded() {

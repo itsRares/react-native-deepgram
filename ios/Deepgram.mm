@@ -52,6 +52,10 @@ static BOOL DGHasRecordPermission(void) {
   return NO;
 }
 
+- (dispatch_queue_t)methodQueue {
+  return self.audioQueue;
+}
+
 - (std::shared_ptr<facebook::react::TurboModule>)getTurboModule:
     (const facebook::react::ObjCTurboModule::InitParams &)params {
   return std::make_shared<facebook::react::NativeDeepgramSpecJSI>(params);
@@ -67,53 +71,62 @@ static BOOL DGHasRecordPermission(void) {
                (unsigned long)_chunkSizeBytes);
     _emitterQueue = dispatch_queue_create("com.deepgram.liveaudiostream",
                                           DISPATCH_QUEUE_SERIAL);
+    _audioQueue =
+        dispatch_queue_create("com.deepgram.audio", DISPATCH_QUEUE_SERIAL);
     memset(&_recordState, 0, sizeof(DGRecordState));
     _scheduledBufferCount = 0;
     _appIsActive = YES;
+    _captureSampleRate = 16000;
+    _notificationTokens = [NSMutableArray array];
+
+    // Handlers hop asynchronously onto `audioQueue` (never block the posting
+    // thread, which may itself be inside an AVAudioSession call).
+    NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+    dispatch_queue_t audioQueue = _audioQueue;
+    __weak Deepgram *weakSelf = self;
+    void (^observe)(NSNotificationName, void (^)(Deepgram *, NSNotification *)) =
+        ^(NSNotificationName name,
+          void (^handler)(Deepgram *, NSNotification *)) {
+          id token = [center
+              addObserverForName:name
+                          object:nil
+                           queue:nil
+                      usingBlock:^(NSNotification *note) {
+                        dispatch_async(audioQueue, ^{
+                          Deepgram *strongSelf = weakSelf;
+                          if (strongSelf) {
+                            handler(strongSelf, note);
+                          }
+                        });
+                      }];
+          [self.notificationTokens addObject:token];
+        };
 #if TARGET_OS_IOS
-    [[NSNotificationCenter defaultCenter]
-        addObserver:self
-           selector:@selector(handleAppDidBecomeActive:)
-               name:UIApplicationDidBecomeActiveNotification
-             object:nil];
-    DGLogDebug(@"[Deepgram] init: registered for "
-               @"UIApplicationDidBecomeActiveNotification");
-    [[NSNotificationCenter defaultCenter]
-        addObserver:self
-           selector:@selector(handleAppDidEnterBackground:)
-               name:UIApplicationDidEnterBackgroundNotification
-             object:nil];
-    DGLogDebug(@"[Deepgram] init: registered for "
-               @"UIApplicationDidEnterBackgroundNotification");
+    observe(UIApplicationDidBecomeActiveNotification,
+            ^(Deepgram *module, NSNotification *note) {
+              [module handleAppDidBecomeActive:note];
+            });
+    observe(UIApplicationDidEnterBackgroundNotification,
+            ^(Deepgram *module, NSNotification *note) {
+              [module handleAppDidEnterBackground:note];
+            });
 #endif
-    [[NSNotificationCenter defaultCenter]
-        addObserver:self
-           selector:@selector(handleAudioRouteChange:)
-               name:AVAudioSessionRouteChangeNotification
-             object:nil];
-    DGLogDebug(@"[Deepgram] init: registered for "
-               @"AVAudioSessionRouteChangeNotification");
-    [[NSNotificationCenter defaultCenter]
-        addObserver:self
-           selector:@selector(handleAudioInterruption:)
-               name:AVAudioSessionInterruptionNotification
-             object:nil];
-    DGLogDebug(@"[Deepgram] init: registered for "
-               @"AVAudioSessionInterruptionNotification");
-    [[NSNotificationCenter defaultCenter]
-        addObserver:self
-           selector:@selector(handleMediaServicesReset:)
-               name:AVAudioSessionMediaServicesWereResetNotification
-             object:nil];
-    DGLogDebug(@"[Deepgram] init: registered for "
-               @"AVAudioSessionMediaServicesWereResetNotification");
-    [[NSNotificationCenter defaultCenter]
-        addObserver:self
-           selector:@selector(handleEngineConfigurationChange:)
-               name:AVAudioEngineConfigurationChangeNotification
-             object:nil];
-    DGLogDebug(@"[Deepgram] init: registered for "
-               @"AVAudioEngineConfigurationChangeNotification");
+    observe(AVAudioSessionRouteChangeNotification,
+            ^(Deepgram *module, NSNotification *note) {
+              [module handleAudioRouteChange:note];
+            });
+    observe(AVAudioSessionInterruptionNotification,
+            ^(Deepgram *module, NSNotification *note) {
+              [module handleAudioInterruption:note];
+            });
+    observe(AVAudioSessionMediaServicesWereResetNotification,
+            ^(Deepgram *module, NSNotification *note) {
+              [module handleMediaServicesReset:note];
+            });
+    observe(AVAudioEngineConfigurationChangeNotification,
+            ^(Deepgram *module, NSNotification *note) {
+              [module handleEngineConfigurationChange:note];
+            });
   }
   return self;
 }
@@ -122,7 +135,9 @@ static BOOL DGHasRecordPermission(void) {
   DGLogDebug(@"[Deepgram] dealloc: cleaning up recording queue and removing "
              @"observers");
   [self cleanupRecordingQueue];
-  [[NSNotificationCenter defaultCenter] removeObserver:self];
+  for (id token in self.notificationTokens) {
+    [[NSNotificationCenter defaultCenter] removeObserver:token];
+  }
 }
 
 // MARK: - Audio session lifecycle lives in Deepgram+AudioSession.mm
@@ -140,7 +155,7 @@ static BOOL DGHasRecordPermission(void) {
     // live, the retries burn out harmlessly and the real Ended resumes later.
     DGLogDebug(@"[Deepgram] handleAppDidBecomeActive: resuming session");
     self.sessionInterrupted = NO;
-    dispatch_async(dispatch_get_main_queue(), ^{
+    dispatch_async(self.audioQueue, ^{
       [self resumeAfterInterruption:0];
     });
   }
@@ -211,9 +226,9 @@ static BOOL DGHasRecordPermission(void) {
     // Drop any file left open by a previous, incompletely stopped session.
     [self discardRecordingFile];
 
-    self.currentSampleRate = 16000;
+    self.captureSampleRate = 16000;
     DGLogDebug(@"[Deepgram] startRecording: targetSampleRate=%d vp=%@",
-               self.currentSampleRate, enableVoiceProcessing ? @"YES" : @"NO");
+               self.captureSampleRate, enableVoiceProcessing ? @"YES" : @"NO");
     NSError *sessionError = nil;
     if (![self activateAudioSession:&sessionError]) {
       NSString *message = sessionError.localizedDescription
@@ -275,7 +290,7 @@ static BOOL DGHasRecordPermission(void) {
     memset(&_recordState, 0, sizeof(DGRecordState));
     _recordState.mSelf = self;
 
-    _recordState.dataFormat.mSampleRate = self.currentSampleRate;
+    _recordState.dataFormat.mSampleRate = self.captureSampleRate;
     _recordState.dataFormat.mChannelsPerFrame = 1;
     _recordState.dataFormat.mBitsPerChannel = 16;
     _recordState.dataFormat.mBytesPerPacket =
@@ -325,7 +340,7 @@ static BOOL DGHasRecordPermission(void) {
       DGLogDebug(@"[Deepgram] startRecording: actual sampleRate=%f (%d)",
                  actualFormat.mSampleRate, resolvedSampleRate);
       if (resolvedSampleRate > 0) {
-        self.currentSampleRate = resolvedSampleRate;
+        self.captureSampleRate = resolvedSampleRate;
       }
 
       UInt32 bytesPerFrame = actualFormat.mBytesPerFrame
@@ -511,7 +526,7 @@ static BOOL DGHasRecordPermission(void) {
  */
 - (void)feedAudio:(NSString *)b64 {
   @try {
-    if (!self.playerNode || !self.audioEngine || !self.audioEngine.isRunning) {
+    if (![self ensurePlaybackEngineRunning]) {
       return;
     }
 
@@ -542,8 +557,12 @@ static BOOL DGHasRecordPermission(void) {
     _scheduledBufferCount++;
     int playbackGeneration = _playbackGeneration.load();
     __weak Deepgram *weakSelf = self;
+    // The session stays active until stopPlayer: deactivating it whenever the
+    // queue drains stops the engine and silences the next streamed turn.
     [self.playerNode scheduleBuffer:buffer
-                  completionHandler:^{
+             completionCallbackType:AVAudioPlayerNodeCompletionDataPlayedBack
+                  completionHandler:^(
+                      __unused AVAudioPlayerNodeCompletionCallbackType type) {
                     Deepgram *strongSelf = weakSelf;
                     if (strongSelf) {
                       if (strongSelf->_playbackGeneration.load() !=
@@ -554,7 +573,6 @@ static BOOL DGHasRecordPermission(void) {
                       int remaining = --strongSelf->_scheduledBufferCount;
                       if (remaining <= 0) {
                         strongSelf.isPlaying = NO;
-                        [strongSelf maybeDeactivateAudioSession];
                       }
                     }
                   }];
@@ -572,8 +590,8 @@ static BOOL DGHasRecordPermission(void) {
 
 - (void)interruptAudio {
   @try {
+    // Keep the engine and session: the next turn's audio follows right away.
     [self interruptPlayerPlayback];
-    [self maybeDeactivateAudioSession];
   } @catch (NSException *e) {
     DGLogError(@"[Deepgram] interruptAudio: exception %@", e);
   }
@@ -765,13 +783,13 @@ static BOOL DGHasRecordPermission(void) {
     _scheduledBufferCount++;
     int playbackGeneration = _playbackGeneration.load();
 
-    // Schedule buffer with completion handler to resolve promise. The session
-    // teardown is guarded by the playback generation and remaining buffer count
-    // (mirroring feedAudio) so a one-shot finishing mid-stream cannot deactivate
-    // the audio session while streaming playback is still active.
+    // DataPlayedBack: resolve and release the session only once the audio
+    // has actually been heard, not when the player has consumed the buffer.
     __weak Deepgram *weakSelf = self;
     [self.playerNode scheduleBuffer:buffer
-                  completionHandler:^{
+             completionCallbackType:AVAudioPlayerNodeCompletionDataPlayedBack
+                  completionHandler:^(
+                      __unused AVAudioPlayerNodeCompletionCallbackType type) {
                     Deepgram *strongSelf = weakSelf;
                     if (strongSelf &&
                         strongSelf->_playbackGeneration.load() ==
@@ -779,7 +797,9 @@ static BOOL DGHasRecordPermission(void) {
                       int remaining = --strongSelf->_scheduledBufferCount;
                       if (remaining <= 0) {
                         strongSelf.isPlaying = NO;
-                        [strongSelf maybeDeactivateAudioSession];
+                        dispatch_async(strongSelf.audioQueue, ^{
+                          [strongSelf maybeDeactivateAudioSession];
+                        });
                       }
                     }
                     if (resolve)

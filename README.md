@@ -132,7 +132,7 @@ const agent = useDeepgramVoiceAgent({
   trackConversation: true,
   defaultSettings: {
     audio: {
-      input:  { encoding: 'linear16', sample_rate: 24_000 },
+      input:  { encoding: 'linear16', sample_rate: 16_000 }, // mic capture rate
       output: { encoding: 'linear16', sample_rate: 24_000, container: 'none' },
     },
     agent: {
@@ -493,7 +493,7 @@ const {
   autoPlayAudio: true, // Automatically play agent audio
   defaultSettings: {
     audio: {
-      input: { encoding: 'linear16', sample_rate: 24_000 },
+      input: { encoding: 'linear16', sample_rate: 16_000 }, // mic capture rate
       output: { encoding: 'linear16', sample_rate: 24_000, container: 'none' },
     },
     agent: {
@@ -1198,7 +1198,7 @@ const {
 
 | Method | Signature | Description |
 | ------ | --------- | ----------- |
-| `synthesize` | `(text: string) => Promise<ArrayBuffer>` | Single-shot REST call; resolves with the full audio buffer. |
+| `synthesize` | `(text: string) => Promise<ArrayBuffer>` | Single-shot REST call; resolves with the full audio buffer and, for raw `linear16` output with `autoPlayAudio`, plays it. |
 | `synthesizeToBytes` | `(text: string, options?: DeepgramTextToSpeechHttpOptions) => Promise<{ data: ArrayBuffer; mimeType: string }>` | Like `synthesize` but **does not play** the audio — returns the raw bytes + MIME type for saving/caching. Results are cached in-memory (LRU) keyed by text + format, so repeated identical prompts skip the network. Pass `options` to override the format per call. |
 
 **Streaming**
@@ -1709,25 +1709,27 @@ flushStream();         // emit audio for the buffered text immediately
 closeStreamGracefully(); // finish remaining audio then close
 ```
 
-### One-shot HTTP TTS as MP3
+### One-shot HTTP TTS
 
-`synthesize` plays the audio through the device speaker **and** resolves with
-the buffer:
+`synthesize` resolves with the audio buffer. With the default raw `linear16`
+output (`container: 'none'`) and `autoPlayAudio` on, it also plays it through
+the native player at the requested sample rate. Compressed formats (MP3, Opus,
+AAC, FLAC) and WAV containers are returned without playback; play those with
+your own audio player.
 
 ```tsx
 const { synthesize } = useDeepgramTextToSpeech({
   options: {
     http: {
       model: 'aura-2-asteria-en',
-      encoding: 'mp3',
-      bitRate: 48000,
-      container: 'none',
+      encoding: 'linear16',
+      sampleRate: 24000,
     },
   },
 });
 
 const buffer = await synthesize('Hello from Deepgram.');
-// `buffer` is an ArrayBuffer of MP3 bytes — also played out loud.
+// `buffer` is raw 24 kHz PCM16 — also played out loud.
 ```
 
 ### Save TTS to a file without playing it

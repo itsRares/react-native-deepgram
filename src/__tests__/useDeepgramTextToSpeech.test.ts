@@ -137,7 +137,22 @@ describe('useDeepgramTextToSpeech', () => {
     expect(String(url)).toContain('/v1/speak?');
     expect(String(url)).toContain('container=none');
     expect(JSON.parse(init.body)).toEqual({ text: 'One shot' });
+    expect(NativeDeepgram!.startPlayer).toHaveBeenCalledWith(24000, 1);
     expect(NativeDeepgram!.playAudioChunk).toHaveBeenCalledWith('AQI=');
+  });
+
+  it('synthesize() returns compressed audio without playing it', async () => {
+    mockFetch.mockResolvedValueOnce(audioResponse([1, 2]));
+    harnessProps = { options: { http: { encoding: 'mp3' } } };
+    await render(createElement(Harness));
+
+    let audio: ArrayBuffer | undefined;
+    await act(async () => {
+      audio = await hookApi.synthesize('Compressed');
+    });
+
+    expect(audio!.byteLength).toBe(2);
+    expect(NativeDeepgram!.playAudioChunk).not.toHaveBeenCalled();
   });
 
   it('synthesizeToBytes() caches identical requests and returns copies', async () => {

@@ -37,6 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   legacy `{ type: 'Text' }` stream message (send `Speak`).
 - `DeepgramTextToSpeechStreamFlushedMessage.sequence_id` is optional (Flux
   sends `speech_id` instead).
+- Voice Agent: removed the deprecated `agent.language` setting type (use
+  `agent.listen.provider.language`; Deepgram voices take the language from
+  the model name). `createAgentSettings({ language })` now sets the listen
+  provider language. `injectAgentMessage`'s second argument is typed as
+  `DeepgramVoiceAgentInjectBehavior` (or an options object).
 
 ### Added
 
@@ -61,6 +66,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Model types list the Flux TTS English voices (any `flux-*` voice is
   accepted) and the Aura-2 German, French, Dutch, Italian, Japanese and new
   Spanish voices.
+- **Voice Agent:** `forceEndTurn()`, `updateThinkLive()`, dynamic and
+  `'interrupt'` agent-message injection, and `onLatencyReport`,
+  `onFunctionCallCancelled`, `onFrustrationDetected`, `onThinkLiveUpdated`
+  and `onCustomFromThinkProvider` callbacks. Settings types cover listen
+  providers v1/v2 (`language`), speak providers (`version`, `speed`,
+  `expressivity`, fallback arrays), `think_live`, function `defer_until_eot`,
+  think `reasoning_mode` / `version`, `thought_signature`, the new
+  `ConversationText` language fields, and `agent` as a stored agent
+  configuration id (kept as-is across `Update*` calls and reconnects).
+- `createAgentSettings` gains `speakModel` and builds Flux-correct providers
+  (`version: 'v2'`, no `smart_format`) for `flux-*` models.
 
 ### Changed
 

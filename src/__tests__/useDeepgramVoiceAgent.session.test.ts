@@ -251,6 +251,97 @@ describe('useDeepgramVoiceAgent – session lifecycle', () => {
     expect(hookApi.state?.error).toBe('bad settings');
   });
 
+  it('forwards the newer agent events to their callbacks', async () => {
+    const onLatencyReport = jest.fn();
+    const onFunctionCallCancelled = jest.fn();
+    const onFrustrationDetected = jest.fn();
+    const onThinkLiveUpdated = jest.fn();
+    const onCustomFromThinkProvider = jest.fn();
+    harnessProps = {
+      onLatencyReport,
+      onFunctionCallCancelled,
+      onFrustrationDetected,
+      onThinkLiveUpdated,
+      onCustomFromThinkProvider,
+    };
+    await connectSession();
+    const socket = MockWebSocket.last();
+
+    await act(() => {
+      socket.serverJson({ type: 'LatencyReport', total_latency: 0.8 });
+      socket.serverJson({ type: 'FunctionCallCancelled' });
+      socket.serverJson({
+        type: 'FunctionCallCancelled',
+        functions: [{ id: 'f1', name: 'book' }],
+      });
+      socket.serverJson({ type: 'FrustrationDetected' });
+      socket.serverJson({ type: 'ThinkLiveUpdated' });
+      socket.serverJson({ type: '__customFromThinkProvider', content: 'x' });
+    });
+
+    expect(onLatencyReport.mock.calls[0][0].total_latency).toBe(0.8);
+    expect(onFunctionCallCancelled).toHaveBeenCalledTimes(1);
+    expect(onFrustrationDetected).toHaveBeenCalledTimes(1);
+    expect(onThinkLiveUpdated).toHaveBeenCalledTimes(1);
+    expect(onCustomFromThinkProvider.mock.calls[0][0].content).toBe('x');
+  });
+
+  it('sends ForceEndTurn, think_live updates and dynamic injections', async () => {
+    await connectSession({ agent: { greeting: 'Hi' } });
+    const socket = MockWebSocket.last();
+
+    await act(() => {
+      hookApi.forceEndTurn();
+      hookApi.injectAgentMessage('Still there?', 'queue');
+      hookApi.injectAgentMessage('Offer help', {
+        behavior: 'interrupt',
+        dynamic: true,
+      });
+      hookApi.updateThinkLive({ provider: { type: 'deepgram' } });
+    });
+
+    expect(socket.sentJson().slice(1)).toEqual([
+      { type: 'ForceEndTurn' },
+      {
+        type: 'InjectAgentMessage',
+        message: 'Still there?',
+        behavior: 'queue',
+      },
+      {
+        type: 'InjectAgentMessage',
+        message: 'Offer help',
+        behavior: 'interrupt',
+        is_dynamic: true,
+      },
+      {
+        type: 'UpdateThink_Live',
+        think_live: { provider: { type: 'deepgram' } },
+      },
+    ]);
+  });
+
+  it('accepts a stored agent configuration id and leaves it untouched on updates', async () => {
+    jest.useFakeTimers();
+    harnessProps = { reconnect: { enabled: true } };
+    const agentId = '4f5a9c1e-0000-4000-8000-000000000000';
+    await connectSession({ agent: agentId });
+
+    await act(() => {
+      hookApi.updatePrompt('ignored locally');
+      MockWebSocket.last().serverClose(1006);
+      jest.advanceTimersByTime(1_000);
+    });
+    await flushAuth();
+    await act(() => {
+      MockWebSocket.last().onopen?.();
+    });
+
+    expect(MockWebSocket.last().sentJson()[0]).toEqual({
+      type: 'Settings',
+      agent: agentId,
+    });
+  });
+
   it('starts the native player from AudioConfig and feeds binary audio', async () => {
     const onAudio = jest.fn();
     harnessProps = { onAudio };

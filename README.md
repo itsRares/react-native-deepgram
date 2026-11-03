@@ -136,11 +136,10 @@ const agent = useDeepgramVoiceAgent({
       output: { encoding: 'linear16', sample_rate: 24_000, container: 'none' },
     },
     agent: {
-      language: 'en',
       greeting: 'Hi! What can I help you with?',
-      listen: { provider: { type: 'deepgram', model: 'nova-3' } },
+      listen: { provider: { type: 'deepgram', model: 'nova-3', language: 'en' } },
       think:  { provider: { type: 'open_ai', model: 'gpt-4o' }, prompt: 'You are a helpful assistant.' },
-      speak:  { provider: { type: 'deepgram', model: 'aura-2-asteria-en' } },
+      speak:  { provider: { type: 'deepgram', version: 'v2', model: 'flux-kit-en' } },
     },
   },
 });
@@ -498,17 +497,22 @@ const {
       output: { encoding: 'linear16', sample_rate: 24_000, container: 'none' },
     },
     agent: {
-      language: 'en',
       greeting: 'Hello! How can I help you today?',
       listen: {
-        provider: { type: 'deepgram', model: 'nova-3', smart_format: true },
+        provider: {
+          type: 'deepgram',
+          model: 'nova-3',
+          language: 'en',
+          smart_format: true,
+        },
       },
       think: {
         provider: { type: 'open_ai', model: 'gpt-4o', temperature: 0.7 },
         prompt: 'You are a helpful voice concierge.',
       },
       speak: {
-        provider: { type: 'deepgram', model: 'aura-2-asteria-en' },
+        // Flux TTS (v2); use version 'v1' with an aura-* voice for Aura.
+        provider: { type: 'deepgram', version: 'v2', model: 'flux-kit-en' },
       },
     },
     tags: ['demo'],
@@ -572,7 +576,8 @@ const {
   mute, unmute, isMuted,
   // Messaging
   sendMessage, sendSettings, sendMedia, sendKeepAlive,
-  injectUserMessage, injectAgentMessage, updatePrompt,
+  injectUserMessage, injectAgentMessage, forceEndTurn, updatePrompt,
+  updateListen, updateThink, updateSpeak, updateThinkLive,
   // Function calls
   sendFunctionCallResponse,
   // Reactive state (opt-in via track* flags)
@@ -638,6 +643,10 @@ const {
 | `onSpeakUpdated` | `(message: DeepgramVoiceAgentSpeakUpdatedMessage) => void` | Active speak configuration changes (server-driven). |
 | `onListenUpdated` | `(message: DeepgramVoiceAgentListenUpdatedMessage) => void` | Listen configuration is updated (e.g. after `updateListen`). |
 | `onThinkUpdated` | `(message: DeepgramVoiceAgentThinkUpdatedMessage) => void` | Think configuration is updated (e.g. after `updateThink`). |
+| `onThinkLiveUpdated` | `(message: DeepgramVoiceAgentThinkLiveUpdatedMessage) => void` | `think_live` behaviours are updated (after `updateThinkLive`). |
+| `onLatencyReport` | `(message: DeepgramVoiceAgentLatencyReportMessage) => void` | Per-turn latency breakdown (`stt_latency`, `ttt_*_latency`, `tts_latency`, `total_latency`). |
+| `onFrustrationDetected` | `(message: DeepgramVoiceAgentFrustrationDetectedMessage) => void` | `think_live` detected a frustrated user. |
+| `onCustomFromThinkProvider` | `(message: DeepgramVoiceAgentCustomFromThinkProviderMessage) => void` | A custom think provider forwarded a payload. |
 | `onHistory` | `(message: DeepgramVoiceAgentHistoryMessage) => void` | Conversation history (text turn or function calls) is replayed by the server. |
 | `onInjectionRefused` | `(message: DeepgramVoiceAgentInjectionRefusedMessage) => void` | Inject request rejected (typically while the agent is speaking). |
 | `onMessage` | `(message: DeepgramVoiceAgentServerMessage) => void` | Catch-all for every JSON message from the API. |
@@ -651,6 +660,7 @@ const {
 | -------- | --------- | ---------- |
 | `onFunctionCallRequest` | `(message: DeepgramVoiceAgentFunctionCallRequestMessage) => void` | Agent asks the client to execute a tool marked `client_side: true`. Respond with `sendFunctionCallResponse`. |
 | `onFunctionCallResponse` | `(message: DeepgramVoiceAgentReceiveFunctionCallResponseMessage) => void` | Server shares the outcome of a non-client-side function call. |
+| `onFunctionCallCancelled` | `(message: DeepgramVoiceAgentFunctionCallCancelledMessage) => void` | Pending calls were cancelled (e.g. the user kept talking); drop their results. |
 
 </details>
 
@@ -675,11 +685,13 @@ const {
 | `sendMedia` | `(chunk: ArrayBuffer \| Uint8Array \| number[]) => boolean` | Stream additional PCM (e.g. pre-recorded buffer). |
 | `sendKeepAlive` | `() => boolean` | Emit a `KeepAlive` ping. |
 | `injectUserMessage` | `(content: string) => boolean` | Inject a user-side text turn. |
-| `injectAgentMessage` | `(message: string, behavior?: string) => boolean` | Inject an assistant-side text turn (optional `behavior`, e.g. `'default'`). |
+| `injectAgentMessage` | `(message: string, options?: DeepgramVoiceAgentInjectBehavior \| { behavior?; dynamic? }) => boolean` | Make the agent speak. `behavior`: `'default'` (refused mid-turn), `'queue'` or `'interrupt'`; `dynamic: true` lets the LLM phrase the reply from `message`. |
+| `forceEndTurn` | `() => boolean` | End the user's turn now (push-to-talk; pairs with Flux `eot_threshold: 1.0`). |
 | `updatePrompt` | `(prompt: string) => boolean` | Replace the active system prompt. |
 | `updateListen` | `(listen: DeepgramVoiceAgentListenConfig) => boolean` | Swap the speech-recognition (listen) provider mid-session. |
 | `updateThink` | `(think: DeepgramVoiceAgentThinkConfig) => boolean` | Swap the LLM (think) provider mid-session. |
-| `updateSpeak` | `(speak: DeepgramVoiceAgentSpeakConfig) => boolean` | Swap the text-to-speech (speak) provider mid-session. |
+| `updateSpeak` | `(speak: DeepgramVoiceAgentSpeakConfig \| DeepgramVoiceAgentSpeakConfig[]) => boolean` | Swap the text-to-speech (speak) provider mid-session. |
+| `updateThinkLive` | `(thinkLive: Record<string, unknown>) => boolean` | Update the `think_live` behaviours mid-session. |
 
 **Function calls**
 
@@ -710,13 +722,14 @@ Each value is `undefined` unless its corresponding `track*` flag is `true`.
 | `flags.history` | `boolean` | Enable prior history playback to the agent. |
 | `audio.input` | `DeepgramVoiceAgentAudioConfig` | Configure encoding/sample rate for microphone audio. |
 | `audio.output` | `DeepgramVoiceAgentAudioConfig` | Choose output encoding/sample rate/bitrate for agent speech. |
-| `agent.language` | `string` | Primary language for the conversation. |
+| `agent` | `DeepgramVoiceAgentAgentConfig \| string` | Inline configuration, or the UUID of a reusable agent configuration stored in your Deepgram project. |
 | `agent.context.messages` | `DeepgramVoiceAgentContextMessage[]` | Seed the conversation with prior turns or system notes. |
-| `agent.listen.provider` | `DeepgramVoiceAgentListenProvider` | Speech recognition provider/model configuration (Deepgram listen also accepts Flux fields: `version`, `eot_threshold`, `eager_eot_threshold`, `eot_timeout_ms`, `language_hints`). |
-| `agent.think.provider` | `DeepgramVoiceAgentThinkProvider` | LLM selection (`type`, `model`, `temperature`, etc.). |
-| `agent.think.functions` | `DeepgramVoiceAgentFunctionConfig[]` | Tooling exposed to the agent (name, parameters, optional endpoint metadata). |
+| `agent.listen.provider` | `DeepgramVoiceAgentListenProvider` | Speech recognition: `version` `'v1'` (Nova: `language`, `keyterms`, `smart_format`) or `'v2'` (Flux: `eot_threshold`, `eager_eot_threshold`, `eot_timeout_ms`, `language_hints`, `keyterms`). |
+| `agent.think.provider` | `DeepgramVoiceAgentThinkProvider` | LLM selection (`type`, `model`, `temperature`, `reasoning_mode`, `version`, etc.). |
+| `agent.think.functions` | `DeepgramVoiceAgentFunctionConfig[]` | Tooling exposed to the agent (name, parameters, optional endpoint, `defer_until_eot`). |
 | `agent.think.prompt` | `string` | System prompt presented to the thinking provider. |
-| `agent.speak.provider` | `Record<string, unknown>` | Text-to-speech model selection for spoken replies. |
+| `agent.think_live` | `Record<string, unknown>` | Conversational behaviours (backchannels, presence checks, frustration detection). |
+| `agent.speak` | `DeepgramVoiceAgentSpeakConfig \| DeepgramVoiceAgentSpeakConfig[]` | Text-to-speech provider (Deepgram `version` `'v2'` + `flux-*` model with `speed` / `expressivity`, or `'v1'` + `aura-*`); an array lists fallbacks. Defaults to `flux-kit-en`. |
 | `agent.greeting` | `string` | Optional greeting played once settings are applied. |
 | `mip_opt_out` | `boolean` | Opt the session out of the Model Improvement Program. |
 

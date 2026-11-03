@@ -37,6 +37,7 @@ import type {
   DeepgramVoiceAgentConversationTextMessage,
   DeepgramVoiceAgentErrorMessage,
   DeepgramVoiceAgentFunctionCallResponseMessage,
+  DeepgramVoiceAgentInjectBehavior,
   DeepgramVoiceAgentListenConfig,
   DeepgramVoiceAgentServerMessage,
   DeepgramVoiceAgentSettings,
@@ -82,6 +83,17 @@ const FORWARDED_EVENTS: Record<
   ListenUpdated: { callback: 'onListenUpdated', requires: [] },
   ThinkUpdated: { callback: 'onThinkUpdated', requires: [] },
   SpeakUpdated: { callback: 'onSpeakUpdated', requires: [] },
+  ThinkLiveUpdated: { callback: 'onThinkLiveUpdated', requires: [] },
+  LatencyReport: { callback: 'onLatencyReport', requires: [] },
+  FunctionCallCancelled: {
+    callback: 'onFunctionCallCancelled',
+    requires: ['functions'],
+  },
+  FrustrationDetected: { callback: 'onFrustrationDetected', requires: [] },
+  __customFromThinkProvider: {
+    callback: 'onCustomFromThinkProvider',
+    requires: [],
+  },
   InjectionRefused: { callback: 'onInjectionRefused', requires: ['message'] },
   History: { callback: 'onHistory', requires: [] },
 };
@@ -560,7 +572,8 @@ export function useDeepgramVoiceAgent(
     ) => {
       const sent = sendJson(message);
       const settings = sessionRef.current.settings;
-      if (sent && settings) {
+      // A stored agent configuration (UUID string) lives on the server.
+      if (sent && settings && typeof settings.agent !== 'string') {
         sessionRef.current.settings = {
           ...settings,
           agent: patch(settings.agent ?? {}),
@@ -599,12 +612,26 @@ export function useDeepgramVoiceAgent(
   );
 
   const updateSpeak = useCallback(
-    (speak: DeepgramVoiceAgentSpeakConfig) =>
+    (speak: DeepgramVoiceAgentSpeakConfig | DeepgramVoiceAgentSpeakConfig[]) =>
       sendAgentUpdate({ type: 'UpdateSpeak', speak }, (agent) => ({
         ...agent,
         speak,
       })),
     [sendAgentUpdate]
+  );
+
+  const updateThinkLive = useCallback(
+    (thinkLive: Record<string, unknown>) =>
+      sendAgentUpdate(
+        { type: 'UpdateThink_Live', think_live: thinkLive },
+        (agent) => ({ ...agent, think_live: thinkLive })
+      ),
+    [sendAgentUpdate]
+  );
+
+  const forceEndTurn = useCallback(
+    () => sendJson({ type: 'ForceEndTurn' }),
+    [sendJson]
   );
 
   const injectUserMessage = useCallback(
@@ -613,12 +640,26 @@ export function useDeepgramVoiceAgent(
   );
 
   const injectAgentMessage = useCallback(
-    (message: string, behavior?: string) =>
-      sendJson({
+    (
+      message: string,
+      options?:
+        | DeepgramVoiceAgentInjectBehavior
+        | { behavior?: DeepgramVoiceAgentInjectBehavior; dynamic?: boolean }
+    ) => {
+      const { behavior, dynamic } =
+        typeof options === 'string'
+          ? { behavior: options, dynamic: false }
+          : {
+              behavior: options?.behavior,
+              dynamic: options?.dynamic === true,
+            };
+      return sendJson({
         type: 'InjectAgentMessage',
         message,
         ...(behavior !== undefined ? { behavior } : {}),
-      }),
+        ...(dynamic ? { is_dynamic: true } : {}),
+      });
+    },
     [sendJson]
   );
 
@@ -679,12 +720,14 @@ export function useDeepgramVoiceAgent(
     sendSettings,
     injectUserMessage,
     injectAgentMessage,
+    forceEndTurn,
     sendFunctionCallResponse,
     sendKeepAlive,
     updatePrompt,
     updateListen,
     updateThink,
     updateSpeak,
+    updateThinkLive,
     sendMedia,
     mute,
     unmute,

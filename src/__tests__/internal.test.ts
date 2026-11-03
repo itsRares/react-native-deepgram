@@ -3,6 +3,8 @@ import {
   mergePlainObjects,
   sanitizeSettings,
 } from '../internal/agentSettings';
+import { createAgentSettings } from '../helpers/createAgentSettings';
+import type { DeepgramVoiceAgentAgentConfig } from '../types';
 import { createKeepAlive } from '../internal/keepAlive';
 import {
   buildLiveConfigureMessage,
@@ -117,6 +119,34 @@ describe('agent settings', () => {
     expect(sanitized.agent.speak).not.toBe(speak);
     expect(sanitizeSettings({ audio: {}, agent: {} })).toBeUndefined();
     expect(cloneValue(null)).toBeNull();
+  });
+
+  it('builds Flux-aware agent settings without the deprecated agent.language', () => {
+    const nova = createAgentSettings({ language: 'es' });
+    const novaAgent = nova.agent as DeepgramVoiceAgentAgentConfig;
+    expect(novaAgent.language).toBeUndefined();
+    expect(novaAgent.speak).toBeUndefined();
+    expect(novaAgent.listen?.provider).toEqual({
+      type: 'deepgram',
+      version: 'v1',
+      model: 'nova-3',
+      language: 'es',
+      smart_format: true,
+    });
+
+    const flux = createAgentSettings({
+      listenModel: 'flux-general-en',
+      speakModel: 'flux-kit-en',
+    });
+    const fluxAgent = flux.agent as DeepgramVoiceAgentAgentConfig;
+    expect(fluxAgent.listen?.provider).toEqual({
+      type: 'deepgram',
+      version: 'v2',
+      model: 'flux-general-en',
+    });
+    expect(fluxAgent.speak).toEqual({
+      provider: { type: 'deepgram', version: 'v2', model: 'flux-kit-en' },
+    });
   });
 });
 

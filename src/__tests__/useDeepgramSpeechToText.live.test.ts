@@ -68,7 +68,7 @@ describe('useDeepgramSpeechToText – live measurements', () => {
   });
 
   it('forwards measurements into the v1 live query URL', async () => {
-    render(createElement(Harness));
+    await render(createElement(Harness));
 
     await act(async () => {
       await hookApi.startListening({ measurements: true });
@@ -78,7 +78,7 @@ describe('useDeepgramSpeechToText – live measurements', () => {
   });
 
   it('forwards measurements into the v2 (Flux) live query URL', async () => {
-    render(createElement(Harness));
+    await render(createElement(Harness));
 
     await act(async () => {
       await hookApi.startListening({ apiVersion: 'v2', measurements: true });
@@ -88,7 +88,7 @@ describe('useDeepgramSpeechToText – live measurements', () => {
   });
 
   it('omits measurements from the live query when it is not provided', async () => {
-    render(createElement(Harness));
+    await render(createElement(Harness));
 
     await act(async () => {
       await hookApi.startListening();

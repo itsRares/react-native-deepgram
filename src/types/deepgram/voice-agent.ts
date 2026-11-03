@@ -246,8 +246,7 @@ export interface DeepgramVoiceAgentSettings {
 /**
  * Settings message sent immediately after connecting to initialize the agent.
  */
-export interface DeepgramVoiceAgentSettingsMessage
-  extends DeepgramVoiceAgentSettings {
+export interface DeepgramVoiceAgentSettingsMessage extends DeepgramVoiceAgentSettings {
   type: 'Settings';
 }
 

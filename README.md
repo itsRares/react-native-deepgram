@@ -159,8 +159,8 @@ That's a working, low-latency conversational agent with hardware echo cancellati
 | | Minimum |
 | --- | --- |
 | Node | 18 |
-| React | 18.0 |
-| React Native | 0.72 |
+| React | 19.0 |
+| React Native | 0.79 |
 | iOS | 13 (15+ recommended for VPIO AEC) |
 | Android | API 24 (Android 7.0) |
 | Xcode | 15+ if building against the iOS 17 SDK |
@@ -1812,7 +1812,7 @@ Bump `android/build.gradle` `minSdkVersion` to **24** (Android 7.0). Some requir
 
 ### Example app: `Failed to resolve plugin for module "react-native-deepgram"`
 
-You ran `yarn prebuild` from `example/` but the workspace symlink wasn't created. This repo's root `postinstall` script creates it for you — re-run `yarn install` from the **repo root**, then retry `yarn example:prebuild`. (Yarn 3 with `nmHoistingLimits: workspaces` skips the symlink because the root workspace and the dependency share a name; the postinstall script restores it.)
+You ran `yarn prebuild` from `example/` but the workspace symlink wasn't created. This repo's root `postinstall` script creates it for you — re-run `yarn install` from the **repo root**, then retry `yarn example:prebuild`. (Yarn with `nmHoistingLimits: workspaces` skips the symlink because the root workspace and the dependency share a name; the postinstall script restores it.)
 
 ---
 

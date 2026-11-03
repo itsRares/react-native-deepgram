@@ -99,7 +99,7 @@ describe('useDeepgramSpeechToText – interruption handling', () => {
   });
 
   async function startSession() {
-    render(createElement(Harness));
+    await render(createElement(Harness));
     await act(async () => {
       await hookApi.startListening();
     });
@@ -111,7 +111,7 @@ describe('useDeepgramSpeechToText – interruption handling', () => {
     await startSession();
     expect(mockInterruptionListeners.length).toBe(1);
 
-    act(() => {
+    await act(() => {
       emitInterruption({ type: 'began', reason: 'unknown' });
     });
     expect(onInterruption).toHaveBeenCalledWith({
@@ -125,7 +125,7 @@ describe('useDeepgramSpeechToText – interruption handling', () => {
       )
     ).toBe(true);
 
-    act(() => {
+    await act(() => {
       jest.advanceTimersByTime(11_000);
     });
     expect(keepAliveFrames().length).toBeGreaterThanOrEqual(2);
@@ -134,17 +134,17 @@ describe('useDeepgramSpeechToText – interruption handling', () => {
   it('stops sending KeepAlive when the interruption ends', async () => {
     await startSession();
 
-    act(() => {
+    await act(() => {
       emitInterruption({ type: 'began', reason: 'unknown' });
       jest.advanceTimersByTime(6_000);
     });
     expect(keepAliveFrames().length).toBeGreaterThanOrEqual(1);
 
-    act(() => {
+    await act(() => {
       emitInterruption({ type: 'ended', shouldResume: true });
     });
     MockWebSocket.sentFrames = [];
-    act(() => {
+    await act(() => {
       jest.advanceTimersByTime(20_000);
     });
     expect(keepAliveFrames().length).toBe(0);
@@ -153,13 +153,13 @@ describe('useDeepgramSpeechToText – interruption handling', () => {
   it('keeps KeepAlive running after "ended" while user-paused', async () => {
     await startSession();
 
-    act(() => {
+    await act(() => {
       hookApi.pause();
       emitInterruption({ type: 'began', reason: 'unknown' });
       emitInterruption({ type: 'ended', shouldResume: true });
     });
     MockWebSocket.sentFrames = [];
-    act(() => {
+    await act(() => {
       jest.advanceTimersByTime(6_000);
     });
     // Still paused by the user, so the socket must stay warm.
@@ -169,7 +169,7 @@ describe('useDeepgramSpeechToText – interruption handling', () => {
   it('ends the session gracefully on a permanent focus loss', async () => {
     await startSession();
 
-    act(() => {
+    await act(() => {
       emitInterruption({ type: 'stopped', reason: 'focusLossPermanent' });
     });
 

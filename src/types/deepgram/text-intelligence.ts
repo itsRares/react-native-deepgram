@@ -72,8 +72,7 @@ export type DeepgramTextIntelligenceLanguage =
  * Can be raw text or a URL to a text resource.
  */
 export type DeepgramTextIntelligenceInput =
-  | { text: string; url?: string }
-  | { text?: string; url: string };
+  { text: string; url?: string } | { text?: string; url: string };
 
 /**
  * Configuration options for text intelligence analysis.
@@ -116,9 +115,7 @@ export interface UseDeepgramTextIntelligenceOptions {
 
 /** Sentiment label returned by the sentiment analysis feature. */
 export type DeepgramTextIntelligenceSentimentLabel =
-  | 'positive'
-  | 'neutral'
-  | 'negative';
+  'positive' | 'neutral' | 'negative';
 
 /** Token usage / model info reported for an individual analysis feature. */
 export interface DeepgramTextIntelligenceModelInfo {

@@ -82,31 +82,18 @@ export type DeepgramTextToSpeechHttpEncoding =
   | (string & {});
 
 export type DeepgramTextToSpeechStreamEncoding =
-  | 'linear16'
-  | 'mulaw'
-  | 'alaw'
-  | (string & {});
+  'linear16' | 'mulaw' | 'alaw' | (string & {});
 
 /** @deprecated Use `DeepgramTextToSpeechHttpEncoding` or `DeepgramTextToSpeechStreamEncoding`. */
 export type DeepgramTextToSpeechEncoding = DeepgramTextToSpeechHttpEncoding;
 
 export type DeepgramTextToSpeechSampleRate =
-  | 8000
-  | 16000
-  | 22050
-  | 24000
-  | 32000
-  | 44100
-  | 48000
-  | (number & {});
+  8000 | 16000 | 22050 | 24000 | 32000 | 44100 | 48000 | (number & {});
 
 export type DeepgramTextToSpeechCallbackMethod = DeepgramCallbackMethod;
 
 export type DeepgramTextToSpeechContainer =
-  | 'none'
-  | 'wav'
-  | 'ogg'
-  | (string & {});
+  'none' | 'wav' | 'ogg' | (string & {});
 
 export type DeepgramTextToSpeechBitRate = 32000 | 48000 | (number & {});
 
@@ -262,8 +249,7 @@ export interface DeepgramTextToSpeechStreamClearedMessage {
 }
 
 export type DeepgramTextToSpeechStreamWarningCode =
-  | 'TEXT_LENGTH_WARNING'
-  | (string & {});
+  'TEXT_LENGTH_WARNING' | (string & {});
 
 export interface DeepgramTextToSpeechStreamWarningMessage {
   type: 'Warning';

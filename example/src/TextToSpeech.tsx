@@ -189,8 +189,7 @@ export default function TextToSpeech() {
     ? (httpEncoding.trim().toLowerCase() as DeepgramTextToSpeechHttpEncoding)
     : undefined;
   const httpSampleRateValue = parseNumber(httpSampleRate) as
-    | DeepgramTextToSpeechSampleRate
-    | undefined;
+    DeepgramTextToSpeechSampleRate | undefined;
   const httpContainerValue = httpContainer.trim()
     ? (httpContainer.trim().toLowerCase() as DeepgramTextToSpeechContainer)
     : undefined;
@@ -213,8 +212,7 @@ export default function TextToSpeech() {
         .toLowerCase() as DeepgramTextToSpeechStreamEncoding)
     : undefined;
   const streamSampleRateValue = parseNumber(streamSampleRate) as
-    | DeepgramTextToSpeechSampleRate
-    | undefined;
+    DeepgramTextToSpeechSampleRate | undefined;
 
   const {
     synthesize,

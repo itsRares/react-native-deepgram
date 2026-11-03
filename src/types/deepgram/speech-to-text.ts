@@ -68,19 +68,10 @@ export type DeepgramLiveListenModel =
  * Types of sensitive information that can be redacted from transcripts.
  */
 export type DeepgramLiveListenRedaction =
-  | 'pci'
-  | 'numbers'
-  | 'dates'
-  | 'names'
-  | 'addresses'
-  | 'all'
-  | (string & {});
+  'pci' | 'numbers' | 'dates' | 'names' | 'addresses' | 'all' | (string & {});
 
 export type DeepgramLiveListenCallbackMethod =
-  | 'POST'
-  | 'GET'
-  | 'PUT'
-  | 'DELETE';
+  'POST' | 'GET' | 'PUT' | 'DELETE';
 
 /**
  * Diarization model versions available for live streaming. Setting this
@@ -218,10 +209,7 @@ export type DeepgramPrerecordedEncoding =
 export type DeepgramPrerecordedModel = DeepgramLiveListenModel | (string & {});
 
 export type DeepgramPrerecordedRedaction =
-  | 'pci'
-  | 'pii'
-  | 'numbers'
-  | (string & {});
+  'pci' | 'pii' | 'numbers' | (string & {});
 
 /**
  * Diarization model versions available for pre-recorded transcription.
@@ -229,25 +217,17 @@ export type DeepgramPrerecordedRedaction =
  * supports `latest`, `v1`, and `v2`.
  */
 export type DeepgramPrerecordedDiarizeModel =
-  | 'latest'
-  | 'v1'
-  | 'v2'
-  | (string & {});
+  'latest' | 'v1' | 'v2' | (string & {});
 
 export type DeepgramPrerecordedCustomMode = DeepgramCustomMode;
 
 export type DeepgramPrerecordedSummarize =
-  | boolean
-  | 'v1'
-  | 'v2'
-  | (string & {});
+  boolean | 'v1' | 'v2' | (string & {});
 
 export type DeepgramPrerecordedVersion = 'latest' | (string & {});
 
 export type DeepgramPrerecordedExtra =
-  | string
-  | string[]
-  | Record<string, string | number | boolean>;
+  string | string[] | Record<string, string | number | boolean>;
 
 /**
  * Configuration options for Deepgram Pre-recorded (File) Transcription.

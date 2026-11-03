@@ -65,10 +65,7 @@ export type DeepgramAudioRoute = 'speaker' | 'earpiece' | 'bluetooth' | 'auto';
  * automatically and that cannot be requested explicitly.
  */
 export type DeepgramActiveAudioRoute =
-  | 'speaker'
-  | 'earpiece'
-  | 'bluetooth'
-  | 'wired';
+  'speaker' | 'earpiece' | 'bluetooth' | 'wired';
 
 interface DeepgramNative {
   startRecording(options?: StartRecordingOptions): Promise<void>;

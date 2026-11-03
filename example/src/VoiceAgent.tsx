@@ -6,6 +6,7 @@ import {
   Switch,
   Text,
   View,
+  type ScrollViewInstance,
 } from 'react-native';
 import {
   useDeepgramVoiceAgent,
@@ -170,7 +171,7 @@ export default function VoiceAgent() {
   const connecting = connectionState === 'connecting';
   const connected = connectionState === 'connected';
   const isReconnecting = reconnectAttempt !== null;
-  const conversationRef = useRef<ScrollView | null>(null);
+  const conversationRef = useRef<ScrollViewInstance | null>(null);
 
   // Mic pulse animation
   const pulse = useRef(new Animated.Value(0)).current;

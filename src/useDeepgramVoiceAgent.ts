@@ -595,8 +595,7 @@ export function useDeepgramVoiceAgent({
       override?: DeepgramVoiceAgentSettings
     ): DeepgramVoiceAgentSettings | undefined =>
       mergePlainObjects(base as any, override as any) as
-        | DeepgramVoiceAgentSettings
-        | undefined,
+        DeepgramVoiceAgentSettings | undefined,
     []
   );
 

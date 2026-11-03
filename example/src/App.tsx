@@ -62,7 +62,7 @@ export default function App() {
 
   return (
     <View style={styles.root}>
-      <StatusBar barStyle="light-content" backgroundColor={colors.bg} />
+      <StatusBar barStyle="light-content" />
       <SafeAreaView style={styles.safe}>
         {/* Header */}
         <View style={styles.header}>

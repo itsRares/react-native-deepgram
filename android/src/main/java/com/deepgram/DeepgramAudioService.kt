@@ -156,6 +156,7 @@ class DeepgramAudioService : Service() {
     val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       Notification.Builder(this, CHANNEL_ID)
     } else {
+      @Suppress("DEPRECATION") // Channel-less builder is the only option below API 26.
       Notification.Builder(this)
     }
 

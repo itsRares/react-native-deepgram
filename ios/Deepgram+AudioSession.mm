@@ -189,7 +189,6 @@
   // `speaker`/`earpiece` drop HFP; `earpiece`/`bluetooth` also drop
   // DefaultToSpeaker (the receiver is unreachable with it set).
   NSString *route = self.requestedAudioRoute;
-  BOOL routeWantsBluetooth = [route isEqualToString:@"bluetooth"];
   BOOL routeBlocksBluetooth =
       [route isEqualToString:@"speaker"] || [route isEqualToString:@"earpiece"];
 
@@ -197,9 +196,6 @@
   NSMutableArray<NSDictionary *> *attempts = [NSMutableArray array];
 
   if (needsMicrophone) {
-    BOOL needsAEC = self.engineCaptureActive || self.voiceProcessingRequested ||
-                    self.isPlaying;
-
     // Input-safe options for PlayAndRecord. DefaultToSpeaker + HFP are valid
     // here; A2DP/AirPlay are intentionally excluded (see rule 1 above).
     AVAudioSessionCategoryOptions recordOptions = 0;
@@ -214,8 +210,10 @@
     // Preferred: hardware AEC via VoiceChat (device only). DefaultToSpeaker
     // must NOT be combined with VoiceChat (-50 on some iOS versions); only
     // MixWithOthers/HFP layer safely, with the bare attempts as -50 fallbacks.
+    BOOL needsAEC = self.engineCaptureActive || self.voiceProcessingRequested ||
+                    self.isPlaying;
     if (needsAEC) {
-      if (routeWantsBluetooth) {
+      if ([route isEqualToString:@"bluetooth"]) {
         [attempts addObject:@{
           @"category" : AVAudioSessionCategoryPlayAndRecord,
           @"mode" : AVAudioSessionModeVoiceChat,

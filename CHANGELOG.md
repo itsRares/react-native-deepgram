@@ -37,11 +37,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   template's monorepo Metro/Babel setup (no more `postinstall` symlink),
   the new `expo-file-system` API and `react-native-safe-area-context`.
 - CI builds the example app for Android and iOS.
+- The speech-to-text, text-to-speech and Voice Agent hooks share one
+  socket/reconnect, KeepAlive, session-stats and PCM pipeline (`src/internal`)
+  instead of three copies; the hooks shrank from 1067/748/1551 to
+  570/415/698 lines.
+- `UseDeepgramVoiceAgentProps` / `UseDeepgramVoiceAgentReturn` are now part of
+  the exported types.
 
 ### Fixed
 
 - `Deepgram.stopRecording()` resolves `null` on both platforms when no file
   was recorded (iOS previously resolved `undefined`).
+- Stopping/disconnecting while the auth token is still resolving no longer
+  opens a socket afterwards (all streaming hooks); events from superseded
+  connections are ignored.
+- `startListening()` / `startStreaming()` close a still-running session first
+  instead of leaking it, and stop the recorder if the session was stopped
+  while it was starting.
+- Voice Agent: muting during an interruption no longer runs two KeepAlive
+  timers; `disconnect()` reports `connectionState: 'disconnected'` right away;
+  `agent.speak` provider arrays are no longer turned into objects when
+  settings are copied.
+- Speech-to-text: an error status is no longer overwritten with `idle` when the
+  socket closes afterwards; socket construction failures reach `onError`.
+- `stats.bytesSent` counts the exact decoded frame size; odd-length PCM frames
+  no longer throw; typed-array views passed to `sendMedia` / audio playback
+  respect their byte offset.
+- Native build warnings (unused iOS simulator variables, Android
+  `Notification.Builder` deprecation).
 
 ## [2.4.0] - 2026-07-08
 

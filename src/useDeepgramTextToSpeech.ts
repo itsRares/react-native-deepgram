@@ -1,503 +1,238 @@
-import { useRef, useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Deepgram } from './native';
+import { arrayBufferToBase64 } from './helpers/audioUtils';
+import { resolveAuthHeader } from './helpers/auth';
 import { addInterruptionListener } from './interruption';
+import {
+  buildSpeakHttpParams,
+  buildSpeakHttpUrl,
+  buildSpeakStreamUrl,
+  DEFAULT_TTS_SAMPLE_RATE,
+  deriveTtsMimeType,
+  resolveHttpOptions,
+  resolveStreamOptions,
+} from './internal/speakOptions';
+import { toArrayBuffer } from './internal/pcm';
+import { useLatest } from './internal/useLatest';
+import { toDeepgramError } from './types/errors';
 import type {
-  UseDeepgramTextToSpeechProps,
-  UseDeepgramTextToSpeechReturn,
+  DeepgramTextToSpeechBytes,
+  DeepgramTextToSpeechHttpOptions,
+  DeepgramTextToSpeechStreamErrorMessage,
   DeepgramTextToSpeechStreamInputMessage,
   DeepgramTextToSpeechStreamResponseMessage,
-  DeepgramTextToSpeechStreamMetadataMessage,
-  DeepgramTextToSpeechStreamFlushedMessage,
-  DeepgramTextToSpeechStreamClearedMessage,
-  DeepgramTextToSpeechStreamWarningMessage,
-  DeepgramTextToSpeechStreamErrorMessage,
-  DeepgramTextToSpeechHttpEncoding,
-  DeepgramTextToSpeechStreamEncoding,
-  DeepgramTextToSpeechHttpOptions,
-  DeepgramTextToSpeechBytes,
+  UseDeepgramTextToSpeechProps,
+  UseDeepgramTextToSpeechReturn,
 } from './types';
-import { getBaseUrl, getBaseWss } from './constants';
-import { buildParams, arrayBufferToBase64, resolveAuthHeader } from './helpers';
-import { toDeepgramError } from './types';
-
-const DEFAULT_TTS_MODEL = 'aura-2-asteria-en';
-const DEFAULT_TTS_SAMPLE_RATE = 24_000;
-const DEFAULT_TTS_HTTP_ENCODING: DeepgramTextToSpeechHttpEncoding = 'linear16';
-const DEFAULT_TTS_STREAM_ENCODING: DeepgramTextToSpeechStreamEncoding =
-  'linear16';
-const DEFAULT_TTS_CONTAINER = 'none';
-const DEFAULT_TTS_MP3_BITRATE = 48_000;
 
 const TTS_BYTES_CACHE_MAX = 50;
 
-const deriveTtsMimeType = (encoding?: string, container?: string): string => {
-  if (container === 'wav') return 'audio/wav';
-  if (container === 'ogg') return 'audio/ogg';
-  switch (encoding) {
-    case 'mp3':
-      return 'audio/mpeg';
-    case 'aac':
-      return 'audio/aac';
-    case 'flac':
-      return 'audio/flac';
-    case 'opus':
-      return 'audio/ogg';
-    default:
-      // linear16 / mulaw / alaw and other raw PCM payloads have no container.
-      return 'application/octet-stream';
-  }
-};
+type SpeakStatus = 'idle' | 'loading' | 'connecting' | 'connected' | 'error';
 
-type QueryParamPrimitive = string | number | boolean | null | undefined;
-type QueryParamValue = QueryParamPrimitive | Array<QueryParamPrimitive>;
+type HeaderWebSocket = new (
+  url: string,
+  protocols: undefined,
+  options: { headers: Record<string, string> }
+) => WebSocket;
 
-const normalizeStreamEncoding = (
-  encoding?: string | null
-): DeepgramTextToSpeechStreamEncoding => {
-  switch (encoding) {
-    case 'linear16':
-    case 'mulaw':
-    case 'alaw':
-      return encoding;
-    default:
-      return DEFAULT_TTS_STREAM_ENCODING;
-  }
-};
+const toBase64 = (chunk: ArrayBuffer | Uint8Array) =>
+  arrayBufferToBase64(toArrayBuffer(chunk) ?? new ArrayBuffer(0));
 
-const ensureQueryParam = (
-  params: Record<string, QueryParamValue>,
-  key: string,
-  value: QueryParamValue
-) => {
-  if (value == null) return;
-  if (
-    Object.prototype.hasOwnProperty.call(params, key) &&
-    params[key] != null
-  ) {
-    return;
-  }
-  params[key] = value;
-};
+/** Required fields per stream message type, checked before dispatching. */
+const STREAM_EVENT_SHAPES = {
+  Metadata: { callback: 'onStreamMetadata', field: 'request_id', is: 'string' },
+  Flushed: { callback: 'onStreamFlushed', field: 'sequence_id', is: 'number' },
+  Cleared: { callback: 'onStreamCleared', field: 'sequence_id', is: 'number' },
+  Warning: { callback: 'onStreamWarning', field: 'description', is: 'string' },
+} as const;
 
-const isMetadataMessage = (
-  message: DeepgramTextToSpeechStreamResponseMessage
-): message is DeepgramTextToSpeechStreamMetadataMessage =>
-  message.type === 'Metadata' &&
-  typeof (message as Partial<DeepgramTextToSpeechStreamMetadataMessage>)
-    .request_id === 'string';
-
-const isFlushedMessage = (
-  message: DeepgramTextToSpeechStreamResponseMessage
-): message is DeepgramTextToSpeechStreamFlushedMessage =>
-  message.type === 'Flushed' &&
-  typeof (message as Partial<DeepgramTextToSpeechStreamFlushedMessage>)
-    .sequence_id === 'number';
-
-const isClearedMessage = (
-  message: DeepgramTextToSpeechStreamResponseMessage
-): message is DeepgramTextToSpeechStreamClearedMessage =>
-  message.type === 'Cleared' &&
-  typeof (message as Partial<DeepgramTextToSpeechStreamClearedMessage>)
-    .sequence_id === 'number';
-
-const isWarningMessage = (
-  message: DeepgramTextToSpeechStreamResponseMessage
-): message is DeepgramTextToSpeechStreamWarningMessage =>
-  message.type === 'Warning' &&
-  typeof (message as Partial<DeepgramTextToSpeechStreamWarningMessage>)
-    .description === 'string' &&
-  typeof (message as Partial<DeepgramTextToSpeechStreamWarningMessage>).code ===
-    'string';
-
-const asErrorMessage = (
-  message: DeepgramTextToSpeechStreamResponseMessage
-): DeepgramTextToSpeechStreamErrorMessage | null =>
-  message.type === 'Error'
-    ? (message as DeepgramTextToSpeechStreamErrorMessage)
-    : null;
-
-/* Native player helpers — delegates to shared Deepgram import */
-const NativePlayer = {
-  startPlayer: (sr = 16_000, ch: 1 | 2 = 1) => Deepgram.startPlayer(sr, ch),
-
-  feedAudio: (chunk: ArrayBuffer | Uint8Array) => {
-    const b64 = arrayBufferToBase64(
-      chunk instanceof Uint8Array ? (chunk.buffer as ArrayBuffer) : chunk
-    );
-    Deepgram.feedAudio(b64);
-  },
-
-  playAudioChunk: (chunk: ArrayBuffer | Uint8Array) => {
-    const b64 = arrayBufferToBase64(
-      chunk instanceof Uint8Array ? (chunk.buffer as ArrayBuffer) : chunk
-    );
-    return Deepgram.playAudioChunk(b64);
-  },
-
-  stopPlayer: () => Deepgram.stopPlayer(),
-};
-
-/* ────────────────────────────────────────────────────────────
-   Hook: useDeepgramTextToSpeech
-   ──────────────────────────────────────────────────────────── */
-export function useDeepgramTextToSpeech({
-  onBeforeSynthesize = () => {},
-  onSynthesizeSuccess = () => {},
-  onSynthesizeError = () => {},
-  onBeforeStream = () => {},
-  onStreamStart = () => {},
-  onAudioChunk = () => {},
-  onStreamError = () => {},
-  onStreamEnd = () => {},
-  onStreamMetadata = () => {},
-  onStreamFlushed = () => {},
-  onStreamCleared = () => {},
-  onStreamWarning = () => {},
-  options = {},
-  autoPlayAudio = true,
-  trackState = false,
-  onInterruption,
-}: UseDeepgramTextToSpeechProps = {}): UseDeepgramTextToSpeechReturn {
-  /* ---------- Stable refs for callbacks ---------- */
-  const onBeforeSynthesizeRef = useRef(onBeforeSynthesize);
-  const onSynthesizeSuccessRef = useRef(onSynthesizeSuccess);
-  const onSynthesizeErrorRef = useRef(onSynthesizeError);
-  const onBeforeStreamRef = useRef(onBeforeStream);
-  const onStreamStartRef = useRef(onStreamStart);
-  const onAudioChunkRef = useRef(onAudioChunk);
-  const onStreamErrorRef = useRef(onStreamError);
-  const onStreamEndRef = useRef(onStreamEnd);
-  const onStreamMetadataRef = useRef(onStreamMetadata);
-  const onStreamFlushedRef = useRef(onStreamFlushed);
-  const onStreamClearedRef = useRef(onStreamCleared);
-  const onStreamWarningRef = useRef(onStreamWarning);
-
-  useEffect(() => {
-    onBeforeSynthesizeRef.current = onBeforeSynthesize;
-    onSynthesizeSuccessRef.current = onSynthesizeSuccess;
-    onSynthesizeErrorRef.current = onSynthesizeError;
-    onBeforeStreamRef.current = onBeforeStream;
-    onStreamStartRef.current = onStreamStart;
-    onAudioChunkRef.current = onAudioChunk;
-    onStreamErrorRef.current = onStreamError;
-    onStreamEndRef.current = onStreamEnd;
-    onStreamMetadataRef.current = onStreamMetadata;
-    onStreamFlushedRef.current = onStreamFlushed;
-    onStreamClearedRef.current = onStreamCleared;
-    onStreamWarningRef.current = onStreamWarning;
+async function postSpeak(
+  url: string,
+  text: string,
+  signal?: AbortSignal
+): Promise<Response> {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Authorization': await resolveAuthHeader(),
+      'Content-Type': 'application/json',
+      'Accept': 'application/octet-stream',
+    },
+    body: JSON.stringify({ text }),
+    signal,
   });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+  }
+  return res;
+}
 
-  const onInterruptionRef = useRef(onInterruption);
-  onInterruptionRef.current = onInterruption;
-  const wantsInterruptions = typeof onInterruption === 'function';
+export function useDeepgramTextToSpeech(
+  props: UseDeepgramTextToSpeechProps = {}
+): UseDeepgramTextToSpeechReturn {
+  const { options = {}, autoPlayAudio = true, trackState = false } = props;
+  const propsRef = useLatest(props);
+
+  const [state, setState] = useState<{
+    status: SpeakStatus;
+    error: Error | null;
+  }>({ status: 'idle', error: null });
+
+  const setStatus = useCallback(
+    (status: SpeakStatus, error: Error | null = null) => {
+      if (trackState) setState({ status, error });
+    },
+    [trackState]
+  );
+
+  const reportStreamError = useCallback(
+    (err: unknown) => {
+      const dgError = toDeepgramError(err);
+      propsRef.current.onStreamError?.(dgError);
+      setStatus('error', dgError);
+      return dgError;
+    },
+    [propsRef, setStatus]
+  );
+
+  const wantsInterruptions = typeof props.onInterruption === 'function';
   useEffect(() => {
     if (!wantsInterruptions) return;
-    const sub = addInterruptionListener((e) => onInterruptionRef.current?.(e));
-    return () => sub.remove();
-  }, [wantsInterruptions]);
-
-  const streamEndFiredRef = useRef(false);
-  const [internalState, setInternalState] = useState<{
-    status: 'idle' | 'loading' | 'connecting' | 'connected' | 'error';
-    error: Error | null;
-  }>({
-    status: 'idle',
-    error: null,
-  });
-  const resolvedHttpOptions = useMemo(() => {
-    const encoding =
-      options.http?.encoding ?? options.encoding ?? DEFAULT_TTS_HTTP_ENCODING;
-
-    const model = options.http?.model ?? options.model ?? DEFAULT_TTS_MODEL;
-
-    const derivedSampleRate = (() => {
-      const explicit = options.http?.sampleRate ?? options.sampleRate;
-      if (explicit != null) return explicit;
-
-      if (encoding === 'linear16') return DEFAULT_TTS_SAMPLE_RATE;
-      if (encoding === 'mulaw' || encoding === 'alaw') return 8000;
-
-      return undefined;
-    })();
-
-    const container = (() => {
-      const provided = options.http?.container ?? options.container;
-      if (provided) return provided;
-
-      if (encoding === 'opus') return 'ogg';
-      if (
-        encoding === 'linear16' ||
-        encoding === 'mulaw' ||
-        encoding === 'alaw'
-      ) {
-        return DEFAULT_TTS_CONTAINER;
-      }
-      return undefined;
-    })();
-
-    const bitRate = (() => {
-      const provided = options.http?.bitRate ?? options.bitRate;
-      if (provided != null) return provided;
-      if (encoding === 'mp3') return DEFAULT_TTS_MP3_BITRATE;
-      return undefined;
-    })();
-
-    return {
-      model,
-      sampleRate: derivedSampleRate,
-      encoding,
-      container,
-      format: options.http?.format ?? options.format,
-      bitRate,
-      speed: options.http?.speed ?? options.speed,
-      tag: options.http?.tag ?? options.tag,
-      callback: options.http?.callback ?? options.callback,
-      callbackMethod: options.http?.callbackMethod ?? options.callbackMethod,
-      mipOptOut: options.http?.mipOptOut ?? options.mipOptOut,
-      queryParams: {
-        ...(options.queryParams ?? {}),
-        ...(options.http?.queryParams ?? {}),
-      },
-    };
-  }, [options]);
-
-  const resolvedStreamOptions = useMemo(() => {
-    const model = options.stream?.model ?? options.model ?? DEFAULT_TTS_MODEL;
-    const encoding = normalizeStreamEncoding(
-      options.stream?.encoding ?? options.encoding
+    const sub = addInterruptionListener((e) =>
+      propsRef.current.onInterruption?.(e)
     );
-    const sampleRate = (() => {
-      const explicit = options.stream?.sampleRate ?? options.sampleRate;
-      if (explicit != null) return explicit;
-      if (encoding === 'mulaw' || encoding === 'alaw') return 8000;
-      return DEFAULT_TTS_SAMPLE_RATE;
-    })();
+    return () => sub.remove();
+  }, [propsRef, wantsInterruptions]);
 
-    return {
-      model,
-      sampleRate,
-      encoding,
-      speed: options.stream?.speed ?? options.speed,
-      mipOptOut: options.stream?.mipOptOut ?? options.mipOptOut,
-      queryParams: {
-        ...(options.queryParams ?? {}),
-        ...(options.stream?.queryParams ?? {}),
-      },
-      autoFlush: options.stream?.autoFlush ?? true,
-    };
-  }, [options]);
+  const httpOptions = useMemo(() => resolveHttpOptions(options), [options]);
+  const streamOptions = useMemo(() => resolveStreamOptions(options), [options]);
 
   /* ---------- HTTP (one-shot synth) ---------- */
   const abortCtrl = useRef<AbortController | null>(null);
-  const ttsBytesCacheRef = useRef<Map<string, DeepgramTextToSpeechBytes>>(
-    new Map()
-  );
+  const bytesCacheRef = useRef(new Map<string, DeepgramTextToSpeechBytes>());
 
   const synthesize = useCallback(
     async (text: string) => {
-      onBeforeSynthesizeRef.current();
-      if (trackState) {
-        setInternalState({ status: 'loading', error: null });
-      }
+      propsRef.current.onBeforeSynthesize?.();
+      setStatus('loading');
       try {
         if (!text?.trim()) throw new Error('Text is empty');
-        const authHeader = await resolveAuthHeader();
-
-        const httpParams: Record<string, QueryParamValue> = {
-          ...resolvedHttpOptions.queryParams,
-        };
-
-        ensureQueryParam(httpParams, 'model', resolvedHttpOptions.model);
-        ensureQueryParam(httpParams, 'encoding', resolvedHttpOptions.encoding);
-        ensureQueryParam(
-          httpParams,
-          'sample_rate',
-          resolvedHttpOptions.sampleRate
-        );
-        ensureQueryParam(
-          httpParams,
-          'container',
-          resolvedHttpOptions.container
-        );
-        ensureQueryParam(httpParams, 'format', resolvedHttpOptions.format);
-        ensureQueryParam(httpParams, 'bit_rate', resolvedHttpOptions.bitRate);
-        ensureQueryParam(httpParams, 'speed', resolvedHttpOptions.speed);
-        ensureQueryParam(httpParams, 'tag', resolvedHttpOptions.tag);
-        ensureQueryParam(httpParams, 'callback', resolvedHttpOptions.callback);
-        ensureQueryParam(
-          httpParams,
-          'callback_method',
-          resolvedHttpOptions.callbackMethod
-        );
-        ensureQueryParam(
-          httpParams,
-          'mip_opt_out',
-          resolvedHttpOptions.mipOptOut
-        );
-
-        const params = buildParams(httpParams);
-
-        const baseUrl = getBaseUrl();
-        const url = params ? `${baseUrl}/speak?${params}` : `${baseUrl}/speak`;
         abortCtrl.current?.abort();
         abortCtrl.current = new AbortController();
 
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Authorization': authHeader,
-            'Content-Type': 'application/json',
-            'Accept': 'application/octet-stream',
-          },
-          body: JSON.stringify({ text }),
-          signal: abortCtrl.current.signal,
-        });
-
-        if (!res.ok) {
-          const errText = await res.text();
-          throw new Error(`HTTP ${res.status}: ${errText}`);
-        }
-
+        const res = await postSpeak(
+          buildSpeakHttpUrl(buildSpeakHttpParams(httpOptions)),
+          text,
+          abortCtrl.current.signal
+        );
         const audio = await res.arrayBuffer();
-        await NativePlayer.playAudioChunk(audio);
+        await Deepgram.playAudioChunk(toBase64(audio));
 
-        onSynthesizeSuccessRef.current(audio);
-        if (trackState) {
-          setInternalState({ status: 'idle', error: null });
-        }
+        propsRef.current.onSynthesizeSuccess?.(audio);
+        setStatus('idle');
         return audio;
       } catch (err: any) {
         if (err?.name === 'AbortError') {
           throw err;
         }
-
         const dgError = toDeepgramError(err);
-        onSynthesizeErrorRef.current(dgError);
-        if (trackState) {
-          setInternalState({
-            status: 'error',
-            error: dgError,
-          });
-        }
+        propsRef.current.onSynthesizeError?.(dgError);
+        setStatus('error', dgError);
         throw dgError;
       }
     },
-    [resolvedHttpOptions, trackState]
+    [httpOptions, propsRef, setStatus]
   );
 
-  /* ---------- HTTP (synth to bytes + cache) ---------- */
+  /* ---------- HTTP (synth to bytes + LRU cache) ---------- */
   const synthesizeToBytes = useCallback(
     async (
       text: string,
-      opts?: DeepgramTextToSpeechHttpOptions
+      overrides?: DeepgramTextToSpeechHttpOptions
     ): Promise<DeepgramTextToSpeechBytes> => {
       if (!text?.trim()) throw new Error('Text is empty');
 
-      // Per-call overrides win over the hook's resolved HTTP options.
-      const merged = { ...resolvedHttpOptions, ...(opts ?? {}) };
-
-      const httpParams: Record<string, QueryParamValue> = {
-        ...resolvedHttpOptions.queryParams,
-        ...(opts?.queryParams ?? {}),
-      };
-      ensureQueryParam(httpParams, 'model', merged.model);
-      ensureQueryParam(httpParams, 'encoding', merged.encoding);
-      ensureQueryParam(httpParams, 'sample_rate', merged.sampleRate);
-      ensureQueryParam(httpParams, 'container', merged.container);
-      ensureQueryParam(httpParams, 'format', merged.format);
-      ensureQueryParam(httpParams, 'bit_rate', merged.bitRate);
-      ensureQueryParam(httpParams, 'speed', merged.speed);
-      ensureQueryParam(httpParams, 'tag', merged.tag);
-      ensureQueryParam(httpParams, 'mip_opt_out', merged.mipOptOut);
-
-      const cache = ttsBytesCacheRef.current;
-      const cacheKey = JSON.stringify({ text, params: httpParams });
+      // Bytes are needed now, so never ask Deepgram for an async callback.
+      const params = buildSpeakHttpParams(httpOptions, {
+        ...overrides,
+        callback: undefined,
+        callbackMethod: undefined,
+      });
+      const cache = bytesCacheRef.current;
+      const cacheKey = JSON.stringify({ text, params });
       const cached = cache.get(cacheKey);
       if (cached) {
-        // LRU touch: re-insert to mark as most-recently-used.
         cache.delete(cacheKey);
         cache.set(cacheKey, cached);
         return { data: cached.data.slice(0), mimeType: cached.mimeType };
       }
 
-      const authHeader = await resolveAuthHeader();
-      const params = buildParams(httpParams);
-      const baseUrl = getBaseUrl();
-      const url = params ? `${baseUrl}/speak?${params}` : `${baseUrl}/speak`;
-
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Authorization': authHeader,
-          'Content-Type': 'application/json',
-          'Accept': 'application/octet-stream',
-        },
-        body: JSON.stringify({ text }),
-      });
-
-      if (!res.ok) {
-        // Don't cache error responses.
-        const errText = await res.text();
-        throw new Error(`HTTP ${res.status}: ${errText}`);
-      }
-
+      const res = await postSpeak(buildSpeakHttpUrl(params), text);
       const data = await res.arrayBuffer();
+      const encoding = overrides?.encoding ?? httpOptions.encoding;
+      const container =
+        overrides && 'container' in overrides
+          ? overrides.container
+          : httpOptions.container;
       const mimeType =
         res.headers?.get?.('Content-Type') ||
-        deriveTtsMimeType(merged.encoding, merged.container);
+        deriveTtsMimeType(encoding, container);
 
-      const result: DeepgramTextToSpeechBytes = { data, mimeType };
       cache.set(cacheKey, { data: data.slice(0), mimeType });
       while (cache.size > TTS_BYTES_CACHE_MAX) {
         const oldest = cache.keys().next().value;
         if (oldest === undefined) break;
         cache.delete(oldest);
       }
-      return result;
+      return { data, mimeType };
     },
-    [resolvedHttpOptions]
+    [httpOptions]
   );
 
   /* ---------- WebSocket (streaming synth) ---------- */
   const ws = useRef<WebSocket | null>(null);
+  // Bumped on every start/close so a stream superseded while its auth
+  // header was resolving never opens a socket.
+  const streamIdRef = useRef(0);
+  const streamEndFiredRef = useRef(false);
+
+  const fireStreamEnd = useCallback(() => {
+    if (streamEndFiredRef.current) return;
+    streamEndFiredRef.current = true;
+    propsRef.current.onStreamEnd?.();
+  }, [propsRef]);
 
   const closeStream = useCallback(() => {
+    streamIdRef.current += 1;
     ws.current?.close(1000, 'cleanup');
     ws.current = null;
     if (autoPlayAudio) {
-      NativePlayer.stopPlayer();
+      Deepgram.stopPlayer().catch(() => {});
     }
     if (trackState) {
-      setInternalState((prev) => ({ ...prev, status: 'idle' }));
+      setState((prev) => ({ ...prev, status: 'idle' }));
     }
   }, [autoPlayAudio, trackState]);
 
   const sendMessage = useCallback(
     (message: DeepgramTextToSpeechStreamInputMessage) => {
-      if (!ws.current || ws.current.readyState !== WebSocket.OPEN) {
+      const socket = ws.current;
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
         return false;
       }
-
       try {
-        const normalizedMessage =
+        const normalized =
           message.type === 'Text'
             ? { ...message, type: 'Speak' as const }
             : message;
-        ws.current.send(JSON.stringify(normalizedMessage));
+        socket.send(JSON.stringify(normalized));
         return true;
       } catch (err) {
-        const dgError = toDeepgramError(err);
-        onStreamErrorRef.current(dgError);
-        if (trackState) {
-          setInternalState({
-            status: 'error',
-            error: dgError,
-          });
-        }
+        reportStreamError(err);
         return false;
       }
     },
-    [trackState]
+    [reportStreamError]
   );
 
   const flushStream = useCallback(
@@ -517,15 +252,10 @@ export function useDeepgramTextToSpeech({
 
   const sendText = useCallback(
     (text: string, config?: { flush?: boolean; sequenceId?: number }) => {
-      if (!ws.current || ws.current.readyState !== WebSocket.OPEN) {
-        return false;
-      }
-
       const trimmed = text?.trim();
       if (!trimmed) {
         return false;
       }
-
       const didSend = sendMessage({
         type: 'Speak',
         text: trimmed,
@@ -533,198 +263,135 @@ export function useDeepgramTextToSpeech({
           ? { sequence_id: config.sequenceId }
           : {}),
       });
-      const shouldFlush =
-        config?.flush ?? resolvedStreamOptions.autoFlush ?? true;
-
-      if (didSend && shouldFlush) {
+      if (didSend && (config?.flush ?? streamOptions.autoFlush)) {
         flushStream();
       }
-
       return didSend;
     },
-    [flushStream, resolvedStreamOptions.autoFlush, sendMessage]
+    [flushStream, sendMessage, streamOptions.autoFlush]
+  );
+
+  const handleStreamAudio = useCallback(
+    (audio: ArrayBuffer) => {
+      if (autoPlayAudio) {
+        Deepgram.feedAudio(toBase64(audio));
+      }
+      propsRef.current.onAudioChunk?.(audio);
+    },
+    [autoPlayAudio, propsRef]
+  );
+
+  const handleStreamMessage = useCallback(
+    (raw: string) => {
+      let message: DeepgramTextToSpeechStreamResponseMessage;
+      try {
+        message = JSON.parse(raw);
+      } catch {
+        return;
+      }
+
+      if (message.type === 'Error') {
+        const err = message as Partial<DeepgramTextToSpeechStreamErrorMessage>;
+        const description =
+          typeof err.description === 'string' ? err.description : undefined;
+        const code = typeof err.code === 'string' ? err.code : undefined;
+        reportStreamError(new Error(description ?? code ?? 'TTS error'));
+        return;
+      }
+
+      const shape =
+        STREAM_EVENT_SHAPES[message.type as keyof typeof STREAM_EVENT_SHAPES];
+      if (
+        shape &&
+        typeof (message as Record<string, unknown>)[shape.field] === shape.is
+      ) {
+        (
+          propsRef.current[shape.callback] as
+            ((m: typeof message) => void) | undefined
+        )?.(message);
+      }
+    },
+    [propsRef, reportStreamError]
   );
 
   const startStreaming = useCallback(
     async (text: string) => {
+      if (ws.current) closeStream();
+      const streamId = ++streamIdRef.current;
       streamEndFiredRef.current = false;
-      onBeforeStreamRef.current();
-      if (trackState) {
-        setInternalState({ status: 'connecting', error: null });
-      }
+      propsRef.current.onBeforeStream?.();
+      setStatus('connecting');
       try {
         if (!text?.trim()) throw new Error('Text is empty');
         const authHeader = await resolveAuthHeader();
+        if (streamId !== streamIdRef.current) return;
 
-        const wsParams: Record<string, QueryParamValue> = {
-          ...resolvedStreamOptions.queryParams,
-        };
-
-        ensureQueryParam(wsParams, 'model', resolvedStreamOptions.model);
-        ensureQueryParam(wsParams, 'encoding', resolvedStreamOptions.encoding);
-        ensureQueryParam(
-          wsParams,
-          'sample_rate',
-          resolvedStreamOptions.sampleRate
+        const socket = new (WebSocket as unknown as HeaderWebSocket)(
+          buildSpeakStreamUrl(streamOptions),
+          undefined,
+          { headers: { Authorization: authHeader } }
         );
-        ensureQueryParam(wsParams, 'speed', resolvedStreamOptions.speed);
-        ensureQueryParam(
-          wsParams,
-          'mip_opt_out',
-          resolvedStreamOptions.mipOptOut
-        );
-
-        const wsParamString = buildParams(wsParams);
-        const baseWss = getBaseWss();
-        const url = wsParamString
-          ? `${baseWss}/speak?${wsParamString}`
-          : `${baseWss}/speak`;
-        ws.current = new (WebSocket as any)(url, undefined, {
-          headers: { Authorization: authHeader },
-        });
-        const socket = ws.current as WebSocket;
-
         socket.binaryType = 'arraybuffer';
+        ws.current = socket;
+        const isCurrent = () => ws.current === socket;
 
         socket.onopen = () => {
+          if (!isCurrent()) return;
           if (autoPlayAudio) {
-            NativePlayer.startPlayer(
-              Number(resolvedStreamOptions.sampleRate) ||
-                DEFAULT_TTS_SAMPLE_RATE,
+            Deepgram.startPlayer(
+              Number(streamOptions.sampleRate) || DEFAULT_TTS_SAMPLE_RATE,
               1
             );
           }
           sendText(text);
-          onStreamStartRef.current();
-          if (trackState) {
-            setInternalState({ status: 'connected', error: null });
+          propsRef.current.onStreamStart?.();
+          setStatus('connected');
+        };
+        socket.onmessage = (event) => {
+          if (!isCurrent()) return;
+          const { data } = event as { data: unknown };
+          if (typeof data === 'string') {
+            handleStreamMessage(data);
+          } else if (data instanceof Blob) {
+            data.arrayBuffer().then(handleStreamAudio);
+          } else {
+            const audio = toArrayBuffer(data);
+            if (audio) handleStreamAudio(audio);
           }
         };
-
-        socket.onmessage = (ev) => {
-          if (ev.data instanceof ArrayBuffer) {
-            if (autoPlayAudio) {
-              NativePlayer.feedAudio(ev.data);
-            }
-            onAudioChunkRef.current(ev.data);
-          } else if (ev.data instanceof Blob) {
-            ev.data.arrayBuffer().then((buffer) => {
-              if (autoPlayAudio) {
-                NativePlayer.feedAudio(buffer);
-              }
-              onAudioChunkRef.current(buffer);
-            });
-          } else if (typeof ev.data === 'string') {
-            try {
-              const message = JSON.parse(
-                ev.data
-              ) as DeepgramTextToSpeechStreamResponseMessage;
-
-              switch (message.type) {
-                case 'Metadata':
-                  if (isMetadataMessage(message)) {
-                    onStreamMetadataRef.current(message);
-                  }
-                  break;
-                case 'Flushed':
-                  if (isFlushedMessage(message)) {
-                    onStreamFlushedRef.current(message);
-                  }
-                  break;
-                case 'Cleared':
-                  if (isClearedMessage(message)) {
-                    onStreamClearedRef.current(message);
-                  }
-                  break;
-                case 'Warning':
-                  if (isWarningMessage(message)) {
-                    onStreamWarningRef.current(message);
-                  }
-                  break;
-                case 'Error': {
-                  const err = asErrorMessage(message);
-                  const description =
-                    err && typeof err.description === 'string'
-                      ? err.description
-                      : undefined;
-                  const code =
-                    err && typeof err.code === 'string' ? err.code : undefined;
-
-                  const dgError = toDeepgramError(
-                    new Error(description ?? code ?? 'TTS error')
-                  );
-                  onStreamErrorRef.current(dgError);
-                  if (trackState) {
-                    setInternalState({
-                      status: 'error',
-                      error: dgError,
-                    });
-                  }
-                  break;
-                }
-                default:
-                  // Ignore other informational messages.
-                  break;
-              }
-            } catch {
-              // Ignore non-JSON string messages
-            }
-          }
-        };
-
-        socket.onerror = (err) => {
-          const dgError = toDeepgramError(err);
-          onStreamErrorRef.current(dgError);
-          if (trackState) {
-            setInternalState({
-              status: 'error',
-              error: dgError,
-            });
-          }
+        socket.onerror = (event) => {
+          if (!isCurrent()) return;
+          reportStreamError(event);
         };
         socket.onclose = () => {
-          if (!streamEndFiredRef.current) {
-            streamEndFiredRef.current = true;
-            onStreamEndRef.current();
-          }
-          closeStream();
+          fireStreamEnd();
+          if (isCurrent()) closeStream();
         };
       } catch (err) {
-        const dgError = toDeepgramError(err);
-        onStreamErrorRef.current(dgError);
-        if (trackState) {
-          setInternalState({
-            status: 'error',
-            error: dgError,
-          });
-        }
+        const dgError = reportStreamError(err);
         closeStream();
         throw dgError;
       }
     },
-    [resolvedStreamOptions, sendText, autoPlayAudio, closeStream, trackState]
+    [
+      autoPlayAudio,
+      closeStream,
+      fireStreamEnd,
+      handleStreamAudio,
+      handleStreamMessage,
+      propsRef,
+      reportStreamError,
+      sendText,
+      setStatus,
+      streamOptions,
+    ]
   );
 
   const stopStreaming = useCallback(() => {
-    try {
-      closeStream();
-      if (!streamEndFiredRef.current) {
-        streamEndFiredRef.current = true;
-        onStreamEndRef.current();
-      }
-    } catch (err) {
-      const dgError = toDeepgramError(err);
-      onStreamErrorRef.current(dgError);
-      if (trackState) {
-        setInternalState({
-          status: 'error',
-          error: dgError,
-        });
-      }
-    }
-  }, [closeStream, trackState]);
+    closeStream();
+    fireStreamEnd();
+  }, [closeStream, fireStreamEnd]);
 
-  /* ---------- cleanup on unmount ---------- */
   useEffect(
     () => () => {
       abortCtrl.current?.abort();
@@ -743,6 +410,6 @@ export function useDeepgramTextToSpeech({
     clearStream,
     closeStreamGracefully,
     stopStreaming,
-    ...(trackState ? { state: internalState } : {}),
+    ...(trackState ? { state } : {}),
   };
 }

@@ -1,3 +1,7 @@
+import type { DeepgramReconnectOptions } from './shared';
+import type { SessionStats } from './stats';
+import type { DeepgramInterruptionEvent } from '../../interruption';
+
 /**
  * Message in the conversation history.
  */
@@ -603,3 +607,122 @@ export type DeepgramVoiceAgentServerMessage =
   | DeepgramVoiceAgentKeepAliveMessage
   | DeepgramVoiceAgentUpdatePromptMessage
   | { type: string; [key: string]: unknown };
+
+export interface UseDeepgramVoiceAgentProps {
+  endpoint?: string;
+  defaultSettings?: DeepgramVoiceAgentSettings;
+  autoStartMicrophone?: boolean;
+  downsampleFactor?: number;
+  autoPlayAudio?: boolean;
+  trackState?: boolean;
+  trackConversation?: boolean;
+  trackAgentStatus?: boolean;
+  /**
+   * Publish live session telemetry via `stats`, throttled to ≤1 update/s.
+   * @default false
+   */
+  trackStats?: boolean;
+  /**
+   * Auto-reconnect configuration for the agent socket. Disabled by default;
+   * set `reconnect.enabled` to opt in. On reconnect the stored `Settings`
+   * message is automatically re-sent.
+   */
+  reconnect?: DeepgramReconnectOptions;
+  /** Called when a reconnect attempt begins (1-based attempt number). */
+  onReconnecting?: (attempt: number) => void;
+  /** Called once the agent socket has successfully reconnected. */
+  onReconnected?: () => void;
+  /**
+   * Flush queued agent audio on `UserStartedSpeaking` so the agent stops
+   * talking when the user interrupts. Requires `autoPlayAudio`.
+   * @default false
+   */
+  bargeIn?: boolean;
+  /** Called after a barge-in flush actually happened. */
+  onBargeIn?: () => void;
+  onBeforeConnect?: () => void;
+  onConnect?: () => void;
+  onClose?: (event?: any) => void;
+  onError?: (error: unknown) => void;
+  /**
+   * Called when the system interrupts audio (phone call, Siri, another app
+   * taking audio focus). While a session is connected the hook also keeps
+   * the agent socket alive with KeepAlive frames until the interruption
+   * ends, and disconnects gracefully on a permanent focus loss.
+   */
+  onInterruption?: (event: DeepgramInterruptionEvent) => void;
+  onMessage?: (message: DeepgramVoiceAgentServerMessage) => void;
+  onWelcome?: (message: DeepgramVoiceAgentWelcomeMessage) => void;
+  onSettingsApplied?: (
+    message: DeepgramVoiceAgentSettingsAppliedMessage
+  ) => void;
+  onConversationText?: (
+    message: DeepgramVoiceAgentConversationTextMessage
+  ) => void;
+  onAgentThinking?: (message: DeepgramVoiceAgentAgentThinkingMessage) => void;
+  onAgentStartedSpeaking?: (
+    message: DeepgramVoiceAgentAgentStartedSpeakingMessage
+  ) => void;
+  onAgentAudioDone?: (message: DeepgramVoiceAgentAgentAudioDoneMessage) => void;
+  onUserStartedSpeaking?: (
+    message: DeepgramVoiceAgentUserStartedSpeakingMessage
+  ) => void;
+  onFunctionCallRequest?: (
+    message: DeepgramVoiceAgentFunctionCallRequestMessage
+  ) => void;
+  onFunctionCallResponse?: (
+    message: DeepgramVoiceAgentReceiveFunctionCallResponseMessage
+  ) => void;
+  onPromptUpdated?: (message: DeepgramVoiceAgentPromptUpdatedMessage) => void;
+  onListenUpdated?: (message: DeepgramVoiceAgentListenUpdatedMessage) => void;
+  onThinkUpdated?: (message: DeepgramVoiceAgentThinkUpdatedMessage) => void;
+  onSpeakUpdated?: (message: DeepgramVoiceAgentSpeakUpdatedMessage) => void;
+  onInjectionRefused?: (
+    message: DeepgramVoiceAgentInjectionRefusedMessage
+  ) => void;
+  onHistory?: (message: DeepgramVoiceAgentHistoryMessage) => void;
+  onWarning?: (message: DeepgramVoiceAgentWarningMessage) => void;
+  onServerError?: (message: DeepgramVoiceAgentErrorMessage) => void;
+  onAudioConfig?: (message: DeepgramVoiceAgentAudioConfigMessage) => void;
+  onAudio?: (audioData: ArrayBuffer) => void;
+}
+
+export interface UseDeepgramVoiceAgentReturn {
+  connect: (settings?: DeepgramVoiceAgentSettings) => Promise<void>;
+  disconnect: () => void;
+  sendMessage: (message: DeepgramVoiceAgentClientMessage) => boolean;
+  sendSettings: (settings: DeepgramVoiceAgentSettings) => boolean;
+  injectUserMessage: (content: string) => boolean;
+  injectAgentMessage: (message: string, behavior?: string) => boolean;
+  sendFunctionCallResponse: (
+    response: Omit<DeepgramVoiceAgentFunctionCallResponseMessage, 'type'>
+  ) => boolean;
+  sendKeepAlive: () => boolean;
+  updatePrompt: (prompt: string) => boolean;
+  updateListen: (listen: DeepgramVoiceAgentListenConfig) => boolean;
+  updateThink: (think: DeepgramVoiceAgentThinkConfig) => boolean;
+  updateSpeak: (speak: DeepgramVoiceAgentSpeakConfig) => boolean;
+  sendMedia: (chunk: ArrayBuffer | Uint8Array | number[]) => boolean;
+  /** Stop forwarding mic frames; keep the socket alive with KeepAlive. */
+  mute: () => void;
+  /** Resume forwarding mic frames after {@link mute}. */
+  unmute: () => void;
+  /** Imperative snapshot of the session telemetry counters. */
+  getStats: () => SessionStats;
+  isConnected: () => boolean;
+  state?: {
+    connectionState: 'idle' | 'connecting' | 'connected' | 'disconnected';
+    error: string | null;
+    warning: string | null;
+  };
+  /** Whether the microphone is currently muted (only when trackState is enabled). */
+  isMuted?: boolean;
+  conversation?: Array<{ role: string; content: string }>;
+  clearConversation?: () => void;
+  agentStatus?: {
+    thinking: string | null;
+    latency: { total?: number; tts?: number; ttt?: number } | null;
+  };
+  /** Live session telemetry (only when `trackStats` is enabled). */
+  stats?: SessionStats;
+}

@@ -51,7 +51,7 @@ const frameB64 = (() => {
   }
   return btoa(binary);
 })();
-const DECODED_FRAME_BYTES = Math.floor((frameB64.length * 3) / 4);
+const DECODED_FRAME_BYTES = FRAME_BYTES;
 
 const AUDIO_EVENT = 'onAudioPCM';
 

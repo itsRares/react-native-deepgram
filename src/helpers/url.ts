@@ -1,4 +1,4 @@
-type ParamValue =
+export type QueryParamValue =
   | string
   | number
   | boolean
@@ -6,7 +6,9 @@ type ParamValue =
   | undefined
   | Array<string | number | boolean | null | undefined>;
 
-export function buildParams(map: Record<string, ParamValue>): string {
+export type QueryParams = Record<string, QueryParamValue>;
+
+export function buildParams(map: QueryParams): string {
   const p = new URLSearchParams();
 
   Object.entries(map).forEach(([key, value]) => {

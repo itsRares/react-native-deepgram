@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
@@ -9,7 +9,7 @@ import {
   View,
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system/legacy';
+import { File, Paths } from 'expo-file-system';
 import {
   DeepgramError,
   toSRT,
@@ -65,13 +65,16 @@ export default function SpeechToText() {
     'deepgram-recording.wav'
   );
 
-  const recordDir =
-    recordFolder === 'cache'
-      ? FileSystem.cacheDirectory
-      : FileSystem.documentDirectory;
   const safeRecordName =
     recordFileName.trim().replace(/[/\\]/g, '') || 'deepgram-recording.wav';
-  const recordPath = `${recordDir ?? ''}${safeRecordName}`;
+  const recordPath = useMemo(
+    () =>
+      new File(
+        recordFolder === 'cache' ? Paths.cache : Paths.document,
+        safeRecordName
+      ).uri,
+    [recordFolder, safeRecordName]
+  );
 
   const {
     startListening,

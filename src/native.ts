@@ -96,7 +96,10 @@ export const Deepgram = {
     return getNative().startRecording(options);
   },
   stopRecording(): Promise<DeepgramRecordingResult | null> {
-    return getNative().stopRecording();
+    // iOS resolves `undefined` when no file was recorded, Android `null`.
+    return getNative()
+      .stopRecording()
+      .then((result) => result ?? null);
   },
   setMeteringEnabled(enabled: boolean, intervalMs = 0): void {
     getNative().setMeteringEnabled(enabled, intervalMs);

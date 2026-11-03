@@ -5,13 +5,12 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "platforms": ["ios", "android"],
-    "jsEngine": "hermes",
     "ios": {
       "bundleIdentifier": "com.ahhzo.react-native-deepgram-example"
     },
     "plugins": [
       [
-        "react-native-deepgram",
+        "../app.plugin.js",
         {
           "microphonePermission": "Allow $(PRODUCT_NAME) to access your microphone"
         }

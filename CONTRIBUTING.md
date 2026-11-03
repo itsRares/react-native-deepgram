@@ -23,7 +23,7 @@ The [example app](/example/) demonstrates usage of the library. You need to run 
 
 It is configured to use the local version of the library, so any changes you make to the library's source code will be reflected in the example app. Changes to the library's JavaScript code will be reflected in the example app without a rebuild, but native code changes will require a rebuild of the example app.
 
-If you want to use Android Studio or XCode to edit the native code, you can open the `example/android` or `example/ios` directories respectively in those editors. To edit the Objective-C or Swift files, open `example/ios/DeepgramExample.xcworkspace` in XCode and find the source files at `Pods > Development Pods > react-native-deepgram`.
+If you want to use Android Studio or XCode to edit the native code, run `yarn example:prebuild` first, then open the `example/android` or `example/ios` directories respectively in those editors. To edit the Objective-C files, open `example/ios/ReactNativeDeepgramExample.xcworkspace` in XCode and find the source files at `Pods > Development Pods > Deepgram`.
 
 To edit the Java or Kotlin files, open `example/android` in Android studio and find the source files at `react-native-deepgram` under `Android`.
 
@@ -47,10 +47,10 @@ To run the example app on iOS:
 yarn example ios
 ```
 
-To confirm that the app is running with the new architecture, you can check the Metro logs for a message like this:
+The library only supports the New Architecture. To confirm that the app is running with it, you can check the Metro logs for a message like this:
 
 ```sh
-Running "DeepgramExample" with {"fabric":true,"initialProps":{"concurrentRoot":true},"rootTag":1}
+Running "main" with {"fabric":true,"initialProps":{"concurrentRoot":true},"rootTag":1}
 ```
 
 Note the `"fabric":true` and `"concurrentRoot":true` properties.
@@ -65,7 +65,7 @@ yarn lint
 To fix formatting errors, run the following:
 
 ```sh
-yarn lint --fix
+yarn lint:fix
 ```
 
 Remember to add tests for your change if possible. Run the unit tests by:
@@ -93,7 +93,7 @@ Our pre-commit hooks verify that your commit message matches this format when co
 
 We use [TypeScript](https://www.typescriptlang.org/) for type checking, [ESLint](https://eslint.org/) with [Prettier](https://prettier.io/) for linting and formatting the code, and [Jest](https://jestjs.io/) for testing.
 
-Our pre-commit hooks verify that the linter and tests pass when committing.
+Our pre-commit hooks run ESLint and TypeScript on every commit; CI also runs the unit tests and builds the example app for Android and iOS.
 
 ### Publishing to npm
 

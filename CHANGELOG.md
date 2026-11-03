@@ -33,7 +33,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Turbo 2, release-it 21, lefthook 2 (pre-commit hooks re-enabled).
 - Android `build.gradle` follows the current library template (AGP/Kotlin come
   from the app; `compileSdk` 36).
-- Example app on Expo SDK 58 / React Native 0.88.
+- Example app on Expo SDK 58 / React Native 0.88, using the library
+  template's monorepo Metro/Babel setup (no more `postinstall` symlink),
+  the new `expo-file-system` API and `react-native-safe-area-context`.
+- CI builds the example app for Android and iOS.
+
+### Fixed
+
+- `Deepgram.stopRecording()` resolves `null` on both platforms when no file
+  was recorded (iOS previously resolved `undefined`).
 
 ## [2.4.0] - 2026-07-08
 

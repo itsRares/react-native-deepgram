@@ -8,10 +8,9 @@ import {
   Text,
   View,
 } from 'react-native';
-import * as FileSystem from 'expo-file-system/legacy';
+import { Directory, File, Paths } from 'expo-file-system';
 import {
   useDeepgramTextToSpeech,
-  arrayBufferToBase64,
   type DeepgramTextToSpeechStreamMetadataMessage,
   type DeepgramTextToSpeechStreamWarningMessage,
   type DeepgramTextToSpeechCallbackMethod,
@@ -320,35 +319,24 @@ export default function TextToSpeech() {
         httpEncodingValue,
         httpContainerValue
       );
-      const base64 = arrayBufferToBase64(data);
       const stamp = Date.now();
       const ms = stamp - startedAt;
 
       if (Platform.OS === 'android') {
         // Let the user choose a destination folder via the Storage Access
         // Framework, then write the bytes into the file they picked.
-        const perm =
-          await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
-        if (!perm.granted) return;
+        const directory = await Directory.pickDirectoryAsync();
         const baseMime = mimeType.split(';')[0] || 'application/octet-stream';
-        const destUri = await FileSystem.StorageAccessFramework.createFileAsync(
-          perm.directoryUri,
-          `deepgram-tts-${stamp}`,
-          baseMime
-        );
-        await FileSystem.writeAsStringAsync(destUri, base64, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-        setBytesResult({ size: data.byteLength, mimeType, ms, uri: destUri });
+        const dest = directory.createFile(`deepgram-tts-${stamp}`, baseMime);
+        await dest.write(data);
+        setBytesResult({ size: data.byteLength, mimeType, ms, uri: dest.uri });
       } else {
         // iOS: write to a temp file, then open the share sheet so the user can
         // “Save to Files” (or send it to any app) and choose the location.
-        const tmpUri = `${FileSystem.cacheDirectory}deepgram-tts-${stamp}.${ext}`;
-        await FileSystem.writeAsStringAsync(tmpUri, base64, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-        setBytesResult({ size: data.byteLength, mimeType, ms, uri: tmpUri });
-        await Share.share({ url: tmpUri });
+        const tmp = new File(Paths.cache, `deepgram-tts-${stamp}.${ext}`);
+        await tmp.write(data);
+        setBytesResult({ size: data.byteLength, mimeType, ms, uri: tmp.uri });
+        await Share.share({ url: tmp.uri });
       }
     } catch (err) {
       console.warn('Save to file failed', err);

@@ -1795,24 +1795,19 @@ That's intentional. The native module pauses playback on `OldDeviceUnavailable` 
 Native edits require a rebuild. With the example app:
 
 ```bash
-yarn example:prebuild
-yarn example:pods      # iOS only
+yarn example:prebuild  # also runs pod install on iOS
 yarn example:ios       # or example:android
 ```
 
 If things look stale, `yarn example:clean` wipes the generated native folders and caches.
 
-### "Cannot read property 'startRecording' of undefined"
+### "react-native-deepgram: the native module is not linked"
 
-The native module didn't link. In a bare RN project, run `cd ios && pod install` and rebuild. In Expo, you must use a development build (the package can't run in Expo Go because it has native code).
+The native module didn't link. In a bare RN project, run `cd ios && pod install` and rebuild, and make sure the New Architecture is enabled. In Expo, you must use a development build (the package can't run in Expo Go because it has native code).
 
 ### Android builds fail with "minSdk too low"
 
 Bump `android/build.gradle` `minSdkVersion` to **24** (Android 7.0). Some required `AudioRecord.Builder` APIs aren't available below that.
-
-### Example app: `Failed to resolve plugin for module "react-native-deepgram"`
-
-You ran `yarn prebuild` from `example/` but the workspace symlink wasn't created. This repo's root `postinstall` script creates it for you — re-run `yarn install` from the **repo root**, then retry `yarn example:prebuild`. (Yarn with `nmHoistingLimits: workspaces` skips the symlink because the root workspace and the dependency share a name; the postinstall script restores it.)
 
 ---
 
@@ -1855,10 +1850,10 @@ These run `expo run:<platform>` under the hood, which generates the native proje
 Once the app is installed on the device/simulator you can iterate on the library's TypeScript without rebuilding native code:
 
 ```bash
-yarn example           # just starts Metro; the app on the device picks up changes
+yarn start             # just starts Metro; the app on the device picks up changes
 ```
 
-Edit anything in `src/**/*.ts` (or `example/src/**`) and the app reloads via Fast Refresh. Metro is configured to resolve `react-native-deepgram` directly to `src/` for this purpose.
+Edit anything in `src/**/*.ts` (or `example/src/**`) and the app reloads via Fast Refresh. Metro resolves `react-native-deepgram` to `src/` through the `react-native-deepgram-source` export condition.
 
 > Want to test the published JS build instead? Run `yarn build` once, then start with `yarn example:start:built` (sets `DEEPGRAM_USE_BUILT=1` so Metro resolves to `lib/module`).
 
@@ -1868,14 +1863,13 @@ You only need to recompile when you change one of:
 
 - `ios/**/*.{m,mm,h,swift}` or any podspec
 - `android/**/*.{kt,java,xml,gradle}`
-- `app.plugin.js` / `plugin/src/**` (Expo config plugin)
+- `app.plugin.js` / `plugin/src/**` (Expo config plugin — run `yarn build:plugin` first)
 - `example/app.json` or any other prebuild input
 
 Rebuild flow:
 
 ```bash
-yarn example:prebuild  # regenerates ios/ + android/ from app.json
-yarn example:pods      # (iOS) reinstall pods after native deps change
+yarn example:prebuild  # regenerates ios/ + android/ from app.json (and installs pods)
 yarn example:ios       # or yarn example:android
 ```
 
@@ -1885,12 +1879,12 @@ If the app gets into a weird state, `yarn example:clean` wipes the generated nat
 
 | Script | Purpose |
 | ------ | ------- |
-| `yarn example` | Start Metro bundler (Fast Refresh) |
+| `yarn start` | Start Metro bundler (Fast Refresh) |
 | `yarn example:ios` / `yarn example:android` | Build + run on simulator/device |
 | `yarn example:prebuild` | Regenerate native projects from `app.json` |
-| `yarn example:pods` | Reinstall iOS pods after native dep changes |
 | `yarn example:start:built` | Run Metro pointed at `lib/module` instead of `src/` |
 | `yarn example:clean` | Wipe generated native folders + caches |
+| `yarn example <cmd>` | Run any script/binary in the example workspace (e.g. `yarn example expo install`) |
 
 ---
 

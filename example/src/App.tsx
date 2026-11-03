@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import {
-  SafeAreaView,
   View,
   StyleSheet,
   ScrollView,
@@ -8,6 +7,7 @@ import {
   Text,
   StatusBar,
 } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { configure } from 'react-native-deepgram';
 import SpeechToText from './SpeechToText';
 import TextIntelligence from './TextIntelligence';
@@ -61,61 +61,63 @@ export default function App() {
   const activeTab = TABS.find((t) => t.key === activeScreen) ?? TABS[0]!;
 
   return (
-    <View style={styles.root}>
-      <StatusBar barStyle="light-content" />
-      <SafeAreaView style={styles.safe}>
-        {/* Header */}
-        <View style={styles.header}>
-          <View>
-            <Text style={styles.brand}>Deepgram</Text>
-            <Text style={styles.brandSub}>React Native SDK · Playground</Text>
+    <SafeAreaProvider>
+      <View style={styles.root}>
+        <StatusBar barStyle="light-content" />
+        <SafeAreaView style={styles.safe}>
+          {/* Header */}
+          <View style={styles.header}>
+            <View>
+              <Text style={styles.brand}>Deepgram</Text>
+              <Text style={styles.brandSub}>React Native SDK · Playground</Text>
+            </View>
+            <View style={styles.headerBadge}>
+              <Text style={styles.headerBadgeIcon}>{activeTab.icon}</Text>
+              <Text style={styles.headerBadgeLabel}>{activeTab.label}</Text>
+            </View>
           </View>
-          <View style={styles.headerBadge}>
-            <Text style={styles.headerBadgeIcon}>{activeTab.icon}</Text>
-            <Text style={styles.headerBadgeLabel}>{activeTab.label}</Text>
-          </View>
-        </View>
 
-        {/* Tab bar */}
-        <View style={styles.tabBarWrap}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.tabContent}
-          >
-            {TABS.map(({ key, label, icon }) => {
-              const isActive = key === activeScreen;
-              return (
-                <Pressable
-                  key={key}
-                  onPress={() => setActiveScreen(key)}
-                  style={({ pressed }) => [
-                    styles.tabItem,
-                    isActive && styles.tabItemActive,
-                    pressed && styles.tabItemPressed,
-                  ]}
-                >
-                  <Text style={styles.tabIcon}>{icon}</Text>
-                  <Text
-                    style={[styles.tabText, isActive && styles.tabTextActive]}
+          {/* Tab bar */}
+          <View style={styles.tabBarWrap}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.tabContent}
+            >
+              {TABS.map(({ key, label, icon }) => {
+                const isActive = key === activeScreen;
+                return (
+                  <Pressable
+                    key={key}
+                    onPress={() => setActiveScreen(key)}
+                    style={({ pressed }) => [
+                      styles.tabItem,
+                      isActive && styles.tabItemActive,
+                      pressed && styles.tabItemPressed,
+                    ]}
                   >
-                    {label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
-        </View>
+                    <Text style={styles.tabIcon}>{icon}</Text>
+                    <Text
+                      style={[styles.tabText, isActive && styles.tabTextActive]}
+                    >
+                      {label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </View>
 
-        <View style={styles.content}>
-          {activeScreen === 'voice' && <VoiceAgent />}
-          {activeScreen === 'speech' && <SpeechToText />}
-          {activeScreen === 'text' && <TextIntelligence />}
-          {activeScreen === 'tts' && <TextToSpeech />}
-          {activeScreen === 'management' && <Management />}
-        </View>
-      </SafeAreaView>
-    </View>
+          <View style={styles.content}>
+            {activeScreen === 'voice' && <VoiceAgent />}
+            {activeScreen === 'speech' && <SpeechToText />}
+            {activeScreen === 'text' && <TextIntelligence />}
+            {activeScreen === 'tts' && <TextToSpeech />}
+            {activeScreen === 'management' && <Management />}
+          </View>
+        </SafeAreaView>
+      </View>
+    </SafeAreaProvider>
   );
 }
 

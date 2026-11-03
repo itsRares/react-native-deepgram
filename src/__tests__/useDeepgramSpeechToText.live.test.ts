@@ -1,15 +1,7 @@
 import { render, act } from '@testing-library/react-native';
 import { createElement } from 'react';
-import { NativeModules } from 'react-native';
 import { useDeepgramSpeechToText } from '../useDeepgramSpeechToText';
 import type { UseDeepgramSpeechToTextReturn } from '../types';
-
-jest.mock('../NativeDeepgram', () => ({
-  Deepgram: {
-    startRecording: jest.fn(() => Promise.resolve()),
-    stopRecording: jest.fn(() => Promise.resolve()),
-  },
-}));
 
 jest.mock('../helpers/askMicPermission', () => ({
   askMicPermission: jest.fn(() => Promise.resolve(true)),
@@ -55,10 +47,6 @@ function Harness(): null {
 
 describe('useDeepgramSpeechToText – live measurements', () => {
   beforeAll(() => {
-    (NativeModules as Record<string, unknown>).Deepgram = {
-      addListener: jest.fn(),
-      removeListeners: jest.fn(),
-    };
     globalRef.WebSocket = MockWebSocket;
     globalRef.__DEEPGRAM_API_KEY__ = 'test-key';
   });

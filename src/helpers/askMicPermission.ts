@@ -1,9 +1,9 @@
-import { Platform, PermissionsAndroid, NativeModules } from 'react-native';
-const { MicPermission } = NativeModules;
+import { Platform, PermissionsAndroid } from 'react-native';
+import { Deepgram } from '../native';
 
 export async function askMicPermission(): Promise<boolean> {
   if (Platform.OS === 'ios') {
-    return await MicPermission.request();
+    return Deepgram.requestRecordPermission();
   }
 
   return (

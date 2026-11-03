@@ -1,6 +1,6 @@
 import { useRef, useCallback, useState, useEffect } from 'react';
-import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
-import { Deepgram } from './NativeDeepgram';
+import type { EventSubscription } from 'react-native';
+import { Deepgram } from './native';
 import { askMicPermission } from './helpers/askMicPermission';
 import { addInterruptionListener } from './interruption';
 import type {
@@ -31,23 +31,6 @@ const DEFAULT_RECONNECT = {
   maxDelayMs: 10_000,
 };
 
-let cachedEmitter: NativeEventEmitter | null = null;
-const getEmitter = (): NativeEventEmitter => {
-  if (!cachedEmitter) {
-    cachedEmitter = new NativeEventEmitter(NativeModules.Deepgram);
-  }
-  return cachedEmitter;
-};
-const AUDIO_EVENT = Platform.select({
-  ios: 'DeepgramAudioPCM',
-  android: 'AudioChunk',
-  default: 'DeepgramAudioPCM',
-}) as string;
-const AUDIO_LEVEL_EVENT = Platform.select({
-  ios: 'DeepgramAudioLevel',
-  android: 'AudioLevel',
-  default: 'DeepgramAudioLevel',
-}) as string;
 const DEFAULT_METERING_INTERVAL_MS = 100;
 
 const computeDownsampleFactor = (
@@ -107,12 +90,8 @@ export function useDeepgramSpeechToText({
     error: null,
   });
   const ws = useRef<WebSocket | null>(null);
-  const audioSub = useRef<ReturnType<NativeEventEmitter['addListener']> | null>(
-    null
-  );
-  const meterSub = useRef<ReturnType<NativeEventEmitter['addListener']> | null>(
-    null
-  );
+  const audioSub = useRef<EventSubscription | null>(null);
+  const meterSub = useRef<EventSubscription | null>(null);
   const interruptionSub = useRef<{ remove: () => void } | null>(null);
   const apiVersionRef = useRef<'v1' | 'v2'>('v1');
   const pausedRef = useRef(false);
@@ -258,7 +237,7 @@ export function useDeepgramSpeechToText({
       interruptionSub.current.remove();
       interruptionSub.current = null;
     }
-    Deepgram.setMeteringEnabled?.(false, 0);
+    Deepgram.setMeteringEnabled(false, 0);
     Deepgram.stopRecording()
       .then((result) => {
         const uri = result?.recordingUri;
@@ -583,7 +562,7 @@ export function useDeepgramSpeechToText({
         if (!hasAuthConfigured()) throw new Error('Deepgram API key missing');
 
         if (meteringEnabled) {
-          Deepgram.setMeteringEnabled?.(true, meteringIntervalMs);
+          Deepgram.setMeteringEnabled(true, meteringIntervalMs);
         }
 
         const requestedVersion: 'v1' | 'v2' =
@@ -733,7 +712,7 @@ export function useDeepgramSpeechToText({
           }
         });
 
-        audioSub.current = getEmitter().addListener(AUDIO_EVENT, (ev: any) => {
+        audioSub.current = Deepgram.onAudioPCM((ev) => {
           if (pausedRef.current) {
             statsRef.current.framesDropped += 1;
             statsDirtyRef.current = true;
@@ -772,19 +751,16 @@ export function useDeepgramSpeechToText({
         });
 
         if (meteringEnabled) {
-          meterSub.current = getEmitter().addListener(
-            AUDIO_LEVEL_EVENT,
-            (ev: any) => {
-              const level =
-                typeof ev?.level === 'number' && Number.isFinite(ev.level)
-                  ? ev.level
-                  : 0;
-              if (trackState) {
-                setInternalAudioLevel(level);
-              }
-              onAudioLevelRef.current(level);
+          meterSub.current = Deepgram.onAudioLevel((ev) => {
+            const level =
+              typeof ev?.level === 'number' && Number.isFinite(ev.level)
+                ? ev.level
+                : 0;
+            if (trackState) {
+              setInternalAudioLevel(level);
             }
-          );
+            onAudioLevelRef.current(level);
+          });
         }
       } catch (err) {
         const dgError = toDeepgramError(err);

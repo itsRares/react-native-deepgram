@@ -363,12 +363,9 @@
 }
 
 - (void)emitRouteChange {
-  if (!self.hasListeners) {
-    return;
-  }
   NSString *route = [self currentAudioRouteString];
   DGLogDebug(@"[Deepgram] emitRouteChange: %@", route);
-  [self sendEventWithName:@"DeepgramRouteChange" body:@{@"route" : route}];
+  [self emitOnAudioRouteChange:@{@"route" : route}];
 }
 
 /**
@@ -860,10 +857,7 @@
       [self.playerNode pause];
     }
     // Observability only — the system doesn't say why (call, Siri, alarm, …).
-    if (self.hasListeners) {
-      [self sendEventWithName:@"DeepgramInterruption"
-                         body:@{@"type" : @"began", @"reason" : @"unknown"}];
-    }
+    [self emitOnAudioInterruption:@{@"type" : @"began", @"reason" : @"unknown"}];
   } else if (type == AVAudioSessionInterruptionTypeEnded) {
     DGLogDebug(@"[Deepgram] handleAudioInterruption: interruption ended");
     self.sessionInterrupted = NO;
@@ -878,13 +872,10 @@
     dispatch_async(dispatch_get_main_queue(), ^{
       [self resumeAfterInterruption:0];
     });
-    if (self.hasListeners) {
-      [self sendEventWithName:@"DeepgramInterruption"
-                         body:@{
-                           @"type" : @"ended",
-                           @"shouldResume" : @(shouldResume)
-                         }];
-    }
+    [self emitOnAudioInterruption:@{
+      @"type" : @"ended",
+      @"shouldResume" : @(shouldResume)
+    }];
   }
 }
 

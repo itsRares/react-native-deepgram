@@ -160,12 +160,12 @@ That's a working, low-latency conversational agent with hardware echo cancellati
 | --- | --- |
 | Node | 18 |
 | React | 19.0 |
-| React Native | 0.79 |
+| React Native | 0.80 (New Architecture) |
 | iOS | 13 (15+ recommended for VPIO AEC) |
 | Android | API 24 (Android 7.0) |
 | Xcode | 15+ if building against the iOS 17 SDK |
 
-> The library is published with the New Architecture in mind but works on the legacy renderer as well.
+> The native module is a TurboModule and requires the New Architecture (the default since React Native 0.76). The legacy architecture is no longer supported as of 3.0.
 
 ---
 
@@ -412,7 +412,7 @@ The native modules handle the awkward edge cases for you:
 - **Audio focus loss (Android)** — transient losses pause playback; permanent losses tear down recording + playback so you don't fight other apps for the mic.
 - **mediaserverd resets (iOS)** — if iOS restarts its audio service mid-session, the audio engine is rebuilt from scratch on the next call.
 - **Bluetooth on iOS 17+** — uses `AllowBluetoothHFP` when available, with a deprecation-safe fallback for older toolchains.
-- **iOS 17+ permission API** — `requestMicPermission` calls `AVAudioApplication.requestRecordPermissionWithCompletionHandler` when available, falling back to `AVAudioSession` on older OS versions.
+- **iOS 17+ permission API** — `Deepgram.requestRecordPermission()` calls `AVAudioApplication.requestRecordPermissionWithCompletionHandler` when available, falling back to `AVAudioSession` on older OS versions.
 - **Bounded playback queue (Android)** — if JS feeds audio faster than the device can play it, the oldest chunks are dropped at ~1.5 MB so you never OOM mid-call.
 
 ### Interruption events
@@ -1777,7 +1777,7 @@ Make sure `backgroundAudio` is left at its default (`true`) on the Expo plugin a
 
 The microphone permission was never granted. Either:
 
-- Trigger the permission prompt manually (`requestMicPermission` is exported from the package), or
+- Trigger the permission prompt manually (`Deepgram.requestRecordPermission()` on iOS, `PermissionsAndroid.request(RECORD_AUDIO)` on Android), or
 - Make sure you're not on a secondary entitlement profile that strips `NSMicrophoneUsageDescription`.
 
 If you previously denied the prompt, the OS will silently refuse subsequent requests until the user re-enables the permission in Settings.

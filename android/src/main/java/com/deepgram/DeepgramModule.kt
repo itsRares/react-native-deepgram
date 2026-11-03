@@ -9,28 +9,23 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
-import com.facebook.react.bridge.ReactContextBaseJavaModule
-import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.bridge.WritableNativeMap
-import com.facebook.react.modules.core.DeviceEventManagerModule
 
 /**
- * React Native bridge for Deepgram audio.
+ * TurboModule for Deepgram audio (implements the codegen'd [NativeDeepgramSpec]).
  *
- * This class is intentionally thin: it owns the JS-facing `@ReactMethod`
- * surface, the foreground-service lifecycle, and audio-focus arbitration, and
- * delegates the actual audio work to three focused collaborators:
+ * This class is intentionally thin: it owns the JS-facing spec methods, the
+ * foreground-service lifecycle, and audio-focus arbitration, and delegates the
+ * actual audio work to focused collaborators:
  *
- *   - [AudioRecorder]     microphone capture (emitted to JS as the `AudioChunk` event)
+ *   - [AudioRecorder]     microphone capture (emitted to JS as `onAudioPCM`)
  *   - [AudioPlayer]       TTS streaming + one-shot playback
  *   - [AudioFocusManager] system audio-focus arbitration
- *
- * Microphone audio is emitted to JS as the `AudioChunk` event with
- * base64-encoded 16 kHz PCM16.
+ *   - [AudioRouteManager] output routing (emitted as `onAudioRouteChange`)
  */
 class DeepgramModule(private val reactContext: ReactApplicationContext) :
-  ReactContextBaseJavaModule(reactContext), AudioFocusManager.Listener {
+  NativeDeepgramSpec(reactContext), AudioFocusManager.Listener {
 
   private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
 
@@ -64,12 +59,10 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
 
   init {
     // Observe output-route changes (headset plug/unplug, Bluetooth
-    // connect/disconnect) for the module's lifetime so `DeepgramRouteChange`
+    // connect/disconnect) for the module's lifetime so `onAudioRouteChange`
     // fires even while idle.
     routeManager.start()
   }
-
-  override fun getName() = NAME
 
   // -------------------------------------------------------------------
   // Audio focus (AudioFocusManager.Listener)
@@ -141,8 +134,15 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
   // Recording
   // -------------------------------------------------------------------
 
-  @ReactMethod
-  fun startRecording(options: ReadableMap?, promise: Promise) {
+  /** Reports the current grant; prompting is done from JS via PermissionsAndroid. */
+  override fun requestRecordPermission(promise: Promise) {
+    promise.resolve(
+      ContextCompat.checkSelfPermission(reactContext, Manifest.permission.RECORD_AUDIO) ==
+        PackageManager.PERMISSION_GRANTED
+    )
+  }
+
+  override fun startRecording(options: ReadableMap, promise: Promise) {
     if (recorder.isActive) {
       promise.resolve(null)
       return
@@ -158,10 +158,9 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
       return
     }
 
-    val enableVoiceProcessing = options?.let {
-      it.hasKey("enableVoiceProcessing") && !it.isNull("enableVoiceProcessing") &&
-        it.getBoolean("enableVoiceProcessing")
-    } ?: false
+    val enableVoiceProcessing = options.hasKey("enableVoiceProcessing") &&
+      !options.isNull("enableVoiceProcessing") &&
+      options.getBoolean("enableVoiceProcessing")
 
     val recordToFilePath = resolveRecordToFilePath(options)
 
@@ -182,8 +181,8 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
    * caller did not request one. A caller-supplied `path` wins; otherwise we
    * generate an app-specific cache path so the result is a shareable file URI.
    */
-  private fun resolveRecordToFilePath(options: ReadableMap?): String? {
-    val rtf = options?.takeIf { it.hasKey("recordToFile") && !it.isNull("recordToFile") }
+  private fun resolveRecordToFilePath(options: ReadableMap): String? {
+    val rtf = options.takeIf { it.hasKey("recordToFile") && !it.isNull("recordToFile") }
       ?.getMap("recordToFile")
       ?: return null
 
@@ -199,8 +198,7 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     ).absolutePath
   }
 
-  @ReactMethod
-  fun stopRecording(promise: Promise) {
+  override fun stopRecording(promise: Promise) {
     try {
       recorder.stop()
       val uri = recorder.lastRecordingUri
@@ -221,8 +219,7 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
   // Playback
   // -------------------------------------------------------------------
 
-  @ReactMethod
-  fun startAudio(promise: Promise) {
+  override fun startAudio(promise: Promise) {
     try {
       player.startAudio()
       promise.resolve(null)
@@ -232,8 +229,7 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     }
   }
 
-  @ReactMethod
-  fun stopAudio(promise: Promise) {
+  override fun stopAudio(promise: Promise) {
     try {
       player.stopAudio()
       promise.resolve(null)
@@ -243,39 +239,33 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     }
   }
 
-  @ReactMethod
-  fun startPlayer(sampleRate: Int, channels: Int) {
-    player.startPlayer(sampleRate, channels)
+  override fun startPlayer(sampleRate: Double, channels: Double) {
+    player.startPlayer(sampleRate.toInt(), channels.toInt())
   }
 
-  @ReactMethod
-  fun setAudioConfig(sampleRate: Int, channels: Int) {
-    player.setAudioConfig(sampleRate, channels)
+  override fun setAudioConfig(sampleRate: Double, channels: Double) {
+    player.setAudioConfig(sampleRate.toInt(), channels.toInt())
   }
 
-  @ReactMethod
-  fun setMeteringEnabled(enabled: Boolean, intervalMs: Double) {
+  override fun setMeteringEnabled(enabled: Boolean, intervalMs: Double) {
     recorder.setMetering(enabled, intervalMs.toLong())
   }
 
-  @ReactMethod
-  fun feedAudio(base64Audio: String) {
-    player.feedAudio(base64Audio)
+  override fun feedAudio(base64Chunk: String) {
+    player.feedAudio(base64Chunk)
   }
 
-  @ReactMethod
-  fun interruptAudio() {
+  override fun interruptAudio() {
     player.interruptAudio()
   }
 
-  @ReactMethod
-  fun stopPlayer(promise: Promise?) {
+  override fun stopPlayer(promise: Promise) {
     try {
       player.stopStreamingPlayback()
-      promise?.resolve(null)
+      promise.resolve(null)
     } catch (e: Exception) {
       Log.e(TAG, "stopPlayer error", e)
-      promise?.reject("stop_player_error", e)
+      promise.reject("stop_player_error", e)
     }
   }
 
@@ -283,10 +273,9 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
   // One-shot playback (for HTTP synthesis)
   // -------------------------------------------------------------------
 
-  @ReactMethod
-  fun playAudioChunk(chunk: String, promise: Promise) {
+  override fun playAudioChunk(base64Chunk: String, promise: Promise) {
     player.playAudioChunk(
-      chunk,
+      base64Chunk,
       onSuccess = { promise.resolve(null) },
       onError = { code, message -> promise.reject(code, message) },
     )
@@ -296,8 +285,7 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
   // Audio output routing
   // -------------------------------------------------------------------
 
-  @ReactMethod
-  fun setAudioRoute(route: String, promise: Promise) {
+  override fun setAudioRoute(route: String, promise: Promise) {
     try {
       routeManager.setRoute(route)
       promise.resolve(null)
@@ -310,8 +298,7 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     }
   }
 
-  @ReactMethod
-  fun getAudioRoute(promise: Promise) {
+  override fun getAudioRoute(promise: Promise) {
     try {
       promise.resolve(routeManager.currentRoute())
     } catch (e: Exception) {
@@ -338,84 +325,55 @@ class DeepgramModule(private val reactContext: ReactApplicationContext) :
     super.invalidate()
   }
 
-  /**
-   * Emit microphone audio to JS as base64-encoded PCM (matches the iOS
-   * `DeepgramAudioPCM` payload shape). Far more efficient than sending
-   * individual byte values.
-   */
+  /** Emit microphone audio to JS as base64-encoded PCM16 (`onAudioPCM`). */
   private fun sendAudioChunk(data: ByteArray, length: Int) {
     if (!reactContext.hasActiveReactInstance()) return
     val b64 = Base64.encodeToString(data, 0, length, Base64.NO_WRAP)
     val map = WritableNativeMap()
     map.putString("b64", b64)
     map.putInt("sampleRate", AudioRecorder.RECORD_SAMPLE_RATE)
-    try {
-      reactContext
-        .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-        .emit("AudioChunk", map)
-    } catch (e: Exception) {
-      // Catalyst tearing down or JS bundle not ready — drop silently.
-      Log.w(TAG, "sendAudioChunk emit failed", e)
-    }
+    emitSafely("onAudioPCM") { emitOnAudioPCM(map) }
   }
 
-  /**
-   * Emit a microphone audio level (normalized RMS, 0..1) to JS as the
-   * `AudioLevel` event (matches the iOS `DeepgramAudioLevel` payload shape).
-   */
+  /** Emit a microphone audio level (normalized RMS, 0..1) as `onAudioLevel`. */
   private fun sendAudioLevel(level: Double) {
     if (!reactContext.hasActiveReactInstance()) return
     val map = WritableNativeMap()
     map.putDouble("level", level)
-    try {
-      reactContext
-        .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-        .emit("AudioLevel", map)
-    } catch (e: Exception) {
-      // Catalyst tearing down or JS bundle not ready — drop silently.
-      Log.w(TAG, "sendAudioLevel emit failed", e)
-    }
+    emitSafely("onAudioLevel") { emitOnAudioLevel(map) }
   }
 
-  /**
-   * Emit the active output route to JS as the `DeepgramRouteChange` event
-   * (shared event name with iOS; payload `{ route }`).
-   */
+  /** Emit the active output route (`{ route }`) as `onAudioRouteChange`. */
   private fun sendRouteChange(route: String) {
     if (!reactContext.hasActiveReactInstance()) return
     val map = WritableNativeMap()
     map.putString("route", route)
-    try {
-      reactContext
-        .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-        .emit("DeepgramRouteChange", map)
-    } catch (e: Exception) {
-      // Catalyst tearing down or JS bundle not ready — drop silently.
-      Log.w(TAG, "sendRouteChange emit failed", e)
-    }
+    emitSafely("onAudioRouteChange") { emitOnAudioRouteChange(map) }
   }
 
   /**
-   * Emit an audio-focus interruption to JS as the `DeepgramInterruption`
-   * event (shared event name with iOS). Observability only — the focus
-   * callbacks above already pause/resume/tear down the audio pipeline.
+   * Emit an audio-focus interruption as `onAudioInterruption`. Observability
+   * only — the focus callbacks above already pause/resume/tear down the audio
+   * pipeline.
    */
   private fun sendInterruption(populate: (WritableNativeMap) -> Unit) {
     if (!reactContext.hasActiveReactInstance()) return
     val map = WritableNativeMap()
     populate(map)
+    emitSafely("onAudioInterruption") { emitOnAudioInterruption(map) }
+  }
+
+  private inline fun emitSafely(event: String, emit: () -> Unit) {
     try {
-      reactContext
-        .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-        .emit("DeepgramInterruption", map)
+      emit()
     } catch (e: Exception) {
-      // Catalyst tearing down or JS bundle not ready — drop silently.
-      Log.w(TAG, "sendInterruption emit failed", e)
+      // React instance tearing down or JS bundle not ready — drop silently.
+      Log.w(TAG, "$event emit failed", e)
     }
   }
 
   companion object {
-    const val NAME = "Deepgram"
+    const val NAME = NativeDeepgramSpec.NAME
     private const val TAG = "DeepgramModule"
   }
 }

@@ -1,25 +1,11 @@
 import { render, act } from '@testing-library/react-native';
 import { createElement } from 'react';
-import { NativeModules } from 'react-native';
 import { useDeepgramVoiceAgent } from '../useDeepgramVoiceAgent';
 import type {
   UseDeepgramVoiceAgentProps,
   UseDeepgramVoiceAgentReturn,
 } from '../useDeepgramVoiceAgent';
-import { Deepgram } from '../NativeDeepgram';
-
-jest.mock('../NativeDeepgram', () => ({
-  Deepgram: {
-    startRecording: jest.fn(() => Promise.resolve()),
-    stopRecording: jest.fn(() => Promise.resolve()),
-    startAudio: jest.fn(() => Promise.resolve()),
-    stopAudio: jest.fn(() => Promise.resolve()),
-    startPlayer: jest.fn(),
-    stopPlayer: jest.fn(),
-    feedAudio: jest.fn(),
-    interruptAudio: jest.fn(),
-  },
-}));
+import NativeDeepgram from '../NativeDeepgram';
 
 jest.mock('../helpers/askMicPermission', () => ({
   askMicPermission: jest.fn(() => Promise.resolve(true)),
@@ -52,7 +38,7 @@ const globalRef = globalThis as unknown as {
   __DEEPGRAM_API_KEY__: string;
 };
 
-const interruptAudioMock = Deepgram.interruptAudio as jest.Mock;
+const interruptAudioMock = jest.mocked(NativeDeepgram!.interruptAudio);
 
 let hookApi: UseDeepgramVoiceAgentReturn;
 let harnessProps: UseDeepgramVoiceAgentProps = {};
@@ -89,10 +75,6 @@ const emitServerMessage = (message: Record<string, unknown>) => {
 
 describe('useDeepgramVoiceAgent – barge-in', () => {
   beforeAll(() => {
-    (NativeModules as Record<string, unknown>).Deepgram = {
-      addListener: jest.fn(),
-      removeListeners: jest.fn(),
-    };
     globalRef.WebSocket = MockWebSocket;
     globalRef.__DEEPGRAM_API_KEY__ = 'test-key';
   });

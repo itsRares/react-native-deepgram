@@ -1,36 +1,12 @@
-const listeners: Record<string, ((payload: unknown) => void)[]> = {};
-const mockRemove = jest.fn();
-
-jest.mock('react-native', () => ({
-  NativeModules: { Deepgram: {} },
-  NativeEventEmitter: jest.fn().mockImplementation(() => ({
-    addListener: (event: string, cb: (payload: unknown) => void) => {
-      (listeners[event] ??= []).push(cb);
-      return {
-        remove: () => {
-          mockRemove();
-          const arr = listeners[event] ?? [];
-          const idx = arr.indexOf(cb);
-          if (idx >= 0) arr.splice(idx, 1);
-        },
-      };
-    },
-  })),
-}));
-
+import { DeviceEventEmitter } from 'react-native';
 import { addInterruptionListener } from '../interruption';
 import type { DeepgramInterruptionEvent } from '../interruption';
 
 const emit = (payload: unknown) => {
-  for (const cb of [...(listeners.DeepgramInterruption ?? [])]) cb(payload);
+  DeviceEventEmitter.emit('onAudioInterruption', payload);
 };
 
 describe('interruption', () => {
-  beforeEach(() => {
-    mockRemove.mockClear();
-    delete listeners.DeepgramInterruption;
-  });
-
   it('delivers began/ended/stopped events to the listener', () => {
     const received: DeepgramInterruptionEvent[] = [];
     const sub = addInterruptionListener((e) => received.push(e));
@@ -66,7 +42,6 @@ describe('interruption', () => {
 
     emit({ type: 'began', reason: 'unknown' });
 
-    expect(mockRemove).toHaveBeenCalledTimes(1);
     expect(listener).not.toHaveBeenCalled();
   });
 });

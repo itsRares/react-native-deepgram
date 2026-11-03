@@ -1,5 +1,5 @@
 import { useRef, useCallback, useEffect, useMemo, useState } from 'react';
-import { Deepgram } from './NativeDeepgram';
+import { Deepgram } from './native';
 import { addInterruptionListener } from './interruption';
 import type {
   UseDeepgramTextToSpeechProps,

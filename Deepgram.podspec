@@ -13,11 +13,8 @@ Pod::Spec.new do |s|
   s.platforms    = { :ios => min_ios_version_supported }
   s.source       = { :git => "https://github.com/itsRares/react-native-deepgram.git", :tag => "#{s.version}" }
 
-  s.source_files = [
-    "ios/*.{h,m,mm,cpp}",
-    "ios/generated/build/generated/ios/DeepgramSpec/**/*.{h,mm,cpp}",
-    "ios/generated/build/generated/ios/DeepgramSpec*.*"
-  ]
+  s.source_files = "ios/**/*.{h,m,mm,cpp}"
+  s.exclude_files = "ios/generated/**/*"
   s.private_header_files = "ios/**/*.h"
   s.frameworks = ["AVFoundation", "AVFAudio"]
 

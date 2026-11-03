@@ -1,21 +1,6 @@
-import { NativeEventEmitter, NativeModules } from 'react-native';
-import { Deepgram } from './NativeDeepgram';
-import type {
-  DeepgramAudioRoute,
-  DeepgramActiveAudioRoute,
-} from './NativeDeepgram';
+import { Deepgram } from './native';
+import type { DeepgramAudioRoute, DeepgramActiveAudioRoute } from './native';
 import { toDeepgramError } from './types/errors';
-
-// Shared native → JS event name on both platforms.
-const ROUTE_CHANGE_EVENT = 'DeepgramRouteChange';
-
-let cachedEmitter: NativeEventEmitter | null = null;
-const getEmitter = (): NativeEventEmitter => {
-  if (!cachedEmitter) {
-    cachedEmitter = new NativeEventEmitter(NativeModules.Deepgram);
-  }
-  return cachedEmitter;
-};
 
 /**
  * Subscription returned by {@link addAudioRouteChangeListener}. Call
@@ -41,7 +26,7 @@ export interface AudioRouteSubscription {
  */
 export async function setAudioRoute(route: DeepgramAudioRoute): Promise<void> {
   try {
-    await Deepgram.setAudioRoute?.(route);
+    await Deepgram.setAudioRoute(route);
   } catch (err) {
     throw toDeepgramError(err);
   }
@@ -54,8 +39,7 @@ export async function setAudioRoute(route: DeepgramAudioRoute): Promise<void> {
  */
 export async function getAudioRoute(): Promise<DeepgramActiveAudioRoute> {
   try {
-    const route = await Deepgram.getAudioRoute?.();
-    return route ?? 'speaker';
+    return await Deepgram.getAudioRoute();
   } catch (err) {
     throw toDeepgramError(err);
   }
@@ -76,11 +60,5 @@ export async function getAudioRoute(): Promise<DeepgramActiveAudioRoute> {
 export function addAudioRouteChangeListener(
   listener: (route: DeepgramActiveAudioRoute) => void
 ): AudioRouteSubscription {
-  const subscription = getEmitter().addListener(
-    ROUTE_CHANGE_EVENT,
-    (payload: { route?: DeepgramActiveAudioRoute } | undefined) => {
-      listener(payload?.route ?? 'speaker');
-    }
-  );
-  return { remove: () => subscription.remove() };
+  return Deepgram.onAudioRouteChange(listener);
 }

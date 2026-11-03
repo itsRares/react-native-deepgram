@@ -1,6 +1,7 @@
 import { useRef, useCallback, useEffect, useState } from 'react';
-import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
-import { Deepgram } from './NativeDeepgram';
+import type { EventSubscription } from 'react-native';
+import { Deepgram } from './native';
+import type { AudioPCMEvent } from './native';
 import { askMicPermission } from './helpers/askMicPermission';
 import { addInterruptionListener } from './interruption';
 import type { DeepgramInterruptionEvent } from './interruption';
@@ -56,20 +57,6 @@ const DEFAULT_AGENT_RECONNECT = {
   maxRetries: 5,
   initialDelayMs: 500,
   maxDelayMs: 10_000,
-};
-
-const eventName = Platform.select({
-  ios: 'DeepgramAudioPCM',
-  android: 'AudioChunk',
-  default: 'DeepgramAudioPCM',
-});
-
-let cachedEmitter: NativeEventEmitter | null = null;
-const getEmitter = (): NativeEventEmitter => {
-  if (!cachedEmitter) {
-    cachedEmitter = new NativeEventEmitter(NativeModules.Deepgram);
-  }
-  return cachedEmitter;
 };
 
 const ensureArrayBuffer = (data: any): ArrayBuffer | null => {
@@ -364,9 +351,7 @@ export function useDeepgramVoiceAgent({
   onInterruption,
 }: UseDeepgramVoiceAgentProps = {}): UseDeepgramVoiceAgentReturn {
   const ws = useRef<WebSocketLike | null>(null);
-  const audioSub = useRef<ReturnType<NativeEventEmitter['addListener']> | null>(
-    null
-  );
+  const audioSub = useRef<EventSubscription | null>(null);
   const nativeInputSampleRate = useRef(BASE_NATIVE_SAMPLE_RATE);
   const targetInputSampleRate = useRef(DEFAULT_INPUT_SAMPLE_RATE);
   const currentDownsample = useRef(
@@ -698,7 +683,7 @@ export function useDeepgramVoiceAgent({
   );
 
   const handleMicChunk = useCallback(
-    (ev: any) => {
+    (ev: AudioPCMEvent) => {
       if (mutedRef.current) {
         statsRef.current.framesDropped += 1;
         statsDirtyRef.current = true;
@@ -851,7 +836,7 @@ export function useDeepgramVoiceAgent({
                 agentAudioInFlightRef.current &&
                 !mutedRef.current
               ) {
-                Deepgram.interruptAudio?.();
+                Deepgram.interruptAudio();
                 agentAudioInFlightRef.current = false;
                 onBargeInRef.current?.();
               }
@@ -1263,12 +1248,7 @@ export function useDeepgramVoiceAgent({
         await Deepgram.startRecording({ enableVoiceProcessing: true });
         microphoneActive.current = true;
 
-        if (eventName) {
-          audioSub.current = getEmitter().addListener(
-            eventName,
-            handleMicChunk
-          );
-        }
+        audioSub.current = Deepgram.onAudioPCM(handleMicChunk);
       } else {
         // startRecording already activates the audio session; only needed here.
         await Deepgram.startAudio();

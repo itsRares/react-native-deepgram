@@ -3,7 +3,7 @@ export { useDeepgramTextIntelligence } from './useDeepgramTextIntelligence';
 export { useDeepgramManagement } from './useDeepgramManagement';
 export { useDeepgramTextToSpeech } from './useDeepgramTextToSpeech';
 export { useDeepgramVoiceAgent } from './useDeepgramVoiceAgent';
-export { Deepgram } from './NativeDeepgram';
+export { Deepgram } from './native';
 export {
   setAudioRoute,
   getAudioRoute,
@@ -18,7 +18,10 @@ export type {
 export type {
   DeepgramAudioRoute,
   DeepgramActiveAudioRoute,
-} from './NativeDeepgram';
+  DeepgramRecordingResult,
+  RecordToFileOptions,
+  StartRecordingOptions,
+} from './native';
 import type { DeepgramGetToken } from './helpers';
 import { clearCachedAuthToken } from './helpers';
 export {

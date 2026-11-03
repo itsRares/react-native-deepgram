@@ -104,37 +104,21 @@ static NSData *DGMakeWavHeader(uint32_t sampleRate, uint16_t channels,
       return;
     }
 
-    if (!weakSelf.hasListeners) {
-      DGLogDebug(@"[Deepgram] emitPCMChunk: no listeners, dropping %lu bytes",
-                 (unsigned long)chunkCopy.length);
-      return;
-    }
-
-    if (!weakSelf.bridge || !weakSelf.callableJSModules) {
-      DGLogDebug(
-          @"[Deepgram] Skipping DeepgramAudioPCM event (bridge not ready)");
-      return;
-    }
-
     DGLogDebug(@"[Deepgram] emitPCMChunk: sending %lu bytes sampleRate=%d",
                (unsigned long)chunkCopy.length, sampleRate);
     NSString *b64 = [chunkCopy base64EncodedStringWithOptions:0];
-    [weakSelf sendEventWithName:@"DeepgramAudioPCM"
-                           body:@{
-                             @"b64" : b64,
-                             @"sampleRate" : @(sampleRate)
-                           }];
+    [weakSelf emitOnAudioPCM:@{@"b64" : b64, @"sampleRate" : @(sampleRate)}];
   });
 }
 
 /**
  * Compute a normalized RMS amplitude (0..1) over a PCM16 buffer and emit it as
- * a `DeepgramAudioLevel` event, throttled to `meteringIntervalSeconds`. Called
+ * an `onAudioLevel` event, throttled to `meteringIntervalSeconds`. Called
  * from the shared capture sink so the AudioQueue (STT) and AVAudioEngine
  * (Voice Agent) paths are metered identically.
  */
 - (void)emitAudioLevelForPCM:(NSData *)pcmData {
-  if (!self.meteringEnabled || !self.hasListeners) {
+  if (!self.meteringEnabled) {
     return;
   }
   if (!pcmData || pcmData.length < sizeof(int16_t)) {
@@ -171,14 +155,10 @@ static NSData *DGMakeWavHeader(uint32_t sampleRate, uint16_t channels,
   dispatch_queue_t queue = self.emitterQueue ?: dispatch_get_main_queue();
   dispatch_async(queue, ^{
     __typeof(self) strongSelf = weakSelf;
-    if (!strongSelf || !strongSelf.hasListeners) {
+    if (!strongSelf) {
       return;
     }
-    if (!strongSelf.bridge || !strongSelf.callableJSModules) {
-      return;
-    }
-    [strongSelf sendEventWithName:@"DeepgramAudioLevel"
-                             body:@{@"level" : @(level)}];
+    [strongSelf emitOnAudioLevel:@{@"level" : @(level)}];
   });
 }
 

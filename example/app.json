@@ -6,7 +6,6 @@
     "orientation": "portrait",
     "platforms": ["ios", "android"],
     "jsEngine": "hermes",
-    "newArchEnabled": true,
     "ios": {
       "bundleIdentifier": "com.ahhzo.react-native-deepgram-example"
     },
@@ -15,14 +14,6 @@
         "react-native-deepgram",
         {
           "microphonePermission": "Allow $(PRODUCT_NAME) to access your microphone"
-        }
-      ],
-      [
-        "expo-build-properties",
-        {
-          "android": {
-            "kotlinVersion": "1.9.24"
-          }
         }
       ]
     ],

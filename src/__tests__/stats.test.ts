@@ -1,18 +1,11 @@
 import { render, act } from '@testing-library/react-native';
 import { createElement } from 'react';
-import { DeviceEventEmitter, NativeModules } from 'react-native';
+import { DeviceEventEmitter } from 'react-native';
 import { useDeepgramSpeechToText } from '../useDeepgramSpeechToText';
 import type {
   UseDeepgramSpeechToTextProps,
   UseDeepgramSpeechToTextReturn,
 } from '../types';
-
-jest.mock('../NativeDeepgram', () => ({
-  Deepgram: {
-    startRecording: jest.fn(() => Promise.resolve()),
-    stopRecording: jest.fn(() => Promise.resolve()),
-  },
-}));
 
 jest.mock('../helpers/askMicPermission', () => ({
   askMicPermission: jest.fn(() => Promise.resolve(true)),
@@ -73,7 +66,7 @@ const lastSocket = () =>
   MockWebSocket.instances[MockWebSocket.instances.length - 1]!;
 
 const emitFrame = () => {
-  DeviceEventEmitter.emit('DeepgramAudioPCM', { b64: frameB64 });
+  DeviceEventEmitter.emit('onAudioPCM', { b64: frameB64 });
 };
 
 async function startSession() {
@@ -90,10 +83,6 @@ async function startSession() {
 
 describe('useDeepgramSpeechToText – session stats', () => {
   beforeAll(() => {
-    (NativeModules as Record<string, unknown>).Deepgram = {
-      addListener: jest.fn(),
-      removeListeners: jest.fn(),
-    };
     globalRef.WebSocket = MockWebSocket;
     globalRef.__DEEPGRAM_API_KEY__ = 'test-key';
   });

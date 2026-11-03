@@ -5,6 +5,36 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - 3.0.0
+
+### Breaking
+
+- **New Architecture only.** The native module is now a TurboModule generated
+  from `src/NativeDeepgram.ts` (iOS `NativeDeepgramSpec`, Android
+  `NativeDeepgramSpec`); the legacy bridge is no longer supported.
+- **Minimum versions:** React 19, React Native 0.80 (needed for
+  `CodegenTypes.EventEmitter` in the spec).
+- **ESM-only build.** The CommonJS output (`lib/commonjs`) is gone; the package
+  ships `lib/module` plus types and a `react-native-deepgram-source` export
+  condition.
+- **Unified native events.** The per-platform `DeepgramAudioPCM`/`AudioChunk`,
+  `DeepgramAudioLevel`/`AudioLevel`, `DeepgramRouteChange` and
+  `DeepgramInterruption` device events are replaced by typed TurboModule
+  emitters (`Deepgram.onAudioPCM`, `onAudioLevel`, `onAudioRouteChange`,
+  `onAudioInterruption`). `addAudioRouteChangeListener` and
+  `addInterruptionListener` keep working unchanged.
+- The separate iOS `MicPermission` native module is removed; use
+  `Deepgram.requestRecordPermission()`.
+- `Deepgram.stopPlayer()` now returns a `Promise<void>`.
+
+### Changed
+
+- Toolchain: Yarn 4, TypeScript 6, Jest 30, react-native-builder-bob 0.44,
+  Turbo 2, release-it 21, lefthook 2 (pre-commit hooks re-enabled).
+- Android `build.gradle` follows the current library template (AGP/Kotlin come
+  from the app; `compileSdk` 36).
+- Example app on Expo SDK 58 / React Native 0.88.
+
 ## [2.4.0] - 2026-07-08
 
 ### Added

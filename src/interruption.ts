@@ -1,15 +1,4 @@
-import { NativeEventEmitter, NativeModules } from 'react-native';
-
-// Shared native → JS event name on both platforms (DeepgramRouteChange pattern).
-const INTERRUPTION_EVENT = 'DeepgramInterruption';
-
-let cachedEmitter: NativeEventEmitter | null = null;
-const getEmitter = (): NativeEventEmitter => {
-  if (!cachedEmitter) {
-    cachedEmitter = new NativeEventEmitter(NativeModules.Deepgram);
-  }
-  return cachedEmitter;
-};
+import { Deepgram } from './native';
 
 /**
  * An audio interruption reported by the native layer.
@@ -59,12 +48,8 @@ export interface InterruptionSubscription {
 export function addInterruptionListener(
   listener: (event: DeepgramInterruptionEvent) => void
 ): InterruptionSubscription {
-  const subscription = getEmitter().addListener(
-    INTERRUPTION_EVENT,
-    (payload: Partial<DeepgramInterruptionEvent> | undefined) => {
-      if (!payload?.type) return;
-      listener(payload as DeepgramInterruptionEvent);
-    }
-  );
-  return { remove: () => subscription.remove() };
+  return Deepgram.onAudioInterruption((payload) => {
+    if (!payload?.type) return;
+    listener(payload as DeepgramInterruptionEvent);
+  });
 }

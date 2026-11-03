@@ -6,7 +6,6 @@
 
 #import <AVFoundation/AVFoundation.h>
 #import <AudioToolbox/AudioQueue.h>
-#import <React/RCTUtils.h>
 #import <TargetConditionals.h>
 #if TARGET_OS_IOS
 #import <UIKit/UIKit.h>
@@ -23,18 +22,19 @@
 //   - Deepgram+AudioSession.mm : audio session lifecycle
 //   - Deepgram+Recording.mm    : microphone capture (+ DGHandleInputBuffer)
 //   - Deepgram+Playback.mm     : TTS / Voice Agent playback
-// This file keeps the module registration, lifecycle and the exported
-// RCT_EXPORT_METHOD entry points (kept here so the macros register on the
-// concrete class rather than a category).
+// This file keeps the TurboModule registration, lifecycle and the
+// `NativeDeepgramSpec` method implementations.
 
 /**
- * Whether the user has explicitly granted microphone record permission. Read
- * via the deprecated `AVAudioSession` accessor (still functional on iOS 17+)
- * with the deprecation warning suppressed locally — mirroring MicPermission.m.
- * Lets `startRecording` fail fast with the contract `permission_denied` code,
+ * Whether the user has explicitly granted microphone record permission. Lets
+ * `startRecording` fail fast with the contract `permission_denied` code,
  * matching the Android module.
  */
 static BOOL DGHasRecordPermission(void) {
+  if (@available(iOS 17.0, *)) {
+    return [AVAudioApplication sharedInstance].recordPermission ==
+           AVAudioApplicationRecordPermissionGranted;
+  }
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
   return [AVAudioSession sharedInstance].recordPermission ==
@@ -43,27 +43,18 @@ static BOOL DGHasRecordPermission(void) {
 }
 
 @implementation Deepgram
-RCT_EXPORT_MODULE();
+
++ (NSString *)moduleName {
+  return @"Deepgram";
+}
 
 + (BOOL)requiresMainQueueSetup {
   return NO;
 }
 
-- (NSArray<NSString *> *)supportedEvents {
-  return @[
-    @"DeepgramAudioPCM", @"DeepgramAudioLevel", @"DeepgramRouteChange",
-    @"DeepgramInterruption"
-  ];
-}
-
-- (void)startObserving {
-  DGLogDebug(@"[Deepgram] startObserving: listeners attached");
-  self.hasListeners = YES;
-}
-
-- (void)stopObserving {
-  DGLogDebug(@"[Deepgram] stopObserving: listeners detached");
-  self.hasListeners = NO;
+- (std::shared_ptr<facebook::react::TurboModule>)getTurboModule:
+    (const facebook::react::ObjCTurboModule::InitParams &)params {
+  return std::make_shared<facebook::react::NativeDeepgramSpecJSI>(params);
 }
 
 /* ------------------------------------------------------------------ */
@@ -166,8 +157,26 @@ RCT_EXPORT_MODULE();
 //          cleanupRecordingQueue / startEngineCaptureAndReturnError /
 //          stopEngineCapture, plus the DGHandleInputBuffer callback)
 
-RCT_EXPORT_METHOD(startRecording : (NSDictionary *)options resolver : (
-    RCTPromiseResolveBlock)resolve rejecter : (RCTPromiseRejectBlock)reject) {
+- (void)requestRecordPermission:(RCTPromiseResolveBlock)resolve
+                         reject:(RCTPromiseRejectBlock)reject {
+  if (@available(iOS 17.0, *)) {
+    [AVAudioApplication
+        requestRecordPermissionWithCompletionHandler:^(BOOL granted) {
+          resolve(@(granted));
+        }];
+    return;
+  }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  [[AVAudioSession sharedInstance] requestRecordPermission:^(BOOL granted) {
+    resolve(@(granted));
+  }];
+#pragma clang diagnostic pop
+}
+
+- (void)startRecording:(NSDictionary *)options
+               resolve:(RCTPromiseResolveBlock)resolve
+                reject:(RCTPromiseRejectBlock)reject {
   @try {
     DGLogDebug(@"[Deepgram] startRecording: begin");
 
@@ -177,7 +186,7 @@ RCT_EXPORT_METHOD(startRecording : (NSDictionary *)options resolver : (
       DGRejectPromise(
           reject, @"permission_denied",
           @"Microphone permission has not been granted. Request it from JS "
-          @"(MicPermission.request) before calling startRecording.",
+          @"(Deepgram.requestRecordPermission) before calling startRecording.",
           nil);
       return;
     }
@@ -399,8 +408,8 @@ RCT_EXPORT_METHOD(startRecording : (NSDictionary *)options resolver : (
   }
 }
 
-RCT_EXPORT_METHOD(stopRecording : (RCTPromiseResolveBlock)
-                      resolve rejecter : (RCTPromiseRejectBlock)reject) {
+- (void)stopRecording:(RCTPromiseResolveBlock)resolve
+               reject:(RCTPromiseRejectBlock)reject {
   @try {
     DGLogDebug(@"[Deepgram] stopRecording: begin");
     [self stopEngineCapture];
@@ -420,8 +429,8 @@ RCT_EXPORT_METHOD(stopRecording : (RCTPromiseResolveBlock)
   }
 }
 
-RCT_EXPORT_METHOD(startAudio : (RCTPromiseResolveBlock)
-                      resolve rejecter : (RCTPromiseRejectBlock)reject) {
+- (void)startAudio:(RCTPromiseResolveBlock)resolve
+            reject:(RCTPromiseRejectBlock)reject {
   @try {
     DGLogDebug(@"[Deepgram] startAudio: begin");
     NSError *sessionError = nil;
@@ -447,11 +456,11 @@ RCT_EXPORT_METHOD(startAudio : (RCTPromiseResolveBlock)
   }
 }
 
-RCT_EXPORT_METHOD(stopAudio : (RCTPromiseResolveBlock)
-                      resolve rejecter : (RCTPromiseRejectBlock)reject) {
+- (void)stopAudio:(RCTPromiseResolveBlock)resolve
+           reject:(RCTPromiseRejectBlock)reject {
   @try {
     DGLogDebug(@"[Deepgram] stopAudio: begin");
-    [self stopPlayer:nil rejecter:nil];
+    [self stopPlayer:nil reject:nil];
     DGLogDebug(@"[Deepgram] stopAudio: success");
     if (resolve)
       resolve(nil);
@@ -465,10 +474,9 @@ RCT_EXPORT_METHOD(stopAudio : (RCTPromiseResolveBlock)
 //         (stopAndDetachPlayerNode / interruptPlayerPlayback /
 //          setupAudioEngineWithSampleRate / createPCMBufferFromData)
 
-RCT_EXPORT_METHOD(startPlayer : (nonnull NSNumber *)
-                      sampleRate channels : (nonnull NSNumber *)channels) {
+- (void)startPlayer:(double)sampleRate channels:(double)channels {
   if (!self.engineCaptureActive) {
-    [self stopPlayer:nil rejecter:nil];
+    [self stopPlayer:nil reject:nil];
   }
 
   NSError *sessionError = nil;
@@ -485,8 +493,8 @@ RCT_EXPORT_METHOD(startPlayer : (nonnull NSNumber *)
   BOOL needsVoiceProcessing = _recordState.isRunning ||
                               self.engineCaptureActive ||
                               self.voiceProcessingRequested;
-  if (![self setupAudioEngineWithSampleRate:sampleRate.intValue
-                                   channels:channels.intValue
+  if (![self setupAudioEngineWithSampleRate:(int)sampleRate
+                                   channels:(int)channels
                       enableVoiceProcessing:needsVoiceProcessing
                                       error:&engineError]) {
     DGLogError(@"[Deepgram] Failed to setup audio engine: %@", engineError);
@@ -494,14 +502,14 @@ RCT_EXPORT_METHOD(startPlayer : (nonnull NSNumber *)
   }
 
   self.isPlaying = NO;
-  self.currentSampleRate = sampleRate.intValue;
+  self.currentSampleRate = (int)sampleRate;
 }
 
 /**
  * Feed base64-encoded PCM audio data for playback using AVAudioEngine.
  * Uses real-time PCM buffer streaming instead of WAV files.
  */
-RCT_EXPORT_METHOD(feedAudio : (NSString *)b64) {
+- (void)feedAudio:(NSString *)b64 {
   @try {
     if (!self.playerNode || !self.audioEngine || !self.audioEngine.isRunning) {
       return;
@@ -562,7 +570,7 @@ RCT_EXPORT_METHOD(feedAudio : (NSString *)b64) {
   }
 }
 
-RCT_EXPORT_METHOD(interruptAudio) {
+- (void)interruptAudio {
   @try {
     [self interruptPlayerPlayback];
     [self maybeDeactivateAudioSession];
@@ -574,8 +582,8 @@ RCT_EXPORT_METHOD(interruptAudio) {
 /**
  * Stop audio playback and cleanup AVAudioEngine.
  */
-RCT_EXPORT_METHOD(stopPlayer : (RCTPromiseResolveBlock)
-                      resolve rejecter : (RCTPromiseRejectBlock)reject) {
+- (void)stopPlayer:(RCTPromiseResolveBlock)resolve
+            reject:(RCTPromiseRejectBlock)reject {
   @try {
     BOOL preserveCaptureEngine = self.engineCaptureActive;
 
@@ -614,22 +622,20 @@ RCT_EXPORT_METHOD(stopPlayer : (RCTPromiseResolveBlock)
 /**
  * Set audio configuration (compatibility method).
  */
-RCT_EXPORT_METHOD(setAudioConfig : (nonnull NSNumber *)
-                      sampleRate channels : (nonnull NSNumber *)channels) {
-  DGLogDebug(@"[Deepgram] setAudioConfig: sampleRate=%@ channels=%@",
+- (void)setAudioConfig:(double)sampleRate channels:(double)channels {
+  DGLogDebug(@"[Deepgram] setAudioConfig: sampleRate=%.0f channels=%.0f",
              sampleRate, channels);
   [self startPlayer:sampleRate channels:channels];
 }
 
 /**
  * Enable / disable microphone audio-level (metering) events. When enabled the
- * module emits `DeepgramAudioLevel` events with a normalized RMS amplitude
+ * module emits `onAudioLevel` events with a normalized RMS amplitude
  * (0..1) at most once per `intervalMs` (default 100 ms). Purely additive — the
  * mic capture path and PCM emission are unaffected.
  */
-RCT_EXPORT_METHOD(setMeteringEnabled : (BOOL)enabled intervalMs : (nonnull NSNumber *)
-                      intervalMs) {
-  double ms = [intervalMs doubleValue];
+- (void)setMeteringEnabled:(BOOL)enabled intervalMs:(double)intervalMs {
+  double ms = intervalMs;
   if (ms <= 0) {
     ms = 100.0; // sensible ~10 Hz default
   }
@@ -645,8 +651,9 @@ RCT_EXPORT_METHOD(setMeteringEnabled : (BOOL)enabled intervalMs : (nonnull NSNum
  * `auto`). Best-effort: the OS can override (a wired headset always wins).
  * Implementation in Deepgram+AudioSession.mm (`applyAudioRoute:error:`).
  */
-RCT_EXPORT_METHOD(setAudioRoute : (NSString *)route resolver : (
-    RCTPromiseResolveBlock)resolve rejecter : (RCTPromiseRejectBlock)reject) {
+- (void)setAudioRoute:(NSString *)route
+              resolve:(RCTPromiseResolveBlock)resolve
+               reject:(RCTPromiseRejectBlock)reject {
   @try {
     static NSSet<NSString *> *validRoutes;
     static dispatch_once_t onceToken;
@@ -679,8 +686,8 @@ RCT_EXPORT_METHOD(setAudioRoute : (NSString *)route resolver : (
  * Resolve the output route the system is actually using (`speaker` /
  * `earpiece` / `bluetooth` / `wired`) — may differ from the last request.
  */
-RCT_EXPORT_METHOD(getAudioRoute : (RCTPromiseResolveBlock)
-                      resolve rejecter : (RCTPromiseRejectBlock)reject) {
+- (void)getAudioRoute:(RCTPromiseResolveBlock)resolve
+               reject:(RCTPromiseRejectBlock)reject {
   @try {
     resolve([self currentAudioRouteString]);
   } @catch (NSException *e) {
@@ -692,8 +699,9 @@ RCT_EXPORT_METHOD(getAudioRoute : (RCTPromiseResolveBlock)
  * Play a single audio chunk (base64-encoded PCM).
  * This is used for one-shot TTS playback (HTTP mode).
  */
-RCT_EXPORT_METHOD(playAudioChunk : (NSString *)b64 resolver : (
-    RCTPromiseResolveBlock)resolve rejecter : (RCTPromiseRejectBlock)reject) {
+- (void)playAudioChunk:(NSString *)b64
+               resolve:(RCTPromiseResolveBlock)resolve
+                reject:(RCTPromiseRejectBlock)reject {
   @try {
     if (!b64 || b64.length == 0) {
       if (reject)
@@ -816,13 +824,11 @@ RCT_EXPORT_METHOD(playAudioChunk : (NSString *)b64 resolver : (
   self.playbackFormat = nil;
 
   self.isPlaying = NO;
-  self.hasListeners = NO;
   self.appIsActive = NO;
 
   [self maybeDeactivateAudioSession];
 
   DGLogDebug(@"[Deepgram] invalidate: finished");
-  [super invalidate];
 }
 
 @end

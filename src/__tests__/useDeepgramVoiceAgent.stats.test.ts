@@ -1,24 +1,11 @@
 import { render, act } from '@testing-library/react-native';
 import { createElement } from 'react';
-import { DeviceEventEmitter, NativeModules } from 'react-native';
+import { DeviceEventEmitter } from 'react-native';
 import { useDeepgramVoiceAgent } from '../useDeepgramVoiceAgent';
 import type {
   UseDeepgramVoiceAgentProps,
   UseDeepgramVoiceAgentReturn,
 } from '../useDeepgramVoiceAgent';
-
-jest.mock('../NativeDeepgram', () => ({
-  Deepgram: {
-    startRecording: jest.fn(() => Promise.resolve()),
-    stopRecording: jest.fn(() => Promise.resolve()),
-    startAudio: jest.fn(() => Promise.resolve()),
-    stopAudio: jest.fn(() => Promise.resolve()),
-    startPlayer: jest.fn(),
-    stopPlayer: jest.fn(),
-    feedAudio: jest.fn(),
-    interruptAudio: jest.fn(),
-  },
-}));
 
 jest.mock('../helpers/askMicPermission', () => ({
   askMicPermission: jest.fn(() => Promise.resolve(true)),
@@ -66,7 +53,7 @@ const frameB64 = (() => {
 })();
 const DECODED_FRAME_BYTES = Math.floor((frameB64.length * 3) / 4);
 
-const AUDIO_EVENT = 'DeepgramAudioPCM'; // jest runs with Platform.OS === 'ios'
+const AUDIO_EVENT = 'onAudioPCM';
 
 let hookApi: UseDeepgramVoiceAgentReturn;
 let harnessProps: UseDeepgramVoiceAgentProps = {};
@@ -99,10 +86,6 @@ const emitMicFrame = () => {
 
 describe('useDeepgramVoiceAgent – session stats', () => {
   beforeAll(() => {
-    (NativeModules as Record<string, unknown>).Deepgram = {
-      addListener: jest.fn(),
-      removeListeners: jest.fn(),
-    };
     globalRef.WebSocket = MockWebSocket;
     globalRef.__DEEPGRAM_API_KEY__ = 'test-key';
   });

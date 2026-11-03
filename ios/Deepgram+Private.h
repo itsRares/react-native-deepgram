@@ -3,7 +3,6 @@
 
 #import <AVFoundation/AVFoundation.h>
 #import <AudioToolbox/AudioQueue.h>
-#import <React/RCTEventEmitter.h>
 
 #include <atomic>
 
@@ -29,11 +28,10 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, strong, nullable) NSMutableData *pendingPCMBuffer;
 @property(nonatomic, strong) dispatch_queue_t emitterQueue;
 @property(nonatomic, assign) NSUInteger chunkSizeBytes;
-@property(atomic, assign) BOOL hasListeners;
 @property(atomic, assign) BOOL appIsActive;
 
 // Microphone metering: when enabled, the recording sink computes a normalized
-// RMS amplitude (0..1) and emits `DeepgramAudioLevel` at most once per
+// RMS amplitude (0..1) and emits `onAudioLevel` at most once per
 // interval (`lastMeterEmitTime` throttles via CACurrentMediaTime()).
 @property(atomic, assign) BOOL meteringEnabled;
 @property(atomic, assign) NSTimeInterval meteringIntervalSeconds;
@@ -76,12 +74,11 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, strong, nullable) AVAudioConverter *captureConverter;
 @property(nonatomic, strong, nullable) AVAudioFormat *captureOutputFormat;
 
-// Workers exported in Deepgram.mm (RCT_EXPORT_METHOD) but invoked before
-// their textual definition; declared here to avoid -Wundeclared-selector.
-- (void)startPlayer:(nonnull NSNumber *)sampleRate
-           channels:(nonnull NSNumber *)channels;
+// Spec methods invoked before their textual definition in Deepgram.mm;
+// declared here to avoid -Wundeclared-selector.
+- (void)startPlayer:(double)sampleRate channels:(double)channels;
 - (void)stopPlayer:(nullable RCTPromiseResolveBlock)resolve
-          rejecter:(nullable RCTPromiseRejectBlock)reject;
+            reject:(nullable RCTPromiseRejectBlock)reject;
 
 @end
 

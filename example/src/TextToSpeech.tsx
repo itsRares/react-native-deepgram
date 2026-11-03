@@ -39,6 +39,10 @@ const POPULAR_TTS_MODELS = [
   'aura-2-celeste-es',
   'aura-2-diana-es',
   'aura-2-javier-es',
+  'flux-haley-en',
+  'flux-kit-en',
+  'flux-alexis-en',
+  'flux-miles-en',
 ];
 
 const HTTP_ENCODING_OPTIONS: Option[] = [
@@ -251,7 +255,8 @@ export default function TextToSpeech() {
       setLastClearedSequence(null);
     },
     onStreamMetadata: setLastMetadata,
-    onStreamFlushed: (event) => setLastFlushedSequence(event.sequence_id),
+    onStreamFlushed: (event) =>
+      setLastFlushedSequence(event.sequence_id ?? null),
     onStreamCleared: (event) => setLastClearedSequence(event.sequence_id),
     onStreamWarning: (warning) =>
       setWarnings((prev) => [warning, ...prev].slice(0, 3)),

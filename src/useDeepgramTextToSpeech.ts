@@ -41,10 +41,32 @@ const toBase64 = (chunk: ArrayBuffer | Uint8Array) =>
 /** Required fields per stream message type, checked before dispatching. */
 const STREAM_EVENT_SHAPES = {
   Metadata: { callback: 'onStreamMetadata', field: 'request_id', is: 'string' },
-  Flushed: { callback: 'onStreamFlushed', field: 'sequence_id', is: 'number' },
+  Flushed: { callback: 'onStreamFlushed', field: 'type', is: 'string' },
   Cleared: { callback: 'onStreamCleared', field: 'sequence_id', is: 'number' },
   Warning: { callback: 'onStreamWarning', field: 'description', is: 'string' },
+  SpeechStarted: {
+    callback: 'onSpeechStarted',
+    field: 'speech_id',
+    is: 'string',
+  },
+  SpeechMetadata: {
+    callback: 'onSpeechMetadata',
+    field: 'speech_id',
+    is: 'string',
+  },
+  SpeechInterrupted: {
+    callback: 'onSpeechInterrupted',
+    field: 'audio_played_ms',
+    is: 'number',
+  },
 } as const;
+
+/** Messages after which in-flight audio of an interrupted turn is over. */
+const INTERRUPT_SETTLED = new Set([
+  'SpeechInterrupted',
+  'SpeechStarted',
+  'Warning',
+]);
 
 async function postSpeak(
   url: string,
@@ -195,6 +217,10 @@ export function useDeepgramTextToSpeech(
   // header was resolving never opens a socket.
   const streamIdRef = useRef(0);
   const streamEndFiredRef = useRef(false);
+  const streamFluxRef = useRef(false);
+  // Set by interrupt(): audio frames already in flight belong to the
+  // cancelled turn and must not be played.
+  const discardAudioRef = useRef(false);
 
   const fireStreamEnd = useCallback(() => {
     if (streamEndFiredRef.current) return;
@@ -221,11 +247,7 @@ export function useDeepgramTextToSpeech(
         return false;
       }
       try {
-        const normalized =
-          message.type === 'Text'
-            ? { ...message, type: 'Speak' as const }
-            : message;
-        socket.send(JSON.stringify(normalized));
+        socket.send(JSON.stringify(message));
         return true;
       } catch (err) {
         reportStreamError(err);
@@ -240,9 +262,39 @@ export function useDeepgramTextToSpeech(
     [sendMessage]
   );
 
-  const clearStream = useCallback(
-    () => sendMessage({ type: 'Clear' }),
+  const interrupt = useCallback(
+    (config?: { playbackOffsetMs?: number }) => {
+      if (!streamFluxRef.current) return false;
+      const offset = config?.playbackOffsetMs;
+      const sent = sendMessage({
+        type: 'Interrupt',
+        ...(typeof offset === 'number'
+          ? { playback_offset: { type: 'time_ms' as const, value: offset } }
+          : {}),
+      });
+      if (sent) {
+        discardAudioRef.current = true;
+        if (autoPlayAudio) Deepgram.interruptAudio();
+      }
+      return sent;
+    },
+    [autoPlayAudio, sendMessage]
+  );
+
+  const configureStream = useCallback(
+    (config: { speed?: number }) =>
+      streamFluxRef.current &&
+      sendMessage({
+        type: 'Configure',
+        ...(config.speed != null ? { speed: config.speed } : {}),
+      }),
     [sendMessage]
+  );
+
+  const clearStream = useCallback(
+    () =>
+      streamFluxRef.current ? interrupt() : sendMessage({ type: 'Clear' }),
+    [interrupt, sendMessage]
   );
 
   const closeStreamGracefully = useCallback(
@@ -252,14 +304,16 @@ export function useDeepgramTextToSpeech(
 
   const sendText = useCallback(
     (text: string, config?: { flush?: boolean; sequenceId?: number }) => {
-      const trimmed = text?.trim();
-      if (!trimmed) {
+      if (typeof text !== 'string' || !text.trim()) {
         return false;
       }
+      const flux = streamFluxRef.current;
       const didSend = sendMessage({
         type: 'Speak',
-        text: trimmed,
-        ...(config?.sequenceId != null
+        // Flux does not add whitespace between Speak messages, so keep
+        // streamed tokens intact.
+        text: flux ? text : text.trim(),
+        ...(!flux && config?.sequenceId != null
           ? { sequence_id: config.sequenceId }
           : {}),
       });
@@ -273,6 +327,7 @@ export function useDeepgramTextToSpeech(
 
   const handleStreamAudio = useCallback(
     (audio: ArrayBuffer) => {
+      if (discardAudioRef.current) return;
       if (autoPlayAudio) {
         Deepgram.feedAudio(toBase64(audio));
       }
@@ -289,6 +344,8 @@ export function useDeepgramTextToSpeech(
       } catch {
         return;
       }
+      if (typeof message?.type !== 'string') return;
+      propsRef.current.onStreamMessage?.(message);
 
       if (message.type === 'Error') {
         const err = message as Partial<DeepgramTextToSpeechStreamErrorMessage>;
@@ -297,6 +354,9 @@ export function useDeepgramTextToSpeech(
         const code = typeof err.code === 'string' ? err.code : undefined;
         reportStreamError(new Error(description ?? code ?? 'TTS error'));
         return;
+      }
+      if (INTERRUPT_SETTLED.has(message.type)) {
+        discardAudioRef.current = false;
       }
 
       const shape =
@@ -319,6 +379,8 @@ export function useDeepgramTextToSpeech(
       if (ws.current) closeStream();
       const streamId = ++streamIdRef.current;
       streamEndFiredRef.current = false;
+      streamFluxRef.current = streamOptions.flux;
+      discardAudioRef.current = false;
       propsRef.current.onBeforeStream?.();
       setStatus('connecting');
       try {
@@ -408,6 +470,8 @@ export function useDeepgramTextToSpeech(
     sendText,
     flushStream,
     clearStream,
+    interrupt,
+    configureStream,
     closeStreamGracefully,
     stopStreaming,
     ...(trackState ? { state } : {}),

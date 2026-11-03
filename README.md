@@ -1040,16 +1040,19 @@ Flux also accepts `keyterm`, `numerals`, `profanityFilter`, `redact` (`'numbers'
 
 Generate audio via a single HTTP call or stream interactive responses over WebSocket. The hook exposes granular configuration for both request paths.
 
-### Streaming protocol parity notes (Deepgram review)
+### Aura vs Flux TTS
 
-- WebSocket endpoint: `wss://api.deepgram.com/v1/speak`
-- Canonical streaming input message for text is `{ "type": "Speak", "text": "..." }`
-- Supported control messages: `Flush`, `Clear`, `Close`
-- Authorization supports both `Token <API_KEY>` and `Bearer <TEMP_TOKEN>` formats
-- Streaming media output settings supported by Deepgram: `encoding` in `linear16 | mulaw | alaw`, with streaming `sample_rate` options based on encoding
-- Flush limit: up to 20 `Flush` messages per 60 seconds (Deepgram sends warnings when exceeded)
+The hook picks the endpoint from the model name:
 
-For backward compatibility, `sendMessage` still accepts legacy `{ type: 'Text' }` payloads and maps them to `{ type: 'Speak' }` before sending.
+| | Aura (`aura-*`) | Flux TTS (`flux-*`) |
+| - | - | - |
+| Endpoint | `/v1/speak` | `/v2/speak` |
+| Turn model | Text buffer; `Flush` emits audio | `Flush` ends the turn; per-turn `SpeechStarted` / `SpeechMetadata` |
+| Barge-in | `clearStream()` sends `Clear` | `interrupt()` stops playback, cancels the turn and reports `text_spoken` / `text_remaining` |
+| Mid-stream changes | – | `configureStream({ speed })` |
+| Extra options | – | `expressivity` (`-2`..`2`, beta), `speed` `0.5`–`1.5` |
+
+Both stream raw `linear16` / `mulaw` / `alaw` and accept `Token` or `Bearer` auth. Aura allows up to 20 `Flush` messages per 60 seconds. Flux closes a session after 60 s without client messages; React Native's `WebSocket` cannot send ping frames, so start a new stream after long pauses.
 
 ### HTTP synthesis quick start
 
@@ -1103,6 +1106,26 @@ flushStream();
 closeStreamGracefully();
 ```
 
+### Flux TTS streaming with barge-in
+
+```tsx
+const { startStreaming, sendText, flushStream, interrupt } =
+  useDeepgramTextToSpeech({
+    options: {
+      stream: { model: 'flux-haley-en', expressivity: 1, autoFlush: false },
+    },
+    onSpeechMetadata: (turn) => console.log(turn.billable_character_count),
+    onSpeechInterrupted: ({ text_spoken }) => trimLlmContext(text_spoken),
+  });
+
+await startStreaming('Sure, ');
+for await (const token of llmTokens) sendText(token); // sent verbatim
+flushStream(); // ends the turn
+
+// User talks over the agent:
+interrupt({ playbackOffsetMs: playedMs });
+```
+
 ### API reference
 
 **Signature**
@@ -1113,7 +1136,7 @@ const {
   synthesize, synthesizeToBytes,
   // Streaming
   startStreaming, sendText, sendMessage,
-  flushStream, clearStream,
+  flushStream, clearStream, interrupt, configureStream,
   closeStreamGracefully, stopStreaming,
   // Reactive state (opt-in)
   state,
@@ -1145,10 +1168,14 @@ const {
 | `onBeforeStream` | `() => void` | Before opening the WebSocket. |
 | `onStreamStart` | `() => void` | Socket is open and ready. |
 | `onAudioChunk` | `(chunk: ArrayBuffer) => void` | Each PCM chunk arrives. |
-| `onStreamMetadata` | `(metadata: DeepgramTextToSpeechStreamMetadataMessage) => void` | Stream metadata arrives. |
+| `onStreamMetadata` | `(metadata: DeepgramTextToSpeechStreamMetadataMessage) => void` | Aura stream metadata arrives. |
 | `onStreamFlushed` | `(event: DeepgramTextToSpeechStreamFlushedMessage) => void` | Deepgram confirms a flush. |
-| `onStreamCleared` | `(event: DeepgramTextToSpeechStreamClearedMessage) => void` | Deepgram confirms a clear. |
+| `onStreamCleared` | `(event: DeepgramTextToSpeechStreamClearedMessage) => void` | Deepgram confirms an Aura clear. |
 | `onStreamWarning` | `(warning: DeepgramTextToSpeechStreamWarningMessage) => void` | Deepgram warns about the stream. |
+| `onSpeechStarted` | `(event: DeepgramTextToSpeechSpeechStartedMessage) => void` | Flux: a turn's audio starts. |
+| `onSpeechMetadata` | `(event: DeepgramTextToSpeechSpeechMetadataMessage) => void` | Flux: a turn finished (billing and timing). |
+| `onSpeechInterrupted` | `(event: DeepgramTextToSpeechSpeechInterruptedMessage) => void` | Flux: answer to `interrupt()`. |
+| `onStreamMessage` | `(message: DeepgramTextToSpeechStreamResponseMessage) => void` | Every JSON message (e.g. Flux `Connected`, `ConfigureSuccess`, `SessionMetadata`). |
 | `onStreamError` | `(error: unknown) => void` | The WebSocket errors. |
 | `onStreamEnd` | `() => void` | The stream closes (gracefully or otherwise). |
 
@@ -1166,10 +1193,12 @@ const {
 | Method | Signature | Description |
 | ------ | --------- | ----------- |
 | `startStreaming` | `(text: string) => Promise<void>` | Open the WebSocket and queue the first message. |
-| `sendText` | `(text: string, options?: { flush?: boolean; sequenceId?: number }) => boolean` | Queue additional text; can suppress auto-flush or set sequence id. |
-| `sendMessage` | `(message: DeepgramTextToSpeechStreamInputMessage) => boolean` | Send a raw control message (`Speak`, `Flush`, `Clear`, `Close`). |
-| `flushStream` | `() => boolean` | Tell Deepgram to emit all buffered audio now. |
-| `clearStream` | `() => boolean` | Clear buffered text/audio without closing the socket. |
+| `sendText` | `(text: string, options?: { flush?: boolean; sequenceId?: number }) => boolean` | Queue additional text; can suppress auto-flush or set an Aura sequence id. Flux text is sent verbatim, Aura text is trimmed. |
+| `sendMessage` | `(message: DeepgramTextToSpeechStreamInputMessage) => boolean` | Send a raw control message (`Speak`, `Flush`, `Clear`, `Close`, `Interrupt`, `Configure`). |
+| `flushStream` | `() => boolean` | Aura: emit all buffered audio now. Flux: end the current turn. |
+| `clearStream` | `() => boolean` | Aura: clear buffered text/audio. Flux: same as `interrupt()`. |
+| `interrupt` | `(options?: { playbackOffsetMs?: number }) => boolean` | Flux: stop playback, cancel the turn and drop in-flight audio. |
+| `configureStream` | `(options: { speed?: number }) => boolean` | Flux: change the speed mid-stream. |
 | `closeStreamGracefully` | `() => boolean` | Drain outstanding audio, then close. |
 | `stopStreaming` | `() => void` | Force-close and release resources. |
 
@@ -1181,29 +1210,16 @@ const {
 
 #### Configuration (`UseDeepgramTextToSpeechOptions`)
 
-`UseDeepgramTextToSpeechOptions` mirrors the SDK's structure and is merged into both HTTP and WebSocket requests.
+`UseDeepgramTextToSpeechOptions` has one section per transport plus shared query parameters.
 
 <details>
 <summary>Global options</summary>
 
 | Option        | Type                                             | Applies to       | Purpose                                                                       |
 | ------------- | ------------------------------------------------ | ---------------- | ----------------------------------------------------------------------------- |
-| `model`*      | `DeepgramTextToSpeechModel \| (string & {})`     | Both             | Legacy shortcut for selecting a model (prefer per-transport `model`).         |
-| `encoding`*   | `DeepgramTextToSpeechEncoding`                   | Both             | Legacy shortcut for selecting encoding (prefer `http.encoding` / `stream.encoding`). |
-| `sampleRate`* | `DeepgramTextToSpeechSampleRate`                 | Both             | Legacy shortcut for sample rate (prefer transport-specific overrides).        |
-| `bitRate`*    | `DeepgramTextToSpeechBitRate`                    | HTTP             | Legacy shortcut for bit rate.                                                 |
-| `container`*  | `DeepgramTextToSpeechContainer`                  | HTTP             | Legacy shortcut for container.                                                |
-| `format`*     | `'mp3' \| 'wav' \| 'opus' \| 'pcm' \| (string & {})` | HTTP         | Legacy shortcut for container/format.                                        |
-| `callback`*   | `string`                                         | HTTP             | Legacy shortcut for callback URL.                                             |
-| `callbackMethod`* | `DeepgramTextToSpeechCallbackMethod`         | HTTP             | Legacy shortcut for callback method.                                          |
-| `speed`*      | `number`                                         | Both             | Legacy shortcut for playback speed (prefer `http.speed` / `stream.speed`).    |
-| `tag`*        | `string \| string[]`                             | HTTP             | Legacy shortcut for the usage-reporting tag (prefer `http.tag`).              |
-| `mipOptOut`*  | `boolean`                                        | Both             | Legacy shortcut for Model Improvement Program opt-out.                        |
 | `queryParams` | `Record<string, string \| number \| boolean>`   | Both             | Shared query string parameters appended to all requests.                      |
-| `http`        | `DeepgramTextToSpeechHttpOptions`                | HTTP             | Fine-grained HTTP synthesis configuration.                                    |
-| `stream`      | `DeepgramTextToSpeechStreamOptions`              | Streaming        | Fine-grained streaming configuration.                                         |
-
-<small>*Marked fields are supported for backwards compatibility but the transport-specific `http`/`stream` options are recommended.</small>
+| `http`        | `DeepgramTextToSpeechHttpOptions`                | HTTP             | HTTP synthesis configuration.                                                 |
+| `stream`      | `DeepgramTextToSpeechStreamOptions`              | Streaming        | Streaming configuration.                                                      |
 
 </details>
 
@@ -1212,13 +1228,13 @@ const {
 
 | Option         | Type                                               | Purpose                                                                       |
 | -------------- | -------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `model`        | `DeepgramTextToSpeechModel \| (string & {})`       | Select the TTS voice/model.                                                   |
+| `model`        | `DeepgramTextToSpeechModel`                        | Aura or Flux voice (`flux-*` uses `/v2/speak`).                               |
 | `encoding`     | `DeepgramTextToSpeechHttpEncoding`                 | Output audio codec.                                                           |
 | `sampleRate`   | `DeepgramTextToSpeechSampleRate`                   | Output sample rate in Hz.                                                     |
 | `container`    | `DeepgramTextToSpeechContainer`                    | Wrap audio in a container (`'none'`, `'wav'`, `'ogg'`).                       |
-| `format`       | `'mp3' \| 'wav' \| 'opus' \| 'pcm' \| (string & {})` | Deprecated alias for `container`.                                             |
 | `bitRate`      | `DeepgramTextToSpeechBitRate`                      | Bit rate for compressed formats (e.g. MP3).                                   |
-| `speed`        | `number`                                           | Playback speed multiplier (`0.7`–`1.5`, default `1`).                         |
+| `speed`        | `number`                                           | Speed multiplier (Aura-2 `0.7`–`1.5`, Flux `0.5`–`1.5`, default `1`).        |
+| `expressivity` | `number`                                           | Flux only (beta): `-2` (calm) to `2` (animated).                              |
 | `tag`          | `string \| string[]`                               | Label the request for usage reporting.                                       |
 | `callback`     | `string`                                           | Webhook URL invoked after synthesis completes.                                |
 | `callbackMethod` | `DeepgramTextToSpeechCallbackMethod`             | HTTP verb used for the callback.                                              |
@@ -1232,13 +1248,15 @@ const {
 
 | Option       | Type                                               | Purpose                                                                 |
 | ------------ | -------------------------------------------------- | ----------------------------------------------------------------------- |
-| `model`      | `DeepgramTextToSpeechModel \| (string & {})`       | Select the streaming voice/model.                                      |
+| `model`      | `DeepgramTextToSpeechModel`                        | Aura or Flux voice (`flux-*` uses `/v2/speak`).                        |
 | `encoding`   | `DeepgramTextToSpeechStreamEncoding`               | Output PCM encoding for streamed chunks.                               |
 | `sampleRate` | `DeepgramTextToSpeechSampleRate`                   | Output sample rate in Hz.                                              |
-| `speed`      | `number`                                           | Playback speed multiplier (`0.7`–`1.5`, default `1`).                  |
+| `speed`      | `number`                                           | Speed multiplier (Aura-2 `0.7`–`1.5`, Flux `0.5`–`1.5`, default `1`). |
+| `expressivity` | `number`                                         | Flux only (beta): `-2` (calm) to `2` (animated).                       |
+| `tag`        | `string \| string[]`                               | Flux only: label the session for usage reporting.                      |
 | `mipOptOut`  | `boolean`                                          | Opt out of the Model Improvement Program.                              |
 | `queryParams`| `Record<string, string \| number \| boolean>`     | Extra query parameters appended to the streaming URL.                  |
-| `autoFlush`  | `boolean`                                          | Automatically flush after each `sendText` call (defaults to `true`).   |
+| `autoFlush`  | `boolean`                                          | Flush after each `sendText` call (defaults to `true`). On Flux a flush ends the turn. |
 
 </details>
 

@@ -29,6 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed the deprecated `diarize` boolean from `DeepgramLiveListenOptions`
   and `DeepgramPrerecordedOptions` (Deepgram deprecated it, and requests that
   set both are rejected). Use `diarizeModel: 'latest'`.
+- Text-to-speech: removed the deprecated top-level
+  `UseDeepgramTextToSpeechOptions` shortcuts (`model`, `encoding`,
+  `sampleRate`, `bitRate`, `speed`, `tag`, `container`, `format`, `callback`,
+  `callbackMethod`, `mipOptOut`); use `options.http` / `options.stream`. Also
+  removed `http.format`, the `DeepgramTextToSpeechEncoding` alias and the
+  legacy `{ type: 'Text' }` stream message (send `Speak`).
+- `DeepgramTextToSpeechStreamFlushedMessage.sequence_id` is optional (Flux
+  sends `speech_id` instead).
 
 ### Added
 
@@ -43,6 +51,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Flux streams forward `numerals` and `redact`; `languageHint` now also works
   for Nova-3 multilingual (`language: 'multi'`), live and pre-recorded.
 - `nova-3-pharma` model and the `aggressive_numbers` redaction type.
+- **Flux TTS.** `flux-*` voices stream from `/v2/speak` and synthesize via
+  the v2 REST endpoint. New `interrupt({ playbackOffsetMs })` (stops local
+  playback, cancels the turn and drops in-flight audio) and
+  `configureStream({ speed })`, `expressivity` and stream `tag` options, and
+  `onSpeechStarted` / `onSpeechMetadata` / `onSpeechInterrupted` /
+  `onStreamMessage` callbacks. On Flux `clearStream()` interrupts and
+  `sendText()` keeps whitespace so streamed LLM tokens join correctly.
+- Model types list the Flux TTS English voices (any `flux-*` voice is
+  accepted) and the Aura-2 German, French, Dutch, Italian, Japanese and new
+  Spanish voices.
 
 ### Changed
 

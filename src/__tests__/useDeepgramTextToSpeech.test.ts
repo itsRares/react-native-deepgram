@@ -158,4 +158,114 @@ describe('useDeepgramTextToSpeech', () => {
     expect(second!.data).not.toBe(first!.data);
     expect(Array.from(new Uint8Array(second!.data))).toEqual([5, 6, 7]);
   });
+
+  it('streams Flux voices from /v2/speak with turn controls', async () => {
+    const onSpeechStarted = jest.fn();
+    const onSpeechInterrupted = jest.fn();
+    const onStreamMessage = jest.fn();
+    const onAudioChunk = jest.fn();
+    harnessProps = {
+      onSpeechStarted,
+      onSpeechInterrupted,
+      onStreamMessage,
+      onAudioChunk,
+      options: {
+        stream: {
+          model: 'flux-haley-en',
+          expressivity: 1,
+          tag: 'demo',
+          autoFlush: false,
+        },
+      },
+    };
+    await render(createElement(Harness));
+    await act(async () => {
+      await hookApi.startStreaming('Sure, ');
+    });
+    const socket = MockWebSocket.last();
+    const url = new URL(socket.url);
+    expect(url.pathname).toBe('/v2/speak');
+    expect(url.searchParams.get('model')).toBe('flux-haley-en');
+    expect(url.searchParams.get('expressivity')).toBe('1');
+    expect(url.searchParams.get('tag')).toBe('demo');
+
+    let interrupted = false;
+    let configured = false;
+    await act(() => {
+      socket.onopen?.();
+      hookApi.sendText('I can help.', { sequenceId: 3 });
+      socket.serverJson({ type: 'SpeechStarted', speech_id: 's1' });
+      configured = hookApi.configureStream({ speed: 1.1 });
+      interrupted = hookApi.interrupt({ playbackOffsetMs: 1200 });
+      // Already in flight for the cancelled turn: must be dropped.
+      socket.onmessage?.({ data: new Uint8Array([1, 2]).buffer });
+      socket.serverJson({
+        type: 'SpeechInterrupted',
+        speech_id: 's1',
+        audio_played_ms: 1200,
+        text_spoken: 'Sure, ',
+      });
+      socket.onmessage?.({ data: new Uint8Array([3, 4]).buffer });
+    });
+
+    expect(configured).toBe(true);
+    expect(interrupted).toBe(true);
+    expect(socket.sentJson()).toEqual([
+      { type: 'Speak', text: 'Sure, ' },
+      { type: 'Speak', text: 'I can help.' },
+      { type: 'Configure', speed: 1.1 },
+      { type: 'Interrupt', playback_offset: { type: 'time_ms', value: 1200 } },
+    ]);
+    expect(NativeDeepgram!.interruptAudio).toHaveBeenCalledTimes(1);
+    expect(onSpeechStarted).toHaveBeenCalledWith({
+      type: 'SpeechStarted',
+      speech_id: 's1',
+    });
+    expect(onSpeechInterrupted.mock.calls[0][0].text_spoken).toBe('Sure, ');
+    expect(onAudioChunk).toHaveBeenCalledTimes(1);
+    expect(NativeDeepgram!.feedAudio).toHaveBeenCalledWith('AwQ=');
+    expect(onStreamMessage.mock.calls.map(([m]) => m.type)).toEqual([
+      'SpeechStarted',
+      'SpeechInterrupted',
+    ]);
+  });
+
+  it('keeps Aura streams on Clear and rejects Flux-only controls', async () => {
+    await render(createElement(Harness));
+    await act(async () => {
+      await hookApi.startStreaming('Hi');
+    });
+    const socket = MockWebSocket.last();
+
+    let interrupted = true;
+    let configured = true;
+    await act(() => {
+      socket.onopen?.();
+      interrupted = hookApi.interrupt();
+      configured = hookApi.configureStream({ speed: 1.2 });
+      hookApi.clearStream();
+    });
+
+    expect(interrupted).toBe(false);
+    expect(configured).toBe(false);
+    expect(socket.sentTypes()).toEqual(['Speak', 'Flush', 'Clear']);
+    expect(NativeDeepgram!.interruptAudio).not.toHaveBeenCalled();
+  });
+
+  it('sends Flux batch requests to /v2/speak', async () => {
+    mockFetch.mockResolvedValueOnce(audioResponse([9]));
+    harnessProps = {
+      options: { http: { model: 'flux-kit-en', expressivity: -1 } },
+    };
+    await render(createElement(Harness));
+
+    await act(async () => {
+      await hookApi.synthesizeToBytes('Batch');
+    });
+
+    const url = new URL(String(mockFetch.mock.calls[0][0]));
+    expect(url.pathname).toBe('/v2/speak');
+    expect(url.searchParams.get('model')).toBe('flux-kit-en');
+    expect(url.searchParams.get('expressivity')).toBe('-1');
+  });
 });

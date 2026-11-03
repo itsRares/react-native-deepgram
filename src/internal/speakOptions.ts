@@ -1,4 +1,9 @@
-import { getBaseUrl, getBaseWss } from '../constants';
+import {
+  getBaseUrl,
+  getBaseWss,
+  getV2BaseUrl,
+  getV2BaseWss,
+} from '../constants';
 import { buildParams, type QueryParams } from '../helpers/url';
 import type {
   DeepgramTextToSpeechHttpEncoding,
@@ -13,6 +18,10 @@ const DEFAULT_HTTP_ENCODING: DeepgramTextToSpeechHttpEncoding = 'linear16';
 const DEFAULT_STREAM_ENCODING: DeepgramTextToSpeechStreamEncoding = 'linear16';
 const DEFAULT_MP3_BITRATE = 48_000;
 const TELEPHONY_SAMPLE_RATE = 8_000;
+
+/** Flux TTS voices are served only by `/v2/speak`. */
+export const isFluxTtsModel = (model: unknown): boolean =>
+  typeof model === 'string' && model.startsWith('flux-');
 
 const isRawPcm = (encoding?: string) =>
   encoding === 'linear16' || encoding === 'mulaw' || encoding === 'alaw';
@@ -41,40 +50,35 @@ export function deriveTtsMimeType(
 export type ResolvedHttpOptions = ReturnType<typeof resolveHttpOptions>;
 export type ResolvedStreamOptions = ReturnType<typeof resolveStreamOptions>;
 
-/** Merge the HTTP-specific options over the shared (deprecated) ones. */
+/** Apply the HTTP defaults derived from the encoding. */
 export function resolveHttpOptions(options: UseDeepgramTextToSpeechOptions) {
   const http = options.http ?? {};
-  const encoding = http.encoding ?? options.encoding ?? DEFAULT_HTTP_ENCODING;
+  const encoding = http.encoding ?? DEFAULT_HTTP_ENCODING;
 
-  const explicitRate = http.sampleRate ?? options.sampleRate;
-  let sampleRate = explicitRate;
+  let sampleRate = http.sampleRate;
   if (sampleRate == null && encoding === 'linear16') {
     sampleRate = DEFAULT_TTS_SAMPLE_RATE;
   } else if (sampleRate == null && isRawPcm(encoding)) {
     sampleRate = TELEPHONY_SAMPLE_RATE;
   }
 
-  let container = http.container ?? options.container;
+  let container = http.container;
   if (!container && encoding === 'opus') container = 'ogg';
   if (!container && isRawPcm(encoding)) container = 'none';
 
-  const bitRate =
-    http.bitRate ??
-    options.bitRate ??
-    (encoding === 'mp3' ? DEFAULT_MP3_BITRATE : undefined);
-
   return {
-    model: http.model ?? options.model ?? DEFAULT_TTS_MODEL,
+    model: http.model ?? DEFAULT_TTS_MODEL,
     sampleRate,
     encoding,
     container,
-    format: http.format ?? options.format,
-    bitRate,
-    speed: http.speed ?? options.speed,
-    tag: http.tag ?? options.tag,
-    callback: http.callback ?? options.callback,
-    callbackMethod: http.callbackMethod ?? options.callbackMethod,
-    mipOptOut: http.mipOptOut ?? options.mipOptOut,
+    bitRate:
+      http.bitRate ?? (encoding === 'mp3' ? DEFAULT_MP3_BITRATE : undefined),
+    speed: http.speed,
+    expressivity: http.expressivity,
+    tag: http.tag,
+    callback: http.callback,
+    callbackMethod: http.callbackMethod,
+    mipOptOut: http.mipOptOut,
     queryParams: {
       ...(options.queryParams ?? {}),
       ...(http.queryParams ?? {}),
@@ -82,30 +86,35 @@ export function resolveHttpOptions(options: UseDeepgramTextToSpeechOptions) {
   };
 }
 
-/** Merge the streaming-specific options over the shared (deprecated) ones. */
+/** Apply the streaming defaults (raw PCM only). */
 export function resolveStreamOptions(options: UseDeepgramTextToSpeechOptions) {
   const stream = options.stream ?? {};
-  const requested = stream.encoding ?? options.encoding;
+  const requested = stream.encoding;
   const encoding: DeepgramTextToSpeechStreamEncoding =
     requested === 'linear16' || requested === 'mulaw' || requested === 'alaw'
       ? requested
       : DEFAULT_STREAM_ENCODING;
+  const model = stream.model ?? DEFAULT_TTS_MODEL;
+  const queryParams = {
+    ...(options.queryParams ?? {}),
+    ...(stream.queryParams ?? {}),
+  } as QueryParams;
 
   return {
-    model: stream.model ?? options.model ?? DEFAULT_TTS_MODEL,
+    model,
+    // An explicit `queryParams.model` wins in the URL, so it picks the route.
+    flux: isFluxTtsModel(queryParams.model ?? model),
     sampleRate:
       stream.sampleRate ??
-      options.sampleRate ??
       (encoding === 'linear16'
         ? DEFAULT_TTS_SAMPLE_RATE
         : TELEPHONY_SAMPLE_RATE),
     encoding,
-    speed: stream.speed ?? options.speed,
-    mipOptOut: stream.mipOptOut ?? options.mipOptOut,
-    queryParams: {
-      ...(options.queryParams ?? {}),
-      ...(stream.queryParams ?? {}),
-    } as QueryParams,
+    speed: stream.speed,
+    expressivity: stream.expressivity,
+    tag: stream.tag,
+    mipOptOut: stream.mipOptOut,
+    queryParams,
     autoFlush: stream.autoFlush ?? true,
   };
 }
@@ -136,9 +145,9 @@ export function buildSpeakHttpParams(
       encoding: merged.encoding,
       sample_rate: merged.sampleRate,
       container: merged.container,
-      format: merged.format,
       bit_rate: merged.bitRate,
       speed: merged.speed,
+      expressivity: merged.expressivity,
       tag: merged.tag,
       callback: merged.callback,
       callback_method: merged.callbackMethod,
@@ -154,15 +163,20 @@ export function buildSpeakStreamUrl(options: ResolvedStreamOptions): string {
       encoding: options.encoding,
       sample_rate: options.sampleRate,
       speed: options.speed,
+      ...(options.flux
+        ? { expressivity: options.expressivity, tag: options.tag }
+        : {}),
       mip_opt_out: options.mipOptOut,
     })
   );
-  const base = `${getBaseWss()}/speak`;
+  const base = `${options.flux ? getV2BaseWss() : getBaseWss()}/speak`;
   return params ? `${base}?${params}` : base;
 }
 
+/** The `model` param picks `/v2/speak` (Flux) or `/v1/speak` (Aura). */
 export function buildSpeakHttpUrl(params: QueryParams): string {
   const query = buildParams(params);
-  const base = `${getBaseUrl()}/speak`;
+  const root = isFluxTtsModel(params.model) ? getV2BaseUrl() : getBaseUrl();
+  const base = `${root}/speak`;
   return query ? `${base}?${query}` : base;
 }

@@ -7883,6 +7883,17 @@ __metadata:
   languageName: node
   linkType: hard
 
+"expo-device@npm:~58.0.5":
+  version: 58.0.5
+  resolution: "expo-device@npm:58.0.5"
+  dependencies:
+    ua-parser-js: "npm:^0.7.33"
+  peerDependencies:
+    expo: "*"
+  checksum: 10/bc2ff1f312b9ff6fac07513f333d195f7fa697d454606d50e39ccea64c67b56d17b9964759e7c6d4914dbfeaf42897b381cd002ec49e2980d684f6330acb97e0
+  languageName: node
+  linkType: hard
+
 "expo-document-picker@npm:~58.0.4":
   version: 58.0.4
   resolution: "expo-document-picker@npm:58.0.4"
@@ -12501,6 +12512,7 @@ __metadata:
     "@babel/core": "npm:^7.29.7"
     "@expo/metro-runtime": "npm:~58.0.17"
     expo: "npm:~58.0.23"
+    expo-device: "npm:~58.0.5"
     expo-document-picker: "npm:~58.0.4"
     expo-file-system: "npm:~58.0.13"
     react: "npm:19.3.0"
@@ -14089,6 +14101,15 @@ __metadata:
     tsc: bin/tsc
     tsserver: bin/tsserver
   checksum: 10/22b67a18dafedf9b1468b64ca20d9aa02ea61d449b65413d8aa6552aeb63f52ef369e86beb25b6b4c91a803d9726ee5c196f391a9b64201263263410a4223ee6
+  languageName: node
+  linkType: hard
+
+"ua-parser-js@npm:^0.7.33":
+  version: 0.7.41
+  resolution: "ua-parser-js@npm:0.7.41"
+  bin:
+    ua-parser-js: script/cli.js
+  checksum: 10/e41306332d8ace098d51a644a3ba95522ddfc04243727a3c0419efcdf486c8f868c3af8e6a56f6aa86bdc26e6b893abb0b2bde0c9e1a1625a183dfdf839cac82
   languageName: node
   linkType: hard
 

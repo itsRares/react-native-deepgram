@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
+  Platform,
   ScrollView,
   StyleSheet,
   Switch,
@@ -8,6 +9,7 @@ import {
   View,
   type ScrollViewInstance,
 } from 'react-native';
+import * as Device from 'expo-device';
 import {
   useDeepgramVoiceAgent,
   createAgentSettings,
@@ -71,6 +73,8 @@ const SAMPLE_RATE_OPTIONS = [
   { label: '16 kHz (recommended)', value: '16000' },
   { label: '8 kHz (lower quality)', value: '8000' },
 ];
+
+const isSimulator = !Device.isDevice;
 
 const formatBytes = (n: number) =>
   n < 1024
@@ -347,6 +351,20 @@ export default function VoiceAgent() {
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
       >
+        {isSimulator ? (
+          <View style={styles.warningBanner}>
+            <Text style={styles.warningText}>
+              No echo cancellation on{' '}
+              {Platform.OS === 'ios' ? 'the Simulator' : 'the emulator'}
+            </Text>
+            <Text style={styles.warningHint}>
+              The mic picks up the agent through your computer's speakers, so it
+              hears itself and interrupts itself. Use headphones, or test on a
+              physical device.
+            </Text>
+          </View>
+        ) : null}
+
         {/* Hero / mic */}
         <View style={styles.hero}>
           <View style={styles.heroTop}>
@@ -511,8 +529,8 @@ export default function VoiceAgent() {
           <Text style={styles.routeHint}>
             While the agent is speaking, start talking — its audio stops
             immediately instead of finishing the sentence. Barge-ins so far:{' '}
-            {bargeInCount}. Needs hardware echo cancellation, so test on a
-            physical device (simulators have no VPIO).
+            {bargeInCount}. Needs echo cancellation, so test on a physical
+            device (simulators and emulators have none).
           </Text>
 
           <View style={styles.statsGrid}>
@@ -936,6 +954,11 @@ const styles = StyleSheet.create({
   warningText: {
     color: colors.warning,
     ...type.smallMedium,
+  },
+  warningHint: {
+    ...type.small,
+    color: colors.textMuted,
+    marginTop: 2,
   },
   thinkingPill: {
     backgroundColor: colors.accentMuted,

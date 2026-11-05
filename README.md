@@ -442,7 +442,7 @@ Things to know:
   ```
 
   Each entry is optional. Values can also reference string resources for localization (`android:resource="@string/..."` instead of `android:value`); `ICON` names a drawable/mipmap resource and safely falls back to the launcher icon if missing.
-- **Graceful degradation.** If the permissions aren't declared, everything still works while the app is in the foreground; the native module simply skips the keep-alive service instead of crashing.
+- **Graceful degradation.** If the permissions or the service's `foregroundServiceType` (it must include `mediaPlayback`) aren't declared, everything still works while the app is in the foreground; the native module simply skips the keep-alive service instead of crashing. Other libraries declaring `FOREGROUND_SERVICE` don't opt you in.
 
 ### Built-in resilience
 

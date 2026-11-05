@@ -16,6 +16,8 @@ import {
   toSpeakerSegments,
   toWebVTT,
   useDeepgramSpeechToText,
+  type DeepgramFluxTurnEvent,
+  type DeepgramLiveListenOptions,
   type SpeakerSegment,
 } from 'react-native-deepgram';
 import Button from './components/Button';
@@ -38,12 +40,60 @@ const formatClock = (seconds: number) => {
   return `${m}:${s.toFixed(1).padStart(4, '0')}`;
 };
 
+type Engine = 'nova' | 'multi' | 'flux';
+
+const ENGINES: {
+  key: Engine;
+  label: string;
+  hint: string;
+  options: DeepgramLiveListenOptions;
+}[] = [
+  {
+    key: 'nova',
+    label: 'Nova-3',
+    hint: 'Interim + final results over /v1/listen.',
+    options: {},
+  },
+  {
+    key: 'multi',
+    label: 'Nova-3 multi',
+    hint: 'language=multi: speak and switch between 50+ languages.',
+    options: { language: 'multi' },
+  },
+  {
+    key: 'flux',
+    label: 'Flux',
+    hint: 'Turn-based /v2/listen: end-of-turn detection, End turn button.',
+    options: { apiVersion: 'v2', model: 'flux-general-en' },
+  },
+];
+
+const TURN_LABEL: Record<DeepgramFluxTurnEvent, string> = {
+  StartOfTurn: '🗣 Speaking',
+  Update: '🗣 Speaking',
+  TurnResumed: '🗣 Resumed',
+  EagerEndOfTurn: '⏳ Likely done',
+  EndOfTurn: '✅ Turn ended',
+};
+
+const parseKeyterms = (input: string) =>
+  input
+    .split(',')
+    .map((term) => term.trim())
+    .filter(Boolean);
+
 export default function SpeechToText() {
   const [liveTranscript, setLiveTranscript] = useState('');
   const [liveInterimTranscript, setLiveInterimTranscript] = useState('');
   const [fileTranscript, setFileTranscript] = useState('');
   const [pickedFileName, setPickedFileName] = useState<string | null>(null);
   const [reconnectAttempt, setReconnectAttempt] = useState<number | null>(null);
+  const [engine, setEngine] = useState<Engine>('nova');
+  const [turnEvent, setTurnEvent] = useState<DeepgramFluxTurnEvent | null>(
+    null
+  );
+  const [keytermInput, setKeytermInput] = useState('Deepgram');
+  const [configureStatus, setConfigureStatus] = useState<string | null>(null);
 
   // Captions & speaker segments (2.4.0)
   const [captionsLoading, setCaptionsLoading] = useState(false);
@@ -81,6 +131,8 @@ export default function SpeechToText() {
     stopListening,
     pause,
     resume,
+    configure,
+    forceEndTurn,
     state: liveState,
     isPaused,
     audioLevel,
@@ -96,6 +148,18 @@ export default function SpeechToText() {
       setLiveTranscript('');
       setLiveInterimTranscript('');
       setReconnectAttempt(null);
+      setTurnEvent(null);
+      setConfigureStatus(null);
+    },
+    onTurnInfo: (turn) => setTurnEvent(turn.event),
+    onMessage: (message) => {
+      if (message.type === 'ConfigureSuccess') {
+        setConfigureStatus('✅ Applied by Deepgram');
+      } else if (message.type === 'ConfigureFailure') {
+        setConfigureStatus(
+          `⚠ Rejected: ${String(message.description ?? 'unknown reason')}`
+        );
+      }
     },
     onTranscript: (text, info) => {
       if (info?.isFinal) {
@@ -117,6 +181,7 @@ export default function SpeechToText() {
     onEnd: () => {
       setLiveInterimTranscript('');
       setReconnectAttempt(null);
+      setTurnEvent(null);
     },
     onRecordingComplete: (uri) => {
       console.log('Saved mic recording to', uri);
@@ -215,6 +280,21 @@ export default function SpeechToText() {
     stopListening();
   };
 
+  const activeEngine = ENGINES.find((e) => e.key === engine) ?? ENGINES[0]!;
+  const startLive = () =>
+    startListening({
+      keyterm: parseKeyterms(keytermInput),
+      ...activeEngine.options,
+    });
+
+  const applyKeyterms = () => {
+    setConfigureStatus(
+      configure({ keyterms: parseKeyterms(keytermInput) })
+        ? 'Sent — waiting for Deepgram…'
+        : '⚠ Not connected'
+    );
+  };
+
   // Caption helpers need the raw prerecorded response (word timings,
   // utterances, speakers), so hit /v1/listen directly — same request the
   // hook makes, but with utterances + diarization enabled.
@@ -308,6 +388,11 @@ export default function SpeechToText() {
         <View style={styles.hero}>
           <View style={styles.heroTop}>
             <StatusBadge tone={tone} label={toneLabel} />
+            {engine === 'flux' && turnEvent && sessionActive ? (
+              <View style={styles.turnChip}>
+                <Text style={styles.turnChipText}>{TURN_LABEL[turnEvent]}</Text>
+              </View>
+            ) : null}
           </View>
 
           <View style={styles.micWrap}>
@@ -433,11 +518,61 @@ export default function SpeechToText() {
                 variant="primary"
                 size="lg"
                 iconLeft="▶"
-                onPress={() => startListening({ keyterm: ['Deepgram'] })}
+                onPress={startLive}
               />
             )}
           </View>
         </View>
+
+        <Card
+          title="Model"
+          subtitle={sessionActive ? 'Stop to switch models' : activeEngine.hint}
+        >
+          <View style={styles.engineRow}>
+            {ENGINES.map(({ key, label }) => (
+              <Button
+                key={key}
+                title={label}
+                size="sm"
+                variant={engine === key ? 'primary' : 'secondary'}
+                disabled={sessionActive}
+                onPress={() => setEngine(key)}
+              />
+            ))}
+          </View>
+          <Field
+            label="Keyterms"
+            value={keytermInput}
+            onChangeText={setKeytermInput}
+            autoCapitalize="none"
+            autoCorrect={false}
+            placeholder="Deepgram, Nova, Flux"
+            hint="Comma-separated words to boost. While listening, Apply sends a Configure message — no reconnect."
+          />
+          {sessionActive ? (
+            <View style={styles.heroButtonRow}>
+              <Button
+                title="Apply keyterms"
+                size="sm"
+                variant="secondary"
+                onPress={applyKeyterms}
+              />
+              {engine === 'flux' ? (
+                <Button
+                  title="End turn now"
+                  size="sm"
+                  variant="secondary"
+                  onPress={() => forceEndTurn()}
+                />
+              ) : null}
+            </View>
+          ) : null}
+          {configureStatus ? (
+            <Text style={[styles.recordHint, styles.configureStatus]}>
+              {configureStatus}
+            </Text>
+          ) : null}
+        </Card>
 
         {/* Record-to-file: opt in and choose where to save */}
         <Card
@@ -754,7 +889,30 @@ const styles = StyleSheet.create({
     width: '100%',
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'center',
     marginBottom: spacing.md,
+  },
+  turnChip: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: radius.pill,
+    backgroundColor: colors.accentMuted,
+    borderWidth: 1,
+    borderColor: colors.accent,
+  },
+  turnChipText: {
+    ...type.smallMedium,
+    color: colors.accent,
+    fontSize: 12,
+  },
+  engineRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  configureStatus: {
+    marginTop: spacing.sm,
   },
   micWrap: {
     width: 120,

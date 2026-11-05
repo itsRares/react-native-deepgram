@@ -26,7 +26,7 @@ import Button from './components/Button';
 import Card from './components/Card';
 import Field from './components/Field';
 import StatusBadge from './components/StatusBadge';
-import { colors, radius, spacing, type } from './theme';
+import { colors, monoFont, radius, spacing, type } from './theme';
 
 const POPULAR_TTS_MODELS = [
   'aura-2-asteria-en',
@@ -61,10 +61,22 @@ const STREAM_ENCODING_OPTIONS: Option[] = [
   { label: 'A-law (alaw)', value: 'alaw' },
 ];
 
-const SAMPLE_RATE_OPTIONS: Option[] = ['8000', '16000'].map((value) => ({
-  label: `${value} Hz`,
-  value,
-}));
+const SAMPLE_RATE_OPTIONS: Option[] = ['8000', '16000', '24000', '48000'].map(
+  (value) => ({
+    label: `${value} Hz`,
+    value,
+  })
+);
+
+const EXPRESSIVITY_OPTIONS: Option[] = [
+  { label: '-2 · calm', value: '-2' },
+  { label: '-1', value: '-1' },
+  { label: '0 · voice default', value: '0' },
+  { label: '1', value: '1' },
+  { label: '2 · animated', value: '2' },
+];
+
+const isFluxModel = (model: string) => model.trim().startsWith('flux-');
 
 const CONTAINER_OPTIONS: Option[] = [
   { label: 'None', value: 'none' },
@@ -161,6 +173,9 @@ export default function TextToSpeech() {
     DeepgramTextToSpeechStreamWarningMessage[]
   >([]);
   const [streamAutoFlush, setStreamAutoFlush] = useState(true);
+  const [speechEvents, setSpeechEvents] = useState<string[]>([]);
+  const logSpeechEvent = (entry: string) =>
+    setSpeechEvents((prev) => [entry, ...prev].slice(0, 6));
 
   const [bytesResult, setBytesResult] = useState<{
     size: number;
@@ -172,20 +187,24 @@ export default function TextToSpeech() {
 
   const [httpModel, setHttpModel] = useState('aura-2-asteria-en');
   const [httpEncoding, setHttpEncoding] = useState('linear16');
-  const [httpSampleRate, setHttpSampleRate] = useState('16000');
+  const [httpSampleRate, setHttpSampleRate] = useState('24000');
   const [httpContainer, setHttpContainer] = useState('none');
   const [httpBitRate, setHttpBitRate] = useState('48000');
   const [httpCallbackUrl, setHttpCallbackUrl] = useState('');
   const [httpCallbackMethod, setHttpCallbackMethod] = useState('POST');
   const [httpSpeed, setHttpSpeed] = useState('1');
+  const [httpExpressivity, setHttpExpressivity] = useState('0');
   const [httpMipOptOut, setHttpMipOptOut] = useState(false);
 
-  const [streamModel, setStreamModel] = useState('aura-2-asteria-en');
+  const [streamModel, setStreamModel] = useState('flux-haley-en');
   const [streamEncoding, setStreamEncoding] = useState('linear16');
-  const [streamSampleRate, setStreamSampleRate] = useState('16000');
+  const [streamSampleRate, setStreamSampleRate] = useState('24000');
   const [streamSpeed, setStreamSpeed] = useState('1');
+  const [streamExpressivity, setStreamExpressivity] = useState('0');
   const [streamMipOptOut, setStreamMipOptOut] = useState(false);
   const modelOptions = useModelOptions();
+  const fluxHttp = isFluxModel(httpModel);
+  const fluxStream = isFluxModel(streamModel);
 
   const httpModelValue = httpModel.trim() || undefined;
   const httpEncodingValue = httpEncoding.trim()
@@ -233,6 +252,7 @@ export default function TextToSpeech() {
         callback: httpCallbackValue,
         callbackMethod: httpCallbackMethodValue,
         speed: parseNumber(httpSpeed),
+        expressivity: fluxHttp ? parseNumber(httpExpressivity) : undefined,
         mipOptOut: httpMipOptOut,
       },
     },
@@ -243,6 +263,8 @@ export default function TextToSpeech() {
     sendText,
     flushStream,
     clearStream,
+    interrupt,
+    configureStream,
     closeStreamGracefully,
     stopStreaming,
     state: streamState,
@@ -253,6 +275,28 @@ export default function TextToSpeech() {
       setWarnings([]);
       setLastFlushedSequence(null);
       setLastClearedSequence(null);
+      setSpeechEvents([]);
+    },
+    onSpeechStarted: ({ speech_id }) =>
+      logSpeechEvent(`▶ Turn ${speech_id.slice(0, 8)} started`),
+    onSpeechMetadata: (turn) =>
+      logSpeechEvent(
+        `✔ Turn ${turn.speech_id.slice(0, 8)} done · ${
+          turn.audio_duration_ms ?? '?'
+        } ms audio · ${turn.billable_character_count ?? '?'} chars billed`
+      ),
+    onSpeechInterrupted: (event) =>
+      logSpeechEvent(
+        `⏹ Interrupted after ${event.audio_played_ms} ms${
+          event.text_remaining ? ` · unspoken: “${event.text_remaining}”` : ''
+        }`
+      ),
+    onStreamMessage: (message) => {
+      if (message.type === 'ConfigureSuccess') {
+        logSpeechEvent('⚙ Speed change accepted');
+      } else if (message.type === 'ConfigureFailure') {
+        logSpeechEvent(`⚠ Configure rejected: ${String(message.description)}`);
+      }
     },
     onStreamMetadata: setLastMetadata,
     onStreamFlushed: (event) =>
@@ -266,6 +310,7 @@ export default function TextToSpeech() {
         encoding: streamEncodingValue,
         sampleRate: streamSampleRateValue,
         speed: parseNumber(streamSpeed),
+        expressivity: fluxStream ? parseNumber(streamExpressivity) : undefined,
         mipOptOut: streamMipOptOut,
         autoFlush: streamAutoFlush,
       },
@@ -375,8 +420,8 @@ export default function TextToSpeech() {
           <Text style={styles.heroIcon}>🔊</Text>
           <Text style={styles.heroTitle}>Text-to-Speech</Text>
           <Text style={styles.heroSubtitle}>
-            Synthesize via REST or stream tokens over a WebSocket. Audio plays
-            through the device speaker automatically.
+            Synthesize via REST or stream over a WebSocket. Aura voices use
+            /v1/speak; Flux voices use turn-based /v2/speak with barge-in.
           </Text>
         </View>
 
@@ -461,7 +506,11 @@ export default function TextToSpeech() {
         {isStreaming && (
           <Card
             title="Continuous streaming"
-            subtitle="Send more text to the open WebSocket"
+            subtitle={
+              fluxStream
+                ? 'Flux: each flush ends a turn; Interrupt cancels it'
+                : 'Send more text to the open WebSocket'
+            }
           >
             <Field
               value={streamText}
@@ -490,21 +539,44 @@ export default function TextToSpeech() {
                 disabled={!streamText.trim()}
               />
               <Button
-                title="Flush"
+                title={fluxStream ? 'End turn' : 'Flush'}
                 variant="secondary"
                 onPress={() => flushStream()}
               />
-              <Button
-                title="Clear"
-                variant="ghost"
-                onPress={() => clearStream()}
-              />
+              {fluxStream ? (
+                <>
+                  <Button
+                    title="Interrupt"
+                    variant="danger"
+                    onPress={() => interrupt()}
+                  />
+                  <Button
+                    title={`Speed → ${streamSpeed || '1'}`}
+                    variant="ghost"
+                    onPress={() =>
+                      configureStream({ speed: parseNumber(streamSpeed) ?? 1 })
+                    }
+                  />
+                </>
+              ) : (
+                <Button
+                  title="Clear"
+                  variant="ghost"
+                  onPress={() => clearStream()}
+                />
+              )}
               <Button
                 title="Close gracefully"
                 variant="ghost"
                 onPress={() => closeStreamGracefully()}
               />
             </View>
+            {fluxStream ? (
+              <Text style={styles.bytesHint}>
+                Change Speed in Streaming options, then tap the Speed button to
+                apply it mid-stream (takes effect at the next sentence).
+              </Text>
+            ) : null}
           </Card>
         )}
 
@@ -512,8 +584,19 @@ export default function TextToSpeech() {
         {(lastMetadata ||
           lastFlushedSequence != null ||
           lastClearedSequence != null ||
-          warnings.length > 0) && (
+          warnings.length > 0 ||
+          speechEvents.length > 0) && (
           <Card title="Stream events" collapsible defaultCollapsed>
+            {speechEvents.length > 0 ? (
+              <View style={[styles.kvBlock, { marginBottom: spacing.md }]}>
+                <Text style={styles.kvTitle}>Flux turns</Text>
+                {speechEvents.map((entry, i) => (
+                  <Text key={`${i}-${entry}`} style={styles.eventItem}>
+                    {entry}
+                  </Text>
+                ))}
+              </View>
+            ) : null}
             {lastMetadata ? (
               <View style={styles.kvBlock}>
                 <Text style={styles.kvTitle}>Last metadata</Text>
@@ -610,12 +693,20 @@ export default function TextToSpeech() {
             allowCustom
           />
           <Field
-            label="Speed (0.7–1.5)"
+            label="Speed (Aura 0.7–1.5 · Flux 0.5–1.5)"
             value={httpSpeed}
             onChangeText={setHttpSpeed}
             keyboardType="decimal-pad"
             placeholder="1"
           />
+          {fluxHttp ? (
+            <OptionSelect
+              label="Expressivity (Flux, beta)"
+              value={httpExpressivity}
+              onChange={setHttpExpressivity}
+              options={EXPRESSIVITY_OPTIONS}
+            />
+          ) : null}
           <View style={styles.switchRow}>
             <Text style={styles.switchLabel}>Opt out of MIP</Text>
             <Switch
@@ -660,12 +751,20 @@ export default function TextToSpeech() {
             customKeyboardType="numeric"
           />
           <Field
-            label="Speed (0.7–1.5)"
+            label="Speed (Aura 0.7–1.5 · Flux 0.5–1.5)"
             value={streamSpeed}
             onChangeText={setStreamSpeed}
             keyboardType="decimal-pad"
             placeholder="1"
           />
+          {fluxStream ? (
+            <OptionSelect
+              label="Expressivity (Flux, beta)"
+              value={streamExpressivity}
+              onChange={setStreamExpressivity}
+              options={EXPRESSIVITY_OPTIONS}
+            />
+          ) : null}
           <View style={styles.switchRow}>
             <Text style={styles.switchLabel}>Opt out of MIP</Text>
             <Switch
@@ -782,6 +881,7 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   kvLabel: { ...type.small, color: colors.textMuted },
-  kvValue: { ...type.small, color: colors.text, fontFamily: 'Menlo' },
+  kvValue: { ...type.small, color: colors.text, fontFamily: monoFont },
   warningItem: { color: colors.warning, marginTop: 4 },
+  eventItem: { ...type.small, color: colors.text, marginTop: 4 },
 });

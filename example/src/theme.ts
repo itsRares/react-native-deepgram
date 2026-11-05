@@ -2,6 +2,12 @@
  * Lightweight design tokens for the Deepgram example app.
  * Inspired by Deepgram's brand palette (deep purple + warm accent).
  */
+import { Platform } from 'react-native';
+
+export const monoFont = Platform.select({
+  ios: 'Menlo',
+  default: 'monospace',
+});
 
 export const colors = {
   // Surfaces
@@ -60,7 +66,7 @@ export const type = {
   bodyMedium: { fontSize: 15, fontWeight: '500' as const },
   small: { fontSize: 13, fontWeight: '400' as const },
   smallMedium: { fontSize: 13, fontWeight: '600' as const },
-  mono: { fontSize: 12, fontFamily: 'Menlo' as const },
+  mono: { fontSize: 12, fontFamily: monoFont },
 };
 
 export const shadow = {

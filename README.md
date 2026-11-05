@@ -1915,6 +1915,13 @@ The repository includes an Expo-managed playground under `example/` that wires u
   <img src="assets/example.webp" alt="react-native-deepgram example app showing the Voice Agent, Speech-to-Text, Text-to-Speech, Text Intelligence, and Management screens" width="100%" />
 </p>
 
+| Screen | Shows |
+| --- | --- |
+| Voice Agent | Nova or Flux listening, Flux/Aura voices (switchable live), barge-in, end-of-turn, injected user/agent messages, per-turn latency report, audio routing, telemetry |
+| Speech-to-Text | Nova-3, Nova-3 multilingual or Flux; Flux turn events and End turn; live keyterm `configure()`; pause/resume, metering, record-to-file, file transcription, SRT/WebVTT captions and speaker segments |
+| Text-to-Speech | HTTP synthesis, save to file, Aura and Flux streaming with Flux interrupt, mid-stream speed and expressivity |
+| Text Intelligence / Management | Summaries, topics, intents, sentiment; the Management API |
+
 ### 1. Install workspace dependencies
 
 ```bash

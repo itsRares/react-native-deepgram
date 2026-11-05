@@ -17,6 +17,7 @@ import {
   addAudioRouteChangeListener,
   type DeepgramAudioRoute,
   type DeepgramActiveAudioRoute,
+  type DeepgramVoiceAgentLatencyReportMessage,
 } from 'react-native-deepgram';
 import OptionSelect from './components/OptionSelect';
 import Button from './components/Button';
@@ -33,9 +34,24 @@ const LANGUAGE_OPTIONS = [
 
 const LISTEN_MODEL_OPTIONS = [
   { label: 'nova-3 (default)', value: 'nova-3' },
-  { label: 'nova-3 general', value: 'nova-3-general' },
-  { label: 'nova-2', value: 'nova-2' },
+  { label: 'nova-3 medical', value: 'nova-3-medical' },
+  { label: 'Flux · English turns', value: 'flux-general-en' },
+  { label: 'Flux · multilingual turns', value: 'flux-general-multi' },
 ];
+
+const SPEAK_MODEL_OPTIONS = [
+  { label: 'Flux · Kit (Deepgram default)', value: 'flux-kit-en' },
+  { label: 'Flux · Haley', value: 'flux-haley-en' },
+  { label: 'Flux · Alexis', value: 'flux-alexis-en' },
+  { label: 'Aura-2 · Thalia', value: 'aura-2-thalia-en' },
+  { label: 'Aura-2 · Asteria', value: 'aura-2-asteria-en' },
+];
+
+const providerVersion = (model: string) =>
+  model.startsWith('flux-') ? 'v2' : 'v1';
+
+const formatSeconds = (value?: number) =>
+  value != null ? `${Math.round(value * 1000)} ms` : '—';
 
 const THINK_MODEL_OPTIONS = [
   { label: 'OpenAI gpt-4o', value: 'gpt-4o' },
@@ -58,6 +74,9 @@ const formatBytes = (n: number) =>
 export default function VoiceAgent() {
   const [language, setLanguage] = useState('en');
   const [listenModel, setListenModel] = useState('nova-3');
+  const [speakModel, setSpeakModel] = useState('flux-kit-en');
+  const [latencyReport, setLatencyReport] =
+    useState<DeepgramVoiceAgentLatencyReportMessage | null>(null);
   const [thinkModel, setThinkModel] = useState('gpt-4o');
   const [greeting, setGreeting] = useState('Hello! How can I help you today?');
   const [prompt, setPrompt] = useState(
@@ -110,6 +129,7 @@ export default function VoiceAgent() {
         greeting,
         listenModel,
         thinkModel,
+        speakModel,
         prompt,
         temperature,
         tags: tagsInput,
@@ -121,6 +141,7 @@ export default function VoiceAgent() {
       language,
       listenModel,
       prompt,
+      speakModel,
       tagsInput,
       temperature,
       thinkModel,
@@ -133,10 +154,13 @@ export default function VoiceAgent() {
     mute,
     unmute,
     injectUserMessage,
+    injectAgentMessage,
+    forceEndTurn,
     sendFunctionCallResponse,
     updatePrompt,
     updateListen,
     updateThink,
+    updateSpeak,
     sendKeepAlive,
     state,
     conversation,
@@ -155,6 +179,7 @@ export default function VoiceAgent() {
     onBargeIn: () => {
       setBargeInCount((count) => count + 1);
     },
+    onLatencyReport: setLatencyReport,
     reconnect: { enabled: true },
     onReconnecting: (attempt) => {
       setReconnectAttempt(attempt);
@@ -211,6 +236,7 @@ export default function VoiceAgent() {
       setReconnectAttempt(null);
       setErrorCode(null);
       setBargeInCount(0);
+      setLatencyReport(null);
       await connect();
     } catch (err) {
       console.error('Start agent failed', err);
@@ -229,6 +255,13 @@ export default function VoiceAgent() {
     setCustomMessage('');
   };
 
+  const sendCustomAgentMessage = () => {
+    const message = customMessage.trim();
+    if (!message) return;
+    injectAgentMessage(message, 'queue');
+    setCustomMessage('');
+  };
+
   const sendToolResponse = () =>
     sendFunctionCallResponse({
       id: 'func_12345',
@@ -244,7 +277,23 @@ export default function VoiceAgent() {
 
   const applyListenModel = () => {
     const model = listenModel.trim();
-    if (model) updateListen({ provider: { type: 'deepgram', model } });
+    if (!model) return;
+    updateListen({
+      provider: {
+        type: 'deepgram',
+        version: providerVersion(model),
+        model,
+        ...(model.startsWith('flux-') ? {} : { language }),
+      },
+    });
+  };
+
+  const applySpeakModel = () => {
+    const model = speakModel.trim();
+    if (!model) return;
+    updateSpeak({
+      provider: { type: 'deepgram', version: providerVersion(model), model },
+    });
   };
 
   const applyThinkModel = () => {
@@ -548,6 +597,22 @@ export default function VoiceAgent() {
               <Text style={styles.statLabel}>Barge-ins</Text>
             </View>
           </View>
+          <Text style={styles.statsHeading}>Last turn latency</Text>
+          <View style={styles.statsGrid}>
+            {(
+              [
+                ['Speech-to-text', latencyReport?.stt_latency],
+                ['LLM first token', latencyReport?.ttt_token_latency],
+                ['Text-to-speech', latencyReport?.tts_latency],
+                ['Total', latencyReport?.total_latency],
+              ] as const
+            ).map(([label, value]) => (
+              <View key={label} style={styles.statCell}>
+                <Text style={styles.statValue}>{formatSeconds(value)}</Text>
+                <Text style={styles.statLabel}>{label}</Text>
+              </View>
+            ))}
+          </View>
         </Card>
 
         {/* Conversation */}
@@ -598,7 +663,7 @@ export default function VoiceAgent() {
         {/* Send a manual message */}
         <Card
           title="Inject a message"
-          subtitle="Send text into the live conversation"
+          subtitle="Type as the user, make the agent say something, or end your turn (push-to-talk)"
         >
           <Field
             value={customMessage}
@@ -613,6 +678,18 @@ export default function VoiceAgent() {
               variant="primary"
               onPress={sendCustomUserMessage}
               disabled={!connected || customMessage.trim().length === 0}
+            />
+            <Button
+              title="Agent says"
+              variant="secondary"
+              onPress={sendCustomAgentMessage}
+              disabled={!connected || customMessage.trim().length === 0}
+            />
+            <Button
+              title="End my turn"
+              variant="secondary"
+              onPress={() => forceEndTurn()}
+              disabled={!connected}
             />
             <Button
               title="Tool reply"
@@ -637,13 +714,29 @@ export default function VoiceAgent() {
           defaultCollapsed
         >
           <OptionSelect
-            label="Language"
+            label="Language (Nova listen models)"
             value={language}
             onChange={setLanguage}
             options={LANGUAGE_OPTIONS}
             allowCustom
             customPlaceholder="Language code"
           />
+          <OptionSelect
+            label="Voice"
+            value={speakModel}
+            onChange={setSpeakModel}
+            options={SPEAK_MODEL_OPTIONS}
+            allowCustom
+            customPlaceholder="flux-… or aura-2-… model id"
+          />
+          <Button
+            title="Apply voice now"
+            variant="secondary"
+            size="sm"
+            onPress={applySpeakModel}
+            disabled={!connected}
+          />
+          <View style={{ height: spacing.md }} />
           <OptionSelect
             label="Thought model"
             value={thinkModel}
@@ -923,6 +1016,11 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: spacing.sm,
     marginTop: spacing.md,
+  },
+  statsHeading: {
+    ...type.smallMedium,
+    color: colors.textMuted,
+    marginTop: spacing.lg,
   },
   statCell: {
     flexBasis: '30%',

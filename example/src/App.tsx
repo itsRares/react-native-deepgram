@@ -23,9 +23,13 @@ import { colors, radius, spacing, type } from './theme';
 // returns { access_token, expires_in } — getToken then takes precedence over
 // apiKey so the key never ships in the app. See README → "Ephemeral / scoped tokens".
 const tokenUrl = process.env.EXPO_PUBLIC_DEEPGRAM_TOKEN_URL;
+const apiKey = process.env.EXPO_PUBLIC_DEEPGRAM_API_KEY;
+const hasCredentials =
+  Boolean(tokenUrl) ||
+  (Boolean(apiKey) && apiKey !== 'your_deepgram_api_key_here');
 
 configure({
-  apiKey: process.env.EXPO_PUBLIC_DEEPGRAM_API_KEY || 'YOUR_DEEPGRAM_API_KEY',
+  apiKey: apiKey || 'YOUR_DEEPGRAM_API_KEY',
   ...(tokenUrl
     ? {
         getToken: async () => {
@@ -76,6 +80,17 @@ export default function App() {
               <Text style={styles.headerBadgeLabel}>{activeTab.label}</Text>
             </View>
           </View>
+
+          {!hasCredentials ? (
+            <View style={styles.keyBanner}>
+              <Text style={styles.keyBannerTitle}>No Deepgram API key</Text>
+              <Text style={styles.keyBannerText}>
+                Copy example/.env.example to example/.env, set
+                EXPO_PUBLIC_DEEPGRAM_API_KEY, then restart Metro with `yarn
+                start` (Expo reads .env when it bundles).
+              </Text>
+            </View>
+          ) : null}
 
           {/* Tab bar */}
           <View style={styles.tabBarWrap}>
@@ -204,5 +219,23 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
+  },
+  keyBanner: {
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.warning,
+    backgroundColor: '#2b2410',
+  },
+  keyBannerTitle: {
+    ...type.smallMedium,
+    color: colors.warning,
+    marginBottom: 2,
+  },
+  keyBannerText: {
+    ...type.small,
+    color: colors.textMuted,
   },
 });

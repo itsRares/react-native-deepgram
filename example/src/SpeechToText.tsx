@@ -24,6 +24,7 @@ import Button from './components/Button';
 import Card from './components/Card';
 import Field from './components/Field';
 import OptionSelect from './components/OptionSelect';
+import SegmentedControl from './components/SegmentedControl';
 import StatusBadge from './components/StatusBadge';
 import { colors, radius, spacing, type } from './theme';
 
@@ -67,6 +68,17 @@ const ENGINES: {
     options: { apiVersion: 'v2', model: 'flux-general-en' },
   },
 ];
+
+const ENGINE_SEGMENTS = ENGINES.map(({ key, label }) => ({
+  value: key,
+  label,
+}));
+
+const CAPTION_SEGMENTS = [
+  { value: 'srt', label: 'SRT' },
+  { value: 'vtt', label: 'WebVTT' },
+  { value: 'speakers', label: 'Speakers' },
+] as const;
 
 const TURN_LABEL: Record<DeepgramFluxTurnEvent, string> = {
   StartOfTurn: '🗣 Speaking',
@@ -442,55 +454,16 @@ export default function SpeechToText() {
             </View>
           ) : null}
 
-          <View style={styles.capabilityRow}>
-            <View style={styles.capabilityChip}>
-              <Text style={styles.capabilityChipText}>⏸ Pause / resume</Text>
-            </View>
-            <View
-              style={[
-                styles.capabilityChip,
-                isReconnecting && styles.capabilityChipActive,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.capabilityChipText,
-                  isReconnecting && styles.capabilityChipTextActive,
-                ]}
-              >
-                ↻ Auto-reconnect
-              </Text>
-            </View>
-            <View
-              style={[
-                styles.capabilityChip,
-                isCapturing && styles.capabilityChipActive,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.capabilityChipText,
-                  isCapturing && styles.capabilityChipTextActive,
-                ]}
-              >
-                🎚 Live level
-              </Text>
-            </View>
-            <View
-              style={[
-                styles.capabilityChip,
-                recordEnabled && styles.capabilityChipActive,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.capabilityChipText,
-                  recordEnabled && styles.capabilityChipTextActive,
-                ]}
-              >
-                💾 Record to file
-              </Text>
-            </View>
+          <View style={styles.pipeline}>
+            <Text style={styles.pipelineText} numberOfLines={1}>
+              {[
+                activeEngine.label,
+                'auto-reconnect',
+                recordEnabled ? 'recording to WAV' : null,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+            </Text>
           </View>
 
           <View style={styles.heroActions}>
@@ -503,6 +476,7 @@ export default function SpeechToText() {
                     size="lg"
                     iconLeft={isPaused ? '▶' : '⏸'}
                     onPress={() => (isPaused ? resume() : pause())}
+                    style={styles.flexButton}
                   />
                 ) : null}
                 <Button
@@ -510,6 +484,7 @@ export default function SpeechToText() {
                   variant="danger"
                   size="lg"
                   onPress={stopLive}
+                  style={styles.flexButton}
                 />
               </View>
             ) : (
@@ -528,18 +503,12 @@ export default function SpeechToText() {
           title="Model"
           subtitle={sessionActive ? 'Stop to switch models' : activeEngine.hint}
         >
-          <View style={styles.engineRow}>
-            {ENGINES.map(({ key, label }) => (
-              <Button
-                key={key}
-                title={label}
-                size="sm"
-                variant={engine === key ? 'primary' : 'secondary'}
-                disabled={sessionActive}
-                onPress={() => setEngine(key)}
-              />
-            ))}
-          </View>
+          <SegmentedControl
+            segments={ENGINE_SEGMENTS}
+            value={engine}
+            onChange={setEngine}
+            disabled={sessionActive}
+          />
           <Field
             label="Keyterms"
             value={keytermInput}
@@ -556,6 +525,7 @@ export default function SpeechToText() {
                 size="sm"
                 variant="secondary"
                 onPress={applyKeyterms}
+                style={styles.flexButton}
               />
               {engine === 'flux' ? (
                 <Button
@@ -563,6 +533,7 @@ export default function SpeechToText() {
                   size="sm"
                   variant="secondary"
                   onPress={() => forceEndTurn()}
+                  style={styles.flexButton}
                 />
               ) : null}
             </View>
@@ -799,21 +770,11 @@ export default function SpeechToText() {
           {captionSrt ? (
             <>
               <View style={styles.captionTabs}>
-                {(
-                  [
-                    { key: 'srt', label: 'SRT' },
-                    { key: 'vtt', label: 'WebVTT' },
-                    { key: 'speakers', label: 'Speakers' },
-                  ] as const
-                ).map(({ key, label }) => (
-                  <Button
-                    key={key}
-                    title={label}
-                    size="sm"
-                    variant={captionView === key ? 'primary' : 'secondary'}
-                    onPress={() => setCaptionView(key)}
-                  />
-                ))}
+                <SegmentedControl
+                  segments={CAPTION_SEGMENTS}
+                  value={captionView}
+                  onChange={setCaptionView}
+                />
               </View>
 
               {captionView === 'speakers' ? (
@@ -881,7 +842,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.xl,
     borderWidth: 1,
     borderColor: colors.border,
-    padding: spacing.xl,
+    padding: spacing.lg,
     alignItems: 'center',
     marginBottom: spacing.lg,
   },
@@ -890,7 +851,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm,
   },
   turnChip: {
     paddingHorizontal: spacing.sm,
@@ -905,33 +866,27 @@ const styles = StyleSheet.create({
     color: colors.accent,
     fontSize: 12,
   },
-  engineRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-    marginBottom: spacing.md,
-  },
   configureStatus: {
     marginTop: spacing.sm,
   },
   micWrap: {
-    width: 120,
-    height: 120,
+    width: 96,
+    height: 96,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: spacing.lg,
+    marginBottom: spacing.md,
   },
   pulse: {
     position: 'absolute',
-    width: 120,
-    height: 120,
-    borderRadius: 60,
+    width: 96,
+    height: 96,
+    borderRadius: 48,
     backgroundColor: colors.primary,
   },
   micCircle: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
+    width: 72,
+    height: 72,
+    borderRadius: 36,
     backgroundColor: colors.surfaceMuted,
     alignItems: 'center',
     justifyContent: 'center',
@@ -946,7 +901,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceMuted,
     borderColor: colors.warning,
   },
-  micIcon: { fontSize: 36 },
+  micIcon: { fontSize: 30 },
   heroTitle: {
     ...type.h2,
     color: colors.text,
@@ -955,7 +910,7 @@ const styles = StyleSheet.create({
     ...type.small,
     color: colors.textMuted,
     marginTop: 4,
-    marginBottom: spacing.lg,
+    marginBottom: spacing.md,
     textAlign: 'center',
   },
   meterTrack: {
@@ -977,32 +932,23 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: spacing.md,
   },
-  capabilityRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    gap: spacing.sm,
-    marginBottom: spacing.lg,
+  flexButton: {
+    flexGrow: 1,
+    flexBasis: '45%',
   },
-  capabilityChip: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 5,
+  pipeline: {
+    maxWidth: '100%',
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
     borderRadius: radius.pill,
     backgroundColor: colors.surfaceMuted,
     borderWidth: 1,
     borderColor: colors.border,
+    marginBottom: spacing.lg,
   },
-  capabilityChipActive: {
-    backgroundColor: colors.accentMuted,
-    borderColor: colors.accent,
-  },
-  capabilityChipText: {
-    ...type.small,
+  pipelineText: {
+    ...type.mono,
     color: colors.textMuted,
-    fontSize: 12,
-  },
-  capabilityChipTextActive: {
-    color: colors.accent,
   },
   reconnectBanner: {
     backgroundColor: colors.accentMuted,
@@ -1118,10 +1064,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   captionTabs: {
-    flexDirection: 'row',
-    gap: spacing.sm,
     marginTop: spacing.md,
-    marginBottom: spacing.md,
   },
   captionScroll: {
     maxHeight: 240,

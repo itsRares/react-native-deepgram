@@ -23,8 +23,16 @@ import OptionSelect from './components/OptionSelect';
 import Button from './components/Button';
 import Card from './components/Card';
 import Field from './components/Field';
+import SegmentedControl from './components/SegmentedControl';
 import StatusBadge from './components/StatusBadge';
 import { colors, radius, spacing, type } from './theme';
+
+const ROUTE_SEGMENTS = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'speaker', label: 'Speaker' },
+  { value: 'earpiece', label: 'Earpiece' },
+  { value: 'bluetooth', label: 'Bluetooth' },
+] as const satisfies readonly { value: DeepgramAudioRoute; label: string }[];
 
 const LANGUAGE_OPTIONS = [
   { label: 'English (US)', value: 'en' },
@@ -382,7 +390,7 @@ export default function VoiceAgent() {
                 ? 'Reconnecting…'
                 : connecting
                   ? 'Connecting…'
-                  : 'Voice Agent'}
+                  : 'Start a conversation'}
           </Text>
           <Text style={styles.heroSubtitle}>
             {connected
@@ -392,55 +400,10 @@ export default function VoiceAgent() {
                 : 'Configure below and tap Start'}
           </Text>
 
-          <View style={styles.capabilityRow}>
-            <View
-              style={[
-                styles.capabilityChip,
-                isMuted && styles.capabilityChipActive,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.capabilityChipText,
-                  isMuted && styles.capabilityChipTextActive,
-                ]}
-              >
-                🔇 Mute
-              </Text>
-            </View>
-            <View
-              style={[
-                styles.capabilityChip,
-                isReconnecting && styles.capabilityChipActive,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.capabilityChipText,
-                  isReconnecting && styles.capabilityChipTextActive,
-                ]}
-              >
-                ↻ Auto-reconnect
-              </Text>
-            </View>
-            <View
-              style={[
-                styles.capabilityChip,
-                bargeInEnabled && styles.capabilityChipActive,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.capabilityChipText,
-                  bargeInEnabled && styles.capabilityChipTextActive,
-                ]}
-              >
-                ✂️ Barge-in
-              </Text>
-            </View>
-            <View style={styles.capabilityChip}>
-              <Text style={styles.capabilityChipText}>✎ Live updates</Text>
-            </View>
+          <View style={styles.pipeline}>
+            <Text style={styles.pipelineText} numberOfLines={1}>
+              {listenModel} → {thinkModel} → {speakModel}
+            </Text>
           </View>
 
           <View style={styles.heroActions}>
@@ -452,12 +415,14 @@ export default function VoiceAgent() {
                   size="lg"
                   iconLeft={isMuted ? '🎤' : '🔇'}
                   onPress={() => (isMuted ? unmute() : mute())}
+                  style={styles.flexButton}
                 />
                 <Button
                   title="Disconnect"
                   variant="danger"
                   size="lg"
                   onPress={stopAgent}
+                  style={styles.flexButton}
                 />
               </View>
             ) : isReconnecting ? (
@@ -513,24 +478,11 @@ export default function VoiceAgent() {
           title="Audio output"
           subtitle={`Current route · ${activeRoute ?? 'unknown'}`}
         >
-          <View style={styles.routeRow}>
-            {(
-              [
-                { route: 'auto', label: 'Auto', icon: '⚙️' },
-                { route: 'speaker', label: 'Speaker', icon: '🔊' },
-                { route: 'earpiece', label: 'Earpiece', icon: '📞' },
-                { route: 'bluetooth', label: 'Bluetooth', icon: '🎧' },
-              ] as const
-            ).map(({ route, label, icon }) => (
-              <Button
-                key={route}
-                title={`${icon} ${label}`}
-                size="sm"
-                variant={requestedRoute === route ? 'primary' : 'secondary'}
-                onPress={() => requestRoute(route)}
-              />
-            ))}
-          </View>
+          <SegmentedControl
+            segments={ROUTE_SEGMENTS}
+            value={requestedRoute}
+            onChange={requestRoute}
+          />
           <Text style={styles.routeHint}>
             Routing is best-effort: a wired headset always wins and Bluetooth
             only engages when a headset is connected.
@@ -678,30 +630,35 @@ export default function VoiceAgent() {
               variant="primary"
               onPress={sendCustomUserMessage}
               disabled={!connected || customMessage.trim().length === 0}
+              style={styles.flexButton}
             />
             <Button
               title="Agent says"
               variant="secondary"
               onPress={sendCustomAgentMessage}
               disabled={!connected || customMessage.trim().length === 0}
+              style={styles.flexButton}
             />
             <Button
               title="End my turn"
               variant="secondary"
               onPress={() => forceEndTurn()}
               disabled={!connected}
+              style={styles.flexButton}
             />
             <Button
               title="Tool reply"
               variant="secondary"
               onPress={sendToolResponse}
               disabled={!connected}
+              style={styles.flexButton}
             />
             <Button
               title="Keep alive"
-              variant="ghost"
+              variant="secondary"
               onPress={sendKeepAlive}
               disabled={!connected}
+              style={styles.flexButton}
             />
           </View>
         </Card>
@@ -856,7 +813,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.xl,
     borderWidth: 1,
     borderColor: colors.border,
-    padding: spacing.xl,
+    padding: spacing.lg,
     alignItems: 'center',
     marginBottom: spacing.lg,
   },
@@ -865,30 +822,30 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     width: '100%',
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm,
   },
   latency: {
     ...type.small,
     color: colors.textMuted,
   },
   micWrap: {
-    width: 120,
-    height: 120,
+    width: 96,
+    height: 96,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: spacing.lg,
+    marginBottom: spacing.md,
   },
   pulse: {
     position: 'absolute',
-    width: 120,
-    height: 120,
-    borderRadius: 60,
+    width: 96,
+    height: 96,
+    borderRadius: 48,
     backgroundColor: colors.primary,
   },
   micCircle: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
+    width: 72,
+    height: 72,
+    borderRadius: 36,
     backgroundColor: colors.surfaceMuted,
     alignItems: 'center',
     justifyContent: 'center',
@@ -903,7 +860,7 @@ const styles = StyleSheet.create({
     borderColor: colors.warning,
   },
   micIcon: {
-    fontSize: 36,
+    fontSize: 30,
   },
   heroTitle: {
     ...type.h2,
@@ -915,7 +872,7 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     textAlign: 'center',
     marginTop: 4,
-    marginBottom: spacing.lg,
+    marginBottom: spacing.md,
   },
   heroActions: {
     width: '100%',
@@ -926,32 +883,23 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: spacing.md,
   },
-  capabilityRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    gap: spacing.sm,
-    marginBottom: spacing.lg,
+  flexButton: {
+    flexGrow: 1,
+    flexBasis: '45%',
   },
-  capabilityChip: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 5,
+  pipeline: {
+    maxWidth: '100%',
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
     borderRadius: radius.pill,
     backgroundColor: colors.surfaceMuted,
     borderWidth: 1,
     borderColor: colors.border,
+    marginBottom: spacing.lg,
   },
-  capabilityChipActive: {
-    backgroundColor: colors.accentMuted,
-    borderColor: colors.accent,
-  },
-  capabilityChipText: {
-    ...type.small,
+  pipelineText: {
+    ...type.mono,
     color: colors.textMuted,
-    fontSize: 12,
-  },
-  capabilityChipTextActive: {
-    color: colors.accent,
   },
   reconnectBanner: {
     backgroundColor: colors.accentMuted,
@@ -1001,15 +949,9 @@ const styles = StyleSheet.create({
     color: colors.accent,
     ...type.smallMedium,
   },
-  routeRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-  },
   routeHint: {
     color: colors.textMuted,
     ...type.small,
-    marginTop: spacing.sm,
   },
   statsGrid: {
     flexDirection: 'row',
@@ -1087,7 +1029,7 @@ const styles = StyleSheet.create({
     ...type.body,
   },
   emptyState: {
-    paddingVertical: spacing.xl,
+    paddingVertical: spacing.lg,
     alignItems: 'center',
   },
   emptyIcon: {

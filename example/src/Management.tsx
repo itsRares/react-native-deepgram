@@ -68,14 +68,9 @@ export default function Management() {
   return (
     <View style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        <View style={styles.hero}>
-          <Text style={styles.heroIcon}>⚙️</Text>
-          <Text style={styles.heroTitle}>Management API</Text>
-          <Text style={styles.heroSubtitle}>
-            Inspect projects, keys, models, and usage. Requires a Deepgram key
-            with management scopes.
-          </Text>
-        </View>
+        <Text style={styles.note}>
+          Needs a Deepgram key with management scopes (keys, usage, members).
+        </Text>
 
         {/* Models */}
         <Card
@@ -199,23 +194,10 @@ export default function Management() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   scrollContent: { padding: spacing.lg, paddingBottom: spacing.xxl },
-  hero: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.xl,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: spacing.xl,
-    alignItems: 'center',
-    marginBottom: spacing.lg,
-  },
-  heroIcon: { fontSize: 40, marginBottom: spacing.sm },
-  heroTitle: { ...type.h2, color: colors.text },
-  heroSubtitle: {
+  note: {
     ...type.small,
     color: colors.textMuted,
-    marginTop: 4,
-    textAlign: 'center',
-    paddingHorizontal: spacing.md,
+    marginBottom: spacing.md,
   },
   errorBanner: {
     backgroundColor: '#3a1418',

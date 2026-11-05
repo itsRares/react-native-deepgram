@@ -412,59 +412,55 @@ export default function TextToSpeech() {
   return (
     <View style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        {/* Hero */}
-        <View style={styles.hero}>
-          <View style={styles.heroTop}>
-            <StatusBadge tone={tone} label={toneLabel} />
-          </View>
-          <Text style={styles.heroIcon}>🔊</Text>
-          <Text style={styles.heroTitle}>Text-to-Speech</Text>
-          <Text style={styles.heroSubtitle}>
-            Synthesize via REST or stream over a WebSocket. Aura voices use
-            /v1/speak; Flux voices use turn-based /v2/speak with barge-in.
-          </Text>
-        </View>
-
         {/* Main input */}
-        <Card title="Text" subtitle="What should the agent say?">
+        <Card
+          title="Text"
+          subtitle={`HTTP · ${httpModel}   Stream · ${streamModel}`}
+          right={<StatusBadge tone={tone} label={toneLabel} />}
+        >
           <Field
             value={text}
             onChangeText={setText}
             placeholder="Type something to speak…"
             multiline
             numberOfLines={4}
+            hint="Aura voices use /v1/speak; Flux voices use turn-based /v2/speak with barge-in."
           />
           <View style={styles.actionRow}>
             <Button
-              title="Synthesize (HTTP)"
+              title="Synthesize"
               variant="primary"
               onPress={handleSynthesize}
               loading={isSynthesizing}
               disabled={isSynthesizing || !text.trim()}
               iconLeft="📨"
+              style={styles.flexButton}
             />
             {isStreaming ? (
               <Button
                 title="Stop stream"
                 variant="danger"
                 onPress={stopStreaming}
+                style={styles.flexButton}
               />
             ) : (
               <Button
-                title="Start stream"
+                title="Stream"
                 variant="secondary"
                 onPress={handleStartStream}
                 disabled={!text.trim()}
                 iconLeft="🎧"
+                style={styles.flexButton}
               />
             )}
             <Button
               title="Save to file"
-              variant="ghost"
+              variant="secondary"
               onPress={handleSaveToFile}
               loading={isFetchingBytes}
               disabled={isFetchingBytes || !text.trim()}
               iconLeft="💾"
+              style={styles.flexButton}
             />
           </View>
           {bytesResult ? (
@@ -537,11 +533,13 @@ export default function TextToSpeech() {
                 variant="primary"
                 onPress={handleSendText}
                 disabled={!streamText.trim()}
+                style={styles.flexButton}
               />
               <Button
                 title={fluxStream ? 'End turn' : 'Flush'}
                 variant="secondary"
                 onPress={() => flushStream()}
+                style={styles.flexButton}
               />
               {fluxStream ? (
                 <>
@@ -549,26 +547,30 @@ export default function TextToSpeech() {
                     title="Interrupt"
                     variant="danger"
                     onPress={() => interrupt()}
+                    style={styles.flexButton}
                   />
                   <Button
                     title={`Speed → ${streamSpeed || '1'}`}
-                    variant="ghost"
+                    variant="secondary"
                     onPress={() =>
                       configureStream({ speed: parseNumber(streamSpeed) ?? 1 })
                     }
+                    style={styles.flexButton}
                   />
                 </>
               ) : (
                 <Button
                   title="Clear"
-                  variant="ghost"
+                  variant="secondary"
                   onPress={() => clearStream()}
+                  style={styles.flexButton}
                 />
               )}
               <Button
                 title="Close gracefully"
-                variant="ghost"
+                variant="secondary"
                 onPress={() => closeStreamGracefully()}
+                style={styles.flexButton}
               />
             </View>
             {fluxStream ? (
@@ -798,34 +800,14 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
     paddingBottom: spacing.xxl,
   },
-  hero: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.xl,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: spacing.xl,
-    alignItems: 'center',
-    marginBottom: spacing.lg,
-  },
-  heroTop: {
-    width: '100%',
-    flexDirection: 'row',
-    justifyContent: 'flex-start',
-    marginBottom: spacing.md,
-  },
-  heroIcon: { fontSize: 40, marginBottom: spacing.sm },
-  heroTitle: { ...type.h2, color: colors.text },
-  heroSubtitle: {
-    ...type.small,
-    color: colors.textMuted,
-    marginTop: 4,
-    textAlign: 'center',
-    paddingHorizontal: spacing.md,
-  },
   actionRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.sm,
+  },
+  flexButton: {
+    flexGrow: 1,
+    flexBasis: '45%',
   },
   switchRow: {
     flexDirection: 'row',

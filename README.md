@@ -117,7 +117,7 @@ export function LiveCaption() {
       <Text>{transcript} {interimTranscript}</Text>
       <Button title="Start" onPress={() => startListening()} />
       <Button title="Stop" onPress={stopListening} />
-      {state.error && <Text style={{ color: 'red' }}>{String(state.error)}</Text>}
+      {state?.error && <Text style={{ color: 'red' }}>{String(state.error)}</Text>}
     </View>
   );
 }
@@ -360,7 +360,7 @@ For tuning details, see [Audio session, AEC & background](#audio-session-aec--ba
 Every error the hooks surface — mic-permission denials, native start/stop failures, fetch and WebSocket errors — is normalized to a `DeepgramError` with a typed `code`, so you can branch on a stable enum instead of string-matching messages. The original failure is preserved on `cause`.
 
 ```ts
-import { DeepgramError, type DeepgramErrorCode } from 'react-native-deepgram';
+import { DeepgramError, useDeepgramSpeechToText } from 'react-native-deepgram';
 
 useDeepgramSpeechToText({
   onError: (err) => {
@@ -804,7 +804,6 @@ const {
   live: {
     apiVersion: 'v2',
     model: 'flux-general-en',
-    punctuate: true,
     eotThreshold: 0.55,
   },
 });
@@ -822,6 +821,8 @@ const {
 ### File transcription quick start
 
 ```tsx
+import * as DocumentPicker from 'expo-document-picker';
+
 const { transcribeFile } = useDeepgramSpeechToText({
   onTranscribeSuccess: (text) => console.log(text),
   prerecorded: {
@@ -831,10 +832,10 @@ const { transcribeFile } = useDeepgramSpeechToText({
 });
 
 const pickFile = async () => {
-  const f = await DocumentPicker.getDocumentAsync({ type: 'audio/*' });
-  if (f.type === 'success') {
-    await transcribeFile(f, { topics: true, intents: true });
-  }
+  const res = await DocumentPicker.getDocumentAsync({ type: 'audio/*' });
+  if (res.canceled) return;
+  const { uri, name, mimeType } = res.assets[0]!;
+  await transcribeFile({ uri, name, type: mimeType }, { topics: true, intents: true });
 };
 ```
 
@@ -1361,7 +1362,7 @@ const {
 | `options` | `UseDeepgramTextIntelligenceOptions` | Defaults merged into every `analyze` call. |
 | `onBeforeAnalyze` | `() => void` | Before the request is dispatched. |
 | `onAnalyzeSuccess` | `(response: DeepgramTextIntelligenceResponse) => void` | Result arrives. |
-| `onAnalyzeError` | `(error: unknown) => void` | Request fails. |
+| `onAnalyzeError` | `(error: Error) => void` | Request fails. |
 | `trackState` | `boolean` | Enable `state` return (default `false`). |
 
 #### Options (`UseDeepgramTextIntelligenceOptions`)
@@ -1617,10 +1618,13 @@ const { transcribeFile } = useDeepgramSpeechToText({
 });
 
 const pick = async () => {
-  const f = await DocumentPicker.getDocumentAsync({ type: 'audio/*' });
-  if (f.type === 'success') {
-    await transcribeFile(f, { summarize: 'v2', topics: true, intents: true });
-  }
+  const res = await DocumentPicker.getDocumentAsync({ type: 'audio/*' });
+  if (res.canceled) return;
+  const { uri, name, mimeType } = res.assets[0]!;
+  await transcribeFile(
+    { uri, name, type: mimeType },
+    { summarize: 'v2', topics: true, intents: true }
+  );
 };
 ```
 
@@ -1693,7 +1697,8 @@ stopListening(); // onRecordingComplete fires with the finalized WAV
 ```
 
 > Want a specific destination? Pass a `path` (with or without a `file://`
-> prefix) — e.g. from `expo-file-system`'s `documentDirectory`. Only
+> prefix) — e.g. `new File(Paths.document, 'take.wav').uri` from
+> `expo-file-system`. Only
 > uncompressed `wav` is supported today.
 
 ### Voice Agent with a client-side function
@@ -1722,15 +1727,17 @@ const agent = useDeepgramVoiceAgent({
       // ...listen + speak providers
     },
   },
-  onFunctionCallRequest: async (call) => {
-    const args = JSON.parse(call.arguments);
-    const data = await fetchWeather(args.city);
-    agent.sendFunctionCallResponse({
-      id: call.function_call_id,
-      name: call.name,
-      content: JSON.stringify(data),
-      client_side: true,
-    });
+  onFunctionCallRequest: async ({ functions }) => {
+    for (const fn of functions) {
+      if (!fn.client_side || fn.name !== 'get_weather' || !fn.id) continue;
+      const args = JSON.parse(fn.arguments ?? '{}');
+      const data = await fetchWeather(args.city);
+      agent.sendFunctionCallResponse({
+        id: fn.id,
+        name: fn.name,
+        content: JSON.stringify(data),
+      });
+    }
   },
 });
 ```
@@ -1788,8 +1795,8 @@ to disk). Unlike `synthesize`, it **does not** play the audio, and identical
 prompts are served from an in-memory LRU cache:
 
 ```tsx
-import { arrayBufferToBase64 } from 'react-native-deepgram';
-import * as FileSystem from 'expo-file-system';
+import { useDeepgramTextToSpeech } from 'react-native-deepgram';
+import { File, Paths } from 'expo-file-system';
 
 const { synthesizeToBytes } = useDeepgramTextToSpeech({
   options: {
@@ -1803,22 +1810,26 @@ const { synthesizeToBytes } = useDeepgramTextToSpeech({
 });
 
 const { data, mimeType } = await synthesizeToBytes('Hello from Deepgram.');
-const uri = `${FileSystem.documentDirectory}greeting.mp3`;
-await FileSystem.writeAsStringAsync(uri, arrayBufferToBase64(data), {
-  encoding: FileSystem.EncodingType.Base64,
-});
-// `uri` now points to a saved MP3 file; `mimeType` is "audio/mpeg".
+const file = new File(Paths.document, 'greeting.mp3');
+file.write(new Uint8Array(data));
+// `file.uri` now points to a saved MP3 file; `mimeType` is "audio/mpeg".
+// (Need base64 instead, e.g. for an upload? Use `arrayBufferToBase64(data)`.)
 ```
 
 ### Run text intelligence on a transcript
 
+`analyze` resolves when the request finishes; the response arrives through
+`onAnalyzeSuccess`:
+
 ```tsx
 const { analyze } = useDeepgramTextIntelligence({
   options: { summarize: true, topics: true, sentiment: true },
+  onAnalyzeSuccess: ({ results }) => {
+    console.log(results.summary?.text, results.topics, results.sentiments?.average);
+  },
 });
 
-const result = await analyze({ text: longTranscript });
-console.log(result.summary, result.topics, result.sentiment);
+await analyze({ text: longTranscript });
 ```
 
 ### Use the Management API to rotate keys
@@ -1863,11 +1874,11 @@ useDeepgramVoiceAgent({
 
 ### "I hear myself echo back through the agent's mic"
 
-You're not using hardware echo cancellation. If you're going through `useDeepgramVoiceAgent`, this should already be on — make sure you're testing on a **physical device**: VPIO (iOS hardware AEC) is not available in the iOS Simulator. If you're calling `Deepgram.startRecording` yourself, pass `{ enableVoiceProcessing: true }`.
+You're not using hardware echo cancellation. If you're going through `useDeepgramVoiceAgent`, this should already be on — make sure you're testing on a **physical device**: the iOS Simulator has no VPIO and the Android emulator exposes no `AcousticEchoCanceler`, so the mic picks up the agent through your computer's speakers and barge-in cuts it off. Use headphones when testing on a simulator/emulator. If you're calling `Deepgram.startRecording` yourself, pass `{ enableVoiceProcessing: true }`.
 
 ### "Recording stops when the app goes to the background"
 
-Make sure `backgroundAudio` is left at its default (`true`) on the Expo plugin and that you've re-prebuilt + re-installed after enabling it. On Android, check that the foreground-service notification is showing while audio is active — if it isn't, the manifest entries from the plugin haven't been picked up.
+Make sure `backgroundAudio` is left at its default (`true`) on the Expo plugin and that you've re-prebuilt + re-installed after enabling it. On Android, check that the foreground-service notification is showing while audio is active — if it isn't, the manifest entries haven't been picked up: the service needs the `FOREGROUND_SERVICE*` permissions **and** `android:foregroundServiceType` including `mediaPlayback` on `DeepgramAudioService` (see [Background audio](#background-audio)); without them the service is skipped.
 
 ### "Permission denied" on `startListening` / `connect`
 
@@ -1880,7 +1891,7 @@ If you previously denied the prompt, the OS will silently refuse subsequent requ
 
 ### Flux v2 returns no transcripts
 
-Flux only accepts a small set of query parameters. The hook builds the right query map for you when you set `apiVersion: 'v2'`, but if you bypass it, ensure you're sending only Flux-supported keys (`model`, `encoding`, `sample_rate`, `eager_eot_threshold`, `eot_threshold`, `eot_timeout_ms`, `keyterm`, `mip_opt_out`, `tag`).
+Flux only accepts a small set of query parameters. The hook builds the right query map for you when you set `apiVersion: 'v2'`, but if you bypass it, ensure you're sending only Flux-supported keys (`model`, `encoding`, `sample_rate`, `eager_eot_threshold`, `eot_threshold`, `eot_timeout_ms`, `keyterm`, `language_hint`, `numerals`, `profanity_filter`, `redact`, `mip_opt_out`, `measurements`, `tag`).
 
 ### "Sound disappears when I unplug headphones"
 

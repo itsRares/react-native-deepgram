@@ -243,43 +243,81 @@ export interface DeepgramGrantTokenResponse {
 }
 
 /**
+ * Extra query-string parameters for a Management request (pagination, date
+ * windows, filters); `undefined` values are skipped.
+ */
+export type DeepgramManagementQuery = Record<
+  string,
+  string | number | boolean | undefined
+>;
+
+/**
  * Return value of the `useDeepgramManagement` hook.
  * Provides access to various management APIs grouped by resource.
  */
 export interface UseDeepgramManagementReturn {
   models: {
-    list(includeOutdated?: boolean): Promise<DeepgramListModelsResponse>;
-    get(modelId: string): Promise<DeepgramSttModel | DeepgramTtsModel>;
+    list(
+      includeOutdated?: boolean,
+      query?: DeepgramManagementQuery
+    ): Promise<DeepgramListModelsResponse>;
+    get(
+      modelId: string,
+      query?: DeepgramManagementQuery
+    ): Promise<DeepgramSttModel | DeepgramTtsModel>;
   };
   projects: {
-    list(): Promise<DeepgramProject[]>;
-    get(id: string): Promise<DeepgramProject>;
-    delete(id: string): Promise<void>;
+    list(query?: DeepgramManagementQuery): Promise<DeepgramProject[]>;
+    get(id: string, query?: DeepgramManagementQuery): Promise<DeepgramProject>;
+    delete(id: string, query?: DeepgramManagementQuery): Promise<void>;
     patch(
       id: string,
-      body: Record<string, unknown>
+      body: Record<string, unknown>,
+      query?: DeepgramManagementQuery
     ): Promise<DeepgramMessageResponse>;
-    listModels(id: string): Promise<DeepgramListModelsResponse>;
+    listModels(
+      id: string,
+      query?: DeepgramManagementQuery
+    ): Promise<DeepgramListModelsResponse>;
     getModel(
       projectId: string,
-      modelId: string
+      modelId: string,
+      query?: DeepgramManagementQuery
     ): Promise<DeepgramSttModel | DeepgramTtsModel>;
   };
   keys: {
-    list(projectId: string): Promise<DeepgramKey[]>;
+    list(
+      projectId: string,
+      query?: DeepgramManagementQuery
+    ): Promise<DeepgramKey[]>;
     create(
       projectId: string,
       body: Record<string, unknown>
     ): Promise<DeepgramCreatedKey>;
-    get(projectId: string, keyId: string): Promise<DeepgramKey>;
-    delete(projectId: string, keyId: string): Promise<void>;
+    get(
+      projectId: string,
+      keyId: string,
+      query?: DeepgramManagementQuery
+    ): Promise<DeepgramKey>;
+    delete(
+      projectId: string,
+      keyId: string,
+      query?: DeepgramManagementQuery
+    ): Promise<void>;
   };
   members: {
-    list(projectId: string): Promise<DeepgramMember[]>;
+    list(
+      projectId: string,
+      query?: DeepgramManagementQuery
+    ): Promise<DeepgramMember[]>;
     delete(projectId: string, memberId: string): Promise<void>;
   };
   scopes: {
-    list(projectId: string, memberId: string): Promise<DeepgramScope[]>;
+    list(
+      projectId: string,
+      memberId: string,
+      query?: DeepgramManagementQuery
+    ): Promise<DeepgramScope[]>;
     update(
       projectId: string,
       memberId: string,
@@ -287,7 +325,10 @@ export interface UseDeepgramManagementReturn {
     ): Promise<DeepgramMessageResponse>;
   };
   invitations: {
-    list(projectId: string): Promise<DeepgramInvitation[]>;
+    list(
+      projectId: string,
+      query?: DeepgramManagementQuery
+    ): Promise<DeepgramInvitation[]>;
     create(
       projectId: string,
       body: Record<string, unknown>
@@ -296,17 +337,40 @@ export interface UseDeepgramManagementReturn {
     leave(projectId: string): Promise<DeepgramMessageResponse>;
   };
   usage: {
-    listRequests(projectId: string): Promise<DeepgramRequest[]>;
-    getRequest(projectId: string, requestId: string): Promise<DeepgramRequest>;
-    listFields(projectId: string): Promise<DeepgramUsageFields>;
-    getBreakdown(projectId: string): Promise<DeepgramUsageBreakdown>;
+    listRequests(
+      projectId: string,
+      query?: DeepgramManagementQuery
+    ): Promise<DeepgramRequest[]>;
+    getRequest(
+      projectId: string,
+      requestId: string,
+      query?: DeepgramManagementQuery
+    ): Promise<DeepgramRequest>;
+    listFields(
+      projectId: string,
+      query?: DeepgramManagementQuery
+    ): Promise<DeepgramUsageFields>;
+    getBreakdown(
+      projectId: string,
+      query?: DeepgramManagementQuery
+    ): Promise<DeepgramUsageBreakdown>;
   };
   purchases: {
-    list(projectId: string): Promise<DeepgramPurchase[]>;
+    list(
+      projectId: string,
+      query?: DeepgramManagementQuery
+    ): Promise<DeepgramPurchase[]>;
   };
   balances: {
-    list(projectId: string): Promise<DeepgramBalance[]>;
-    get(projectId: string, balanceId: string): Promise<DeepgramBalance>;
+    list(
+      projectId: string,
+      query?: DeepgramManagementQuery
+    ): Promise<DeepgramBalance[]>;
+    get(
+      projectId: string,
+      balanceId: string,
+      query?: DeepgramManagementQuery
+    ): Promise<DeepgramBalance>;
   };
   auth: {
     grant(body?: { ttl_seconds?: number }): Promise<DeepgramGrantTokenResponse>;

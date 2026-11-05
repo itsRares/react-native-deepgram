@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.0.0] - 2026-11-05
+## [Unreleased] - 3.0.0
 
 ### Breaking
 
@@ -138,6 +138,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rate is capped at 16000 with a warning (the audio was sent sped up).
 - Android: the keep-alive service is no longer sticky (a system restart left
   a notification with no audio behind it), and `startPlayer` cannot throw.
+- Android: apps with `backgroundAudio: false` crashed on Android 10–13 when
+  another library declared `FOREGROUND_SERVICE`. The keep-alive service now
+  also requires `DeepgramAudioService` to declare a `mediaPlayback`
+  `foregroundServiceType`, and only adds the microphone type when declared.
+- `useDeepgramManagement` types now include the optional `query` argument
+  (pagination, date windows, filters) the methods already accepted at
+  runtime, via the new `DeepgramManagementQuery` type.
 
 ## [2.4.0] - 2026-07-08
 

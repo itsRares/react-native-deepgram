@@ -107,7 +107,6 @@ export default function SpeechToText() {
   const [keytermInput, setKeytermInput] = useState('Deepgram');
   const [configureStatus, setConfigureStatus] = useState<string | null>(null);
 
-  // Captions & speaker segments (2.4.0)
   const [captionsLoading, setCaptionsLoading] = useState(false);
   const [captionsError, setCaptionsError] = useState<string | null>(null);
   const [captionsFileName, setCaptionsFileName] = useState<string | null>(null);
@@ -646,7 +645,6 @@ export default function SpeechToText() {
           )}
         </Card>
 
-        {/* Session stats (2.4.0) */}
         <Card
           title="Session stats"
           subtitle="Live telemetry — updates at most once per second"
@@ -738,7 +736,6 @@ export default function SpeechToText() {
           </View>
         </Card>
 
-        {/* Captions & speaker segments (2.4.0) */}
         <Card
           title="Captions & speakers"
           subtitle="Export SRT / WebVTT subtitles and split by speaker"

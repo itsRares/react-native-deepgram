@@ -507,7 +507,6 @@ export default function VoiceAgent() {
           </Text>
         </Card>
 
-        {/* Barge-in & session stats (2.4.0) */}
         <Card
           title="Barge-in & session stats"
           subtitle="Interrupt the agent by talking over it · live telemetry"

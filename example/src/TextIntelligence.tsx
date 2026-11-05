@@ -49,19 +49,11 @@ export default function TextIntelligence() {
   return (
     <View style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        <View style={styles.hero}>
-          <View style={styles.heroTop}>
-            <StatusBadge tone={tone} label={toneLabel} />
-          </View>
-          <Text style={styles.heroIcon}>🧠</Text>
-          <Text style={styles.heroTitle}>Text Intelligence</Text>
-          <Text style={styles.heroSubtitle}>
-            Run summarization, topic + intent detection, and sentiment analysis
-            in one request.
-          </Text>
-        </View>
-
-        <Card title="Input text">
+        <Card
+          title="Input text"
+          subtitle="Summary, topics, intents and sentiment in one request"
+          right={<StatusBadge tone={tone} label={toneLabel} />}
+        >
           <Field
             value={input}
             onChangeText={setInput}
@@ -77,11 +69,13 @@ export default function TextIntelligence() {
               loading={isAnalyzing}
               disabled={isAnalyzing || !input.trim()}
               iconLeft="✨"
+              style={styles.flexButton}
             />
             <Button
               title="Use sample"
-              variant="ghost"
+              variant="secondary"
               onPress={() => setInput(SAMPLE_TEXT)}
+              style={styles.flexButton}
             />
           </View>
           {state?.error ? (
@@ -223,34 +217,14 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
     paddingBottom: spacing.xxl,
   },
-  hero: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.xl,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: spacing.xl,
-    alignItems: 'center',
-    marginBottom: spacing.lg,
-  },
-  heroTop: {
-    width: '100%',
-    flexDirection: 'row',
-    justifyContent: 'flex-start',
-    marginBottom: spacing.md,
-  },
-  heroIcon: { fontSize: 40, marginBottom: spacing.sm },
-  heroTitle: { ...type.h2, color: colors.text },
-  heroSubtitle: {
-    ...type.small,
-    color: colors.textMuted,
-    marginTop: 4,
-    textAlign: 'center',
-    paddingHorizontal: spacing.md,
-  },
   actionRow: {
     flexDirection: 'row',
     gap: spacing.sm,
     flexWrap: 'wrap',
+  },
+  flexButton: {
+    flexGrow: 1,
+    flexBasis: '45%',
   },
   errorBanner: {
     backgroundColor: '#3a1418',

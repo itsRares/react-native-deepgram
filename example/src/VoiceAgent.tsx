@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
+  Platform,
   ScrollView,
   StyleSheet,
   Switch,
   Text,
   View,
+  type ScrollViewInstance,
 } from 'react-native';
+import * as Device from 'expo-device';
 import {
   useDeepgramVoiceAgent,
   createAgentSettings,
@@ -16,13 +19,22 @@ import {
   addAudioRouteChangeListener,
   type DeepgramAudioRoute,
   type DeepgramActiveAudioRoute,
+  type DeepgramVoiceAgentLatencyReportMessage,
 } from 'react-native-deepgram';
 import OptionSelect from './components/OptionSelect';
 import Button from './components/Button';
 import Card from './components/Card';
 import Field from './components/Field';
+import SegmentedControl from './components/SegmentedControl';
 import StatusBadge from './components/StatusBadge';
 import { colors, radius, spacing, type } from './theme';
+
+const ROUTE_SEGMENTS = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'speaker', label: 'Speaker' },
+  { value: 'earpiece', label: 'Earpiece' },
+  { value: 'bluetooth', label: 'Bluetooth' },
+] as const satisfies readonly { value: DeepgramAudioRoute; label: string }[];
 
 const LANGUAGE_OPTIONS = [
   { label: 'English (US)', value: 'en' },
@@ -32,9 +44,24 @@ const LANGUAGE_OPTIONS = [
 
 const LISTEN_MODEL_OPTIONS = [
   { label: 'nova-3 (default)', value: 'nova-3' },
-  { label: 'nova-3 general', value: 'nova-3-general' },
-  { label: 'nova-2', value: 'nova-2' },
+  { label: 'nova-3 medical', value: 'nova-3-medical' },
+  { label: 'Flux · English turns', value: 'flux-general-en' },
+  { label: 'Flux · multilingual turns', value: 'flux-general-multi' },
 ];
+
+const SPEAK_MODEL_OPTIONS = [
+  { label: 'Flux · Kit (Deepgram default)', value: 'flux-kit-en' },
+  { label: 'Flux · Haley', value: 'flux-haley-en' },
+  { label: 'Flux · Alexis', value: 'flux-alexis-en' },
+  { label: 'Aura-2 · Thalia', value: 'aura-2-thalia-en' },
+  { label: 'Aura-2 · Asteria', value: 'aura-2-asteria-en' },
+];
+
+const providerVersion = (model: string) =>
+  model.startsWith('flux-') ? 'v2' : 'v1';
+
+const formatSeconds = (value?: number) =>
+  value != null ? `${Math.round(value * 1000)} ms` : '—';
 
 const THINK_MODEL_OPTIONS = [
   { label: 'OpenAI gpt-4o', value: 'gpt-4o' },
@@ -47,6 +74,8 @@ const SAMPLE_RATE_OPTIONS = [
   { label: '8 kHz (lower quality)', value: '8000' },
 ];
 
+const isSimulator = !Device.isDevice;
+
 const formatBytes = (n: number) =>
   n < 1024
     ? `${n} B`
@@ -57,6 +86,9 @@ const formatBytes = (n: number) =>
 export default function VoiceAgent() {
   const [language, setLanguage] = useState('en');
   const [listenModel, setListenModel] = useState('nova-3');
+  const [speakModel, setSpeakModel] = useState('flux-kit-en');
+  const [latencyReport, setLatencyReport] =
+    useState<DeepgramVoiceAgentLatencyReportMessage | null>(null);
   const [thinkModel, setThinkModel] = useState('gpt-4o');
   const [greeting, setGreeting] = useState('Hello! How can I help you today?');
   const [prompt, setPrompt] = useState(
@@ -109,6 +141,7 @@ export default function VoiceAgent() {
         greeting,
         listenModel,
         thinkModel,
+        speakModel,
         prompt,
         temperature,
         tags: tagsInput,
@@ -120,6 +153,7 @@ export default function VoiceAgent() {
       language,
       listenModel,
       prompt,
+      speakModel,
       tagsInput,
       temperature,
       thinkModel,
@@ -132,10 +166,13 @@ export default function VoiceAgent() {
     mute,
     unmute,
     injectUserMessage,
+    injectAgentMessage,
+    forceEndTurn,
     sendFunctionCallResponse,
     updatePrompt,
     updateListen,
     updateThink,
+    updateSpeak,
     sendKeepAlive,
     state,
     conversation,
@@ -154,6 +191,7 @@ export default function VoiceAgent() {
     onBargeIn: () => {
       setBargeInCount((count) => count + 1);
     },
+    onLatencyReport: setLatencyReport,
     reconnect: { enabled: true },
     onReconnecting: (attempt) => {
       setReconnectAttempt(attempt);
@@ -170,7 +208,7 @@ export default function VoiceAgent() {
   const connecting = connectionState === 'connecting';
   const connected = connectionState === 'connected';
   const isReconnecting = reconnectAttempt !== null;
-  const conversationRef = useRef<ScrollView | null>(null);
+  const conversationRef = useRef<ScrollViewInstance | null>(null);
 
   // Mic pulse animation
   const pulse = useRef(new Animated.Value(0)).current;
@@ -210,6 +248,7 @@ export default function VoiceAgent() {
       setReconnectAttempt(null);
       setErrorCode(null);
       setBargeInCount(0);
+      setLatencyReport(null);
       await connect();
     } catch (err) {
       console.error('Start agent failed', err);
@@ -228,6 +267,13 @@ export default function VoiceAgent() {
     setCustomMessage('');
   };
 
+  const sendCustomAgentMessage = () => {
+    const message = customMessage.trim();
+    if (!message) return;
+    injectAgentMessage(message, 'queue');
+    setCustomMessage('');
+  };
+
   const sendToolResponse = () =>
     sendFunctionCallResponse({
       id: 'func_12345',
@@ -243,7 +289,23 @@ export default function VoiceAgent() {
 
   const applyListenModel = () => {
     const model = listenModel.trim();
-    if (model) updateListen({ provider: { type: 'deepgram', model } });
+    if (!model) return;
+    updateListen({
+      provider: {
+        type: 'deepgram',
+        version: providerVersion(model),
+        model,
+        ...(model.startsWith('flux-') ? {} : { language }),
+      },
+    });
+  };
+
+  const applySpeakModel = () => {
+    const model = speakModel.trim();
+    if (!model) return;
+    updateSpeak({
+      provider: { type: 'deepgram', version: providerVersion(model), model },
+    });
   };
 
   const applyThinkModel = () => {
@@ -289,6 +351,20 @@ export default function VoiceAgent() {
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
       >
+        {isSimulator ? (
+          <View style={styles.warningBanner}>
+            <Text style={styles.warningText}>
+              No echo cancellation on{' '}
+              {Platform.OS === 'ios' ? 'the Simulator' : 'the emulator'}
+            </Text>
+            <Text style={styles.warningHint}>
+              The mic picks up the agent through your computer's speakers, so it
+              hears itself and interrupts itself. Use headphones, or test on a
+              physical device.
+            </Text>
+          </View>
+        ) : null}
+
         {/* Hero / mic */}
         <View style={styles.hero}>
           <View style={styles.heroTop}>
@@ -332,7 +408,7 @@ export default function VoiceAgent() {
                 ? 'Reconnecting…'
                 : connecting
                   ? 'Connecting…'
-                  : 'Voice Agent'}
+                  : 'Start a conversation'}
           </Text>
           <Text style={styles.heroSubtitle}>
             {connected
@@ -342,55 +418,10 @@ export default function VoiceAgent() {
                 : 'Configure below and tap Start'}
           </Text>
 
-          <View style={styles.capabilityRow}>
-            <View
-              style={[
-                styles.capabilityChip,
-                isMuted && styles.capabilityChipActive,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.capabilityChipText,
-                  isMuted && styles.capabilityChipTextActive,
-                ]}
-              >
-                🔇 Mute
-              </Text>
-            </View>
-            <View
-              style={[
-                styles.capabilityChip,
-                isReconnecting && styles.capabilityChipActive,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.capabilityChipText,
-                  isReconnecting && styles.capabilityChipTextActive,
-                ]}
-              >
-                ↻ Auto-reconnect
-              </Text>
-            </View>
-            <View
-              style={[
-                styles.capabilityChip,
-                bargeInEnabled && styles.capabilityChipActive,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.capabilityChipText,
-                  bargeInEnabled && styles.capabilityChipTextActive,
-                ]}
-              >
-                ✂️ Barge-in
-              </Text>
-            </View>
-            <View style={styles.capabilityChip}>
-              <Text style={styles.capabilityChipText}>✎ Live updates</Text>
-            </View>
+          <View style={styles.pipeline}>
+            <Text style={styles.pipelineText} numberOfLines={1}>
+              {listenModel} → {thinkModel} → {speakModel}
+            </Text>
           </View>
 
           <View style={styles.heroActions}>
@@ -402,12 +433,14 @@ export default function VoiceAgent() {
                   size="lg"
                   iconLeft={isMuted ? '🎤' : '🔇'}
                   onPress={() => (isMuted ? unmute() : mute())}
+                  style={styles.flexButton}
                 />
                 <Button
                   title="Disconnect"
                   variant="danger"
                   size="lg"
                   onPress={stopAgent}
+                  style={styles.flexButton}
                 />
               </View>
             ) : isReconnecting ? (
@@ -463,31 +496,17 @@ export default function VoiceAgent() {
           title="Audio output"
           subtitle={`Current route · ${activeRoute ?? 'unknown'}`}
         >
-          <View style={styles.routeRow}>
-            {(
-              [
-                { route: 'auto', label: 'Auto', icon: '⚙️' },
-                { route: 'speaker', label: 'Speaker', icon: '🔊' },
-                { route: 'earpiece', label: 'Earpiece', icon: '📞' },
-                { route: 'bluetooth', label: 'Bluetooth', icon: '🎧' },
-              ] as const
-            ).map(({ route, label, icon }) => (
-              <Button
-                key={route}
-                title={`${icon} ${label}`}
-                size="sm"
-                variant={requestedRoute === route ? 'primary' : 'secondary'}
-                onPress={() => requestRoute(route)}
-              />
-            ))}
-          </View>
+          <SegmentedControl
+            segments={ROUTE_SEGMENTS}
+            value={requestedRoute}
+            onChange={requestRoute}
+          />
           <Text style={styles.routeHint}>
             Routing is best-effort: a wired headset always wins and Bluetooth
             only engages when a headset is connected.
           </Text>
         </Card>
 
-        {/* Barge-in & session stats (2.4.0) */}
         <Card
           title="Barge-in & session stats"
           subtitle="Interrupt the agent by talking over it · live telemetry"
@@ -509,8 +528,8 @@ export default function VoiceAgent() {
           <Text style={styles.routeHint}>
             While the agent is speaking, start talking — its audio stops
             immediately instead of finishing the sentence. Barge-ins so far:{' '}
-            {bargeInCount}. Needs hardware echo cancellation, so test on a
-            physical device (simulators have no VPIO).
+            {bargeInCount}. Needs echo cancellation, so test on a physical
+            device (simulators and emulators have none).
           </Text>
 
           <View style={styles.statsGrid}>
@@ -546,6 +565,22 @@ export default function VoiceAgent() {
               <Text style={styles.statValue}>{bargeInCount}</Text>
               <Text style={styles.statLabel}>Barge-ins</Text>
             </View>
+          </View>
+          <Text style={styles.statsHeading}>Last turn latency</Text>
+          <View style={styles.statsGrid}>
+            {(
+              [
+                ['Speech-to-text', latencyReport?.stt_latency],
+                ['LLM first token', latencyReport?.ttt_token_latency],
+                ['Text-to-speech', latencyReport?.tts_latency],
+                ['Total', latencyReport?.total_latency],
+              ] as const
+            ).map(([label, value]) => (
+              <View key={label} style={styles.statCell}>
+                <Text style={styles.statValue}>{formatSeconds(value)}</Text>
+                <Text style={styles.statLabel}>{label}</Text>
+              </View>
+            ))}
           </View>
         </Card>
 
@@ -597,7 +632,7 @@ export default function VoiceAgent() {
         {/* Send a manual message */}
         <Card
           title="Inject a message"
-          subtitle="Send text into the live conversation"
+          subtitle="Type as the user, make the agent say something, or end your turn (push-to-talk)"
         >
           <Field
             value={customMessage}
@@ -612,18 +647,35 @@ export default function VoiceAgent() {
               variant="primary"
               onPress={sendCustomUserMessage}
               disabled={!connected || customMessage.trim().length === 0}
+              style={styles.flexButton}
+            />
+            <Button
+              title="Agent says"
+              variant="secondary"
+              onPress={sendCustomAgentMessage}
+              disabled={!connected || customMessage.trim().length === 0}
+              style={styles.flexButton}
+            />
+            <Button
+              title="End my turn"
+              variant="secondary"
+              onPress={() => forceEndTurn()}
+              disabled={!connected}
+              style={styles.flexButton}
             />
             <Button
               title="Tool reply"
               variant="secondary"
               onPress={sendToolResponse}
               disabled={!connected}
+              style={styles.flexButton}
             />
             <Button
               title="Keep alive"
-              variant="ghost"
+              variant="secondary"
               onPress={sendKeepAlive}
               disabled={!connected}
+              style={styles.flexButton}
             />
           </View>
         </Card>
@@ -636,13 +688,29 @@ export default function VoiceAgent() {
           defaultCollapsed
         >
           <OptionSelect
-            label="Language"
+            label="Language (Nova listen models)"
             value={language}
             onChange={setLanguage}
             options={LANGUAGE_OPTIONS}
             allowCustom
             customPlaceholder="Language code"
           />
+          <OptionSelect
+            label="Voice"
+            value={speakModel}
+            onChange={setSpeakModel}
+            options={SPEAK_MODEL_OPTIONS}
+            allowCustom
+            customPlaceholder="flux-… or aura-2-… model id"
+          />
+          <Button
+            title="Apply voice now"
+            variant="secondary"
+            size="sm"
+            onPress={applySpeakModel}
+            disabled={!connected}
+          />
+          <View style={{ height: spacing.md }} />
           <OptionSelect
             label="Thought model"
             value={thinkModel}
@@ -762,7 +830,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.xl,
     borderWidth: 1,
     borderColor: colors.border,
-    padding: spacing.xl,
+    padding: spacing.lg,
     alignItems: 'center',
     marginBottom: spacing.lg,
   },
@@ -771,30 +839,30 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     width: '100%',
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm,
   },
   latency: {
     ...type.small,
     color: colors.textMuted,
   },
   micWrap: {
-    width: 120,
-    height: 120,
+    width: 96,
+    height: 96,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: spacing.lg,
+    marginBottom: spacing.md,
   },
   pulse: {
     position: 'absolute',
-    width: 120,
-    height: 120,
-    borderRadius: 60,
+    width: 96,
+    height: 96,
+    borderRadius: 48,
     backgroundColor: colors.primary,
   },
   micCircle: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
+    width: 72,
+    height: 72,
+    borderRadius: 36,
     backgroundColor: colors.surfaceMuted,
     alignItems: 'center',
     justifyContent: 'center',
@@ -809,7 +877,7 @@ const styles = StyleSheet.create({
     borderColor: colors.warning,
   },
   micIcon: {
-    fontSize: 36,
+    fontSize: 30,
   },
   heroTitle: {
     ...type.h2,
@@ -821,7 +889,7 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     textAlign: 'center',
     marginTop: 4,
-    marginBottom: spacing.lg,
+    marginBottom: spacing.md,
   },
   heroActions: {
     width: '100%',
@@ -832,32 +900,23 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: spacing.md,
   },
-  capabilityRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    gap: spacing.sm,
-    marginBottom: spacing.lg,
+  flexButton: {
+    flexGrow: 1,
+    flexBasis: '45%',
   },
-  capabilityChip: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 5,
+  pipeline: {
+    maxWidth: '100%',
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
     borderRadius: radius.pill,
     backgroundColor: colors.surfaceMuted,
     borderWidth: 1,
     borderColor: colors.border,
+    marginBottom: spacing.lg,
   },
-  capabilityChipActive: {
-    backgroundColor: colors.accentMuted,
-    borderColor: colors.accent,
-  },
-  capabilityChipText: {
-    ...type.small,
+  pipelineText: {
+    ...type.mono,
     color: colors.textMuted,
-    fontSize: 12,
-  },
-  capabilityChipTextActive: {
-    color: colors.accent,
   },
   reconnectBanner: {
     backgroundColor: colors.accentMuted,
@@ -895,6 +954,11 @@ const styles = StyleSheet.create({
     color: colors.warning,
     ...type.smallMedium,
   },
+  warningHint: {
+    ...type.small,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
   thinkingPill: {
     backgroundColor: colors.accentMuted,
     paddingVertical: 6,
@@ -907,21 +971,20 @@ const styles = StyleSheet.create({
     color: colors.accent,
     ...type.smallMedium,
   },
-  routeRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-  },
   routeHint: {
     color: colors.textMuted,
     ...type.small,
-    marginTop: spacing.sm,
   },
   statsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.sm,
     marginTop: spacing.md,
+  },
+  statsHeading: {
+    ...type.smallMedium,
+    color: colors.textMuted,
+    marginTop: spacing.lg,
   },
   statCell: {
     flexBasis: '30%',
@@ -988,7 +1051,7 @@ const styles = StyleSheet.create({
     ...type.body,
   },
   emptyState: {
-    paddingVertical: spacing.xl,
+    paddingVertical: spacing.lg,
     alignItems: 'center',
   },
   emptyIcon: {

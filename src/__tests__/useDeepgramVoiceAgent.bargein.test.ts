@@ -1,25 +1,11 @@
 import { render, act } from '@testing-library/react-native';
 import { createElement } from 'react';
-import { NativeModules } from 'react-native';
 import { useDeepgramVoiceAgent } from '../useDeepgramVoiceAgent';
 import type {
   UseDeepgramVoiceAgentProps,
   UseDeepgramVoiceAgentReturn,
 } from '../useDeepgramVoiceAgent';
-import { Deepgram } from '../NativeDeepgram';
-
-jest.mock('../NativeDeepgram', () => ({
-  Deepgram: {
-    startRecording: jest.fn(() => Promise.resolve()),
-    stopRecording: jest.fn(() => Promise.resolve()),
-    startAudio: jest.fn(() => Promise.resolve()),
-    stopAudio: jest.fn(() => Promise.resolve()),
-    startPlayer: jest.fn(),
-    stopPlayer: jest.fn(),
-    feedAudio: jest.fn(),
-    interruptAudio: jest.fn(),
-  },
-}));
+import NativeDeepgram from '../NativeDeepgram';
 
 jest.mock('../helpers/askMicPermission', () => ({
   askMicPermission: jest.fn(() => Promise.resolve(true)),
@@ -52,7 +38,7 @@ const globalRef = globalThis as unknown as {
   __DEEPGRAM_API_KEY__: string;
 };
 
-const interruptAudioMock = Deepgram.interruptAudio as jest.Mock;
+const interruptAudioMock = jest.mocked(NativeDeepgram!.interruptAudio);
 
 let hookApi: UseDeepgramVoiceAgentReturn;
 let harnessProps: UseDeepgramVoiceAgentProps = {};
@@ -68,13 +54,13 @@ const lastSocket = () =>
   MockWebSocket.instances[MockWebSocket.instances.length - 1]!;
 
 async function connectSession() {
-  render(createElement(Harness));
+  await render(createElement(Harness));
   await act(async () => {
     await hookApi.connect();
   });
   // Flush the async socket construction (auth header resolution).
   await act(async () => {});
-  act(() => {
+  await act(() => {
     lastSocket().onopen?.();
   });
 }
@@ -89,10 +75,6 @@ const emitServerMessage = (message: Record<string, unknown>) => {
 
 describe('useDeepgramVoiceAgent – barge-in', () => {
   beforeAll(() => {
-    (NativeModules as Record<string, unknown>).Deepgram = {
-      addListener: jest.fn(),
-      removeListeners: jest.fn(),
-    };
     globalRef.WebSocket = MockWebSocket;
     globalRef.__DEEPGRAM_API_KEY__ = 'test-key';
   });
@@ -106,7 +88,7 @@ describe('useDeepgramVoiceAgent – barge-in', () => {
   it('flushes playback once and fires onBargeIn when the user talks over the agent', async () => {
     await connectSession();
 
-    act(() => {
+    await act(() => {
       emitServerMessage({ type: 'AgentStartedSpeaking' });
       emitAgentAudio();
       emitServerMessage({ type: 'UserStartedSpeaking' });
@@ -121,7 +103,7 @@ describe('useDeepgramVoiceAgent – barge-in', () => {
     harnessProps = { onBargeIn, onUserStartedSpeaking };
     await connectSession();
 
-    act(() => {
+    await act(() => {
       emitAgentAudio();
       emitServerMessage({ type: 'UserStartedSpeaking' });
     });
@@ -135,7 +117,7 @@ describe('useDeepgramVoiceAgent – barge-in', () => {
   it('does not flush when no agent audio is in flight', async () => {
     await connectSession();
 
-    act(() => {
+    await act(() => {
       emitServerMessage({ type: 'UserStartedSpeaking' });
     });
 
@@ -147,7 +129,7 @@ describe('useDeepgramVoiceAgent – barge-in', () => {
   it('does not flush after AgentAudioDone completed the turn', async () => {
     await connectSession();
 
-    act(() => {
+    await act(() => {
       emitAgentAudio();
       emitServerMessage({ type: 'AgentAudioDone' });
       emitServerMessage({ type: 'UserStartedSpeaking' });
@@ -160,7 +142,7 @@ describe('useDeepgramVoiceAgent – barge-in', () => {
   it('does not flush while muted', async () => {
     await connectSession();
 
-    act(() => {
+    await act(() => {
       emitAgentAudio();
       hookApi.mute();
       emitServerMessage({ type: 'UserStartedSpeaking' });
@@ -172,7 +154,7 @@ describe('useDeepgramVoiceAgent – barge-in', () => {
 
     // Unmuting restores barge-in for the still-pending audio? No — the flush
     // was skipped, but the in-flight state must remain intact for later.
-    act(() => {
+    await act(() => {
       hookApi.unmute();
       emitServerMessage({ type: 'UserStartedSpeaking' });
     });
@@ -184,19 +166,19 @@ describe('useDeepgramVoiceAgent – barge-in', () => {
     await connectSession();
 
     // Turn 1: audio in flight → barge-in flush.
-    act(() => {
+    await act(() => {
       emitAgentAudio();
       emitServerMessage({ type: 'UserStartedSpeaking' });
     });
     expect(interruptAudioMock).toHaveBeenCalledTimes(1);
 
     // Late AgentAudioDone for the discarded audio — must not throw or wedge.
-    act(() => {
+    await act(() => {
       emitServerMessage({ type: 'AgentAudioDone' });
     });
 
     // Turn 2: new audio in flight → barge-in flushes again.
-    act(() => {
+    await act(() => {
       emitAgentAudio();
       emitServerMessage({ type: 'UserStartedSpeaking' });
     });
@@ -207,7 +189,7 @@ describe('useDeepgramVoiceAgent – barge-in', () => {
   it('flushes only once for repeated UserStartedSpeaking without new audio', async () => {
     await connectSession();
 
-    act(() => {
+    await act(() => {
       emitAgentAudio();
       emitServerMessage({ type: 'UserStartedSpeaking' });
       emitServerMessage({ type: 'UserStartedSpeaking' });

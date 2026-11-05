@@ -1,13 +1,9 @@
 import { useState } from 'react';
+import { View, StyleSheet, Pressable, Text, StatusBar } from 'react-native';
 import {
-  SafeAreaView,
-  View,
-  StyleSheet,
-  ScrollView,
-  Pressable,
-  Text,
-  StatusBar,
-} from 'react-native';
+  SafeAreaProvider,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context';
 import { configure } from 'react-native-deepgram';
 import SpeechToText from './SpeechToText';
 import TextIntelligence from './TextIntelligence';
@@ -23,9 +19,13 @@ import { colors, radius, spacing, type } from './theme';
 // returns { access_token, expires_in } — getToken then takes precedence over
 // apiKey so the key never ships in the app. See README → "Ephemeral / scoped tokens".
 const tokenUrl = process.env.EXPO_PUBLIC_DEEPGRAM_TOKEN_URL;
+const apiKey = process.env.EXPO_PUBLIC_DEEPGRAM_API_KEY;
+const hasCredentials =
+  Boolean(tokenUrl) ||
+  (Boolean(apiKey) && apiKey !== 'your_deepgram_api_key_here');
 
 configure({
-  apiKey: process.env.EXPO_PUBLIC_DEEPGRAM_API_KEY || 'YOUR_DEEPGRAM_API_KEY',
+  apiKey: apiKey || 'YOUR_DEEPGRAM_API_KEY',
   ...(tokenUrl
     ? {
         getToken: async () => {
@@ -48,73 +48,122 @@ configure({
 
 type ScreenKey = 'voice' | 'speech' | 'tts' | 'text' | 'management';
 
-const TABS: { key: ScreenKey; label: string; icon: string }[] = [
-  { key: 'voice', label: 'Voice Agent', icon: '🎙️' },
-  { key: 'speech', label: 'Speech-to-Text', icon: '📝' },
-  { key: 'tts', label: 'Text-to-Speech', icon: '🔊' },
-  { key: 'text', label: 'Text Intel', icon: '🧠' },
-  { key: 'management', label: 'Management', icon: '⚙️' },
+const TABS: {
+  key: ScreenKey;
+  label: string;
+  title: string;
+  description: string;
+  icon: string;
+}[] = [
+  {
+    key: 'voice',
+    label: 'Agent',
+    title: 'Voice Agent',
+    description: 'Full-duplex conversation with barge-in',
+    icon: '🎙️',
+  },
+  {
+    key: 'speech',
+    label: 'Listen',
+    title: 'Speech-to-Text',
+    description: 'Live Nova / Flux streaming and file transcription',
+    icon: '📝',
+  },
+  {
+    key: 'tts',
+    label: 'Speak',
+    title: 'Text-to-Speech',
+    description: 'Aura and Flux voices over REST or WebSocket',
+    icon: '🔊',
+  },
+  {
+    key: 'text',
+    label: 'Intel',
+    title: 'Text Intelligence',
+    description: 'Summaries, topics, intents and sentiment',
+    icon: '🧠',
+  },
+  {
+    key: 'management',
+    label: 'Manage',
+    title: 'Management API',
+    description: 'Projects, keys, usage and balances',
+    icon: '⚙️',
+  },
 ];
 
 export default function App() {
+  return (
+    <SafeAreaProvider>
+      <Shell />
+    </SafeAreaProvider>
+  );
+}
+
+function Shell() {
   const [activeScreen, setActiveScreen] = useState<ScreenKey>('voice');
   const activeTab = TABS.find((t) => t.key === activeScreen) ?? TABS[0]!;
+  const insets = useSafeAreaInsets();
 
   return (
-    <View style={styles.root}>
-      <StatusBar barStyle="light-content" backgroundColor={colors.bg} />
-      <SafeAreaView style={styles.safe}>
-        {/* Header */}
-        <View style={styles.header}>
-          <View>
-            <Text style={styles.brand}>Deepgram</Text>
-            <Text style={styles.brandSub}>React Native SDK · Playground</Text>
-          </View>
-          <View style={styles.headerBadge}>
-            <Text style={styles.headerBadgeIcon}>{activeTab.icon}</Text>
-            <Text style={styles.headerBadgeLabel}>{activeTab.label}</Text>
-          </View>
-        </View>
+    <View style={[styles.root, { paddingTop: insets.top }]}>
+      <StatusBar barStyle="light-content" />
+      <View style={styles.header}>
+        <Text style={styles.brandSub}>Deepgram · React Native playground</Text>
+        <Text style={styles.brand}>{activeTab.title}</Text>
+        <Text style={styles.description}>{activeTab.description}</Text>
+      </View>
 
-        {/* Tab bar */}
-        <View style={styles.tabBarWrap}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.tabContent}
-          >
-            {TABS.map(({ key, label, icon }) => {
-              const isActive = key === activeScreen;
-              return (
-                <Pressable
-                  key={key}
-                  onPress={() => setActiveScreen(key)}
-                  style={({ pressed }) => [
-                    styles.tabItem,
-                    isActive && styles.tabItemActive,
-                    pressed && styles.tabItemPressed,
-                  ]}
-                >
-                  <Text style={styles.tabIcon}>{icon}</Text>
-                  <Text
-                    style={[styles.tabText, isActive && styles.tabTextActive]}
-                  >
-                    {label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
+      {!hasCredentials ? (
+        <View style={styles.keyBanner}>
+          <Text style={styles.keyBannerTitle}>No Deepgram API key</Text>
+          <Text style={styles.keyBannerText}>
+            Copy example/.env.example to example/.env, set
+            EXPO_PUBLIC_DEEPGRAM_API_KEY, then restart Metro with `yarn start`
+            (Expo reads .env when it bundles).
+          </Text>
         </View>
+      ) : null}
 
-        <View style={styles.content}>
-          {activeScreen === 'voice' && <VoiceAgent />}
-          {activeScreen === 'speech' && <SpeechToText />}
-          {activeScreen === 'text' && <TextIntelligence />}
-          {activeScreen === 'tts' && <TextToSpeech />}
-          {activeScreen === 'management' && <Management />}
-        </View>
-      </SafeAreaView>
+      <View style={styles.content}>
+        {activeScreen === 'voice' && <VoiceAgent />}
+        {activeScreen === 'speech' && <SpeechToText />}
+        {activeScreen === 'text' && <TextIntelligence />}
+        {activeScreen === 'tts' && <TextToSpeech />}
+        {activeScreen === 'management' && <Management />}
+      </View>
+
+      <View
+        style={[
+          styles.tabBar,
+          { paddingBottom: Math.max(insets.bottom, spacing.sm) },
+        ]}
+      >
+        {TABS.map(({ key, label, icon }) => {
+          const isActive = key === activeScreen;
+          return (
+            <Pressable
+              key={key}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: isActive }}
+              accessibilityLabel={label}
+              onPress={() => setActiveScreen(key)}
+              style={({ pressed }) => [
+                styles.tabItem,
+                pressed && styles.tabItemPressed,
+              ]}
+            >
+              <View style={styles.tabIconWrap}>
+                {isActive ? <View style={styles.tabIconActive} /> : null}
+                <Text style={styles.tabIcon}>{icon}</Text>
+              </View>
+              <Text style={[styles.tabText, isActive && styles.tabTextActive]}>
+                {label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
     </View>
   );
 }
@@ -124,83 +173,87 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.bg,
   },
-  safe: {
-    flex: 1,
-  },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.sm,
     paddingBottom: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.divider,
   },
   brand: {
     ...type.h1,
     color: colors.text,
   },
   brandSub: {
+    ...type.smallMedium,
+    color: colors.primary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    fontSize: 11,
+    marginBottom: 2,
+  },
+  description: {
     ...type.small,
     color: colors.textMuted,
     marginTop: 2,
   },
-  headerBadge: {
+  tabBar: {
     flexDirection: 'row',
-    alignItems: 'center',
+    paddingTop: spacing.sm,
+    paddingHorizontal: spacing.sm,
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 6,
-    borderRadius: radius.pill,
-    gap: 6,
-  },
-  headerBadgeIcon: {
-    fontSize: 14,
-  },
-  headerBadgeLabel: {
-    ...type.smallMedium,
-    color: colors.textMuted,
-  },
-  tabBarWrap: {
-    paddingVertical: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.divider,
-  },
-  tabContent: {
-    paddingHorizontal: spacing.lg,
-    gap: spacing.sm,
-    alignItems: 'center',
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
   },
   tabItem: {
-    flexDirection: 'row',
+    flex: 1,
     alignItems: 'center',
-    paddingHorizontal: spacing.md,
-    paddingVertical: 8,
-    borderRadius: radius.pill,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    gap: 6,
-  },
-  tabItemActive: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
+    gap: 2,
   },
   tabItemPressed: {
-    opacity: 0.85,
+    opacity: 0.7,
+  },
+  tabIconWrap: {
+    width: 48,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tabIconActive: {
+    ...StyleSheet.absoluteFill,
+    borderRadius: 14,
+    backgroundColor: colors.primaryMuted,
   },
   tabIcon: {
-    fontSize: 14,
+    fontSize: 16,
   },
   tabText: {
     ...type.smallMedium,
-    color: colors.textMuted,
+    fontSize: 11,
+    color: colors.textDim,
   },
   tabTextActive: {
-    color: '#fff',
+    color: colors.text,
   },
   content: {
     flex: 1,
+  },
+  keyBanner: {
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.md,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.warning,
+    backgroundColor: '#2b2410',
+  },
+  keyBannerTitle: {
+    ...type.smallMedium,
+    color: colors.warning,
+    marginBottom: 2,
+  },
+  keyBannerText: {
+    ...type.small,
+    color: colors.textMuted,
   },
 });

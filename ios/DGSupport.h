@@ -23,7 +23,9 @@
 #endif
 
 #define DGLogWarn(...) RCTLogWarn(__VA_ARGS__)
-#define DGLogError(...) RCTLogError(__VA_ARGS__)
+// RCTLogError would raise a dev RedBox for recoverable conditions (Siri
+// holding the hardware, a -50 on a fallback category, a rejected promise).
+#define DGLogError(...) RCTLogWarn(__VA_ARGS__)
 
 @class Deepgram;
 
@@ -72,6 +74,7 @@ static inline void DGRejectPromise(RCTPromiseRejectBlock reject, NSString *code,
                               ?: @"Deepgram native error";
   NSError *safeError =
       error ?: DGNativeError(@"DeepgramNativeError", 0, safeMessage);
-  DGLogError(@"[Deepgram] reject: code=%@ message=%@", safeCode, safeMessage);
+  // Warn, not RCTLogError: JS handles the rejection, a dev RedBox would not.
+  DGLogWarn(@"[Deepgram] reject: code=%@ message=%@", safeCode, safeMessage);
   reject(safeCode, safeMessage, safeError);
 }

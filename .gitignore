@@ -89,3 +89,6 @@ nitrogen/
 *.tgz
 
 *.env
+
+# TypeScript incremental build info
+*.tsbuildinfo

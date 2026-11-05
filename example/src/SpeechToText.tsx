@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
@@ -9,19 +9,22 @@ import {
   View,
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
+import { File, Paths } from 'expo-file-system';
 import {
   DeepgramError,
   toSRT,
   toSpeakerSegments,
   toWebVTT,
   useDeepgramSpeechToText,
+  type DeepgramFluxTurnEvent,
+  type DeepgramLiveListenOptions,
   type SpeakerSegment,
 } from 'react-native-deepgram';
 import Button from './components/Button';
 import Card from './components/Card';
 import Field from './components/Field';
 import OptionSelect from './components/OptionSelect';
+import SegmentedControl from './components/SegmentedControl';
 import StatusBadge from './components/StatusBadge';
 import { colors, radius, spacing, type } from './theme';
 
@@ -38,14 +41,72 @@ const formatClock = (seconds: number) => {
   return `${m}:${s.toFixed(1).padStart(4, '0')}`;
 };
 
+type Engine = 'nova' | 'multi' | 'flux';
+
+const ENGINES: {
+  key: Engine;
+  label: string;
+  hint: string;
+  options: DeepgramLiveListenOptions;
+}[] = [
+  {
+    key: 'nova',
+    label: 'Nova-3',
+    hint: 'Interim + final results over /v1/listen.',
+    options: {},
+  },
+  {
+    key: 'multi',
+    label: 'Nova-3 multi',
+    hint: 'language=multi: speak and switch between 50+ languages.',
+    options: { language: 'multi' },
+  },
+  {
+    key: 'flux',
+    label: 'Flux',
+    hint: 'Turn-based /v2/listen: end-of-turn detection, End turn button.',
+    options: { apiVersion: 'v2', model: 'flux-general-en' },
+  },
+];
+
+const ENGINE_SEGMENTS = ENGINES.map(({ key, label }) => ({
+  value: key,
+  label,
+}));
+
+const CAPTION_SEGMENTS = [
+  { value: 'srt', label: 'SRT' },
+  { value: 'vtt', label: 'WebVTT' },
+  { value: 'speakers', label: 'Speakers' },
+] as const;
+
+const TURN_LABEL: Record<DeepgramFluxTurnEvent, string> = {
+  StartOfTurn: '🗣 Speaking',
+  Update: '🗣 Speaking',
+  TurnResumed: '🗣 Resumed',
+  EagerEndOfTurn: '⏳ Likely done',
+  EndOfTurn: '✅ Turn ended',
+};
+
+const parseKeyterms = (input: string) =>
+  input
+    .split(',')
+    .map((term) => term.trim())
+    .filter(Boolean);
+
 export default function SpeechToText() {
   const [liveTranscript, setLiveTranscript] = useState('');
   const [liveInterimTranscript, setLiveInterimTranscript] = useState('');
   const [fileTranscript, setFileTranscript] = useState('');
   const [pickedFileName, setPickedFileName] = useState<string | null>(null);
   const [reconnectAttempt, setReconnectAttempt] = useState<number | null>(null);
+  const [engine, setEngine] = useState<Engine>('nova');
+  const [turnEvent, setTurnEvent] = useState<DeepgramFluxTurnEvent | null>(
+    null
+  );
+  const [keytermInput, setKeytermInput] = useState('Deepgram');
+  const [configureStatus, setConfigureStatus] = useState<string | null>(null);
 
-  // Captions & speaker segments (2.4.0)
   const [captionsLoading, setCaptionsLoading] = useState(false);
   const [captionsError, setCaptionsError] = useState<string | null>(null);
   const [captionsFileName, setCaptionsFileName] = useState<string | null>(null);
@@ -65,19 +126,24 @@ export default function SpeechToText() {
     'deepgram-recording.wav'
   );
 
-  const recordDir =
-    recordFolder === 'cache'
-      ? FileSystem.cacheDirectory
-      : FileSystem.documentDirectory;
   const safeRecordName =
     recordFileName.trim().replace(/[/\\]/g, '') || 'deepgram-recording.wav';
-  const recordPath = `${recordDir ?? ''}${safeRecordName}`;
+  const recordPath = useMemo(
+    () =>
+      new File(
+        recordFolder === 'cache' ? Paths.cache : Paths.document,
+        safeRecordName
+      ).uri,
+    [recordFolder, safeRecordName]
+  );
 
   const {
     startListening,
     stopListening,
     pause,
     resume,
+    configure,
+    forceEndTurn,
     state: liveState,
     isPaused,
     audioLevel,
@@ -93,6 +159,18 @@ export default function SpeechToText() {
       setLiveTranscript('');
       setLiveInterimTranscript('');
       setReconnectAttempt(null);
+      setTurnEvent(null);
+      setConfigureStatus(null);
+    },
+    onTurnInfo: (turn) => setTurnEvent(turn.event),
+    onMessage: (message) => {
+      if (message.type === 'ConfigureSuccess') {
+        setConfigureStatus('✅ Applied by Deepgram');
+      } else if (message.type === 'ConfigureFailure') {
+        setConfigureStatus(
+          `⚠ Rejected: ${String(message.description ?? 'unknown reason')}`
+        );
+      }
     },
     onTranscript: (text, info) => {
       if (info?.isFinal) {
@@ -114,6 +192,7 @@ export default function SpeechToText() {
     onEnd: () => {
       setLiveInterimTranscript('');
       setReconnectAttempt(null);
+      setTurnEvent(null);
     },
     onRecordingComplete: (uri) => {
       console.log('Saved mic recording to', uri);
@@ -212,9 +291,24 @@ export default function SpeechToText() {
     stopListening();
   };
 
+  const activeEngine = ENGINES.find((e) => e.key === engine) ?? ENGINES[0]!;
+  const startLive = () =>
+    startListening({
+      keyterm: parseKeyterms(keytermInput),
+      ...activeEngine.options,
+    });
+
+  const applyKeyterms = () => {
+    setConfigureStatus(
+      configure({ keyterms: parseKeyterms(keytermInput) })
+        ? 'Sent — waiting for Deepgram…'
+        : '⚠ Not connected'
+    );
+  };
+
   // Caption helpers need the raw prerecorded response (word timings,
   // utterances, speakers), so hit /v1/listen directly — same request the
-  // hook makes, but with utterances + diarize enabled.
+  // hook makes, but with utterances + diarization enabled.
   const pickForCaptions = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
@@ -241,7 +335,7 @@ export default function SpeechToText() {
       } as any);
 
       const res = await fetch(
-        `${base}/listen?model=nova-3&smart_format=true&utterances=true&diarize=true`,
+        `${base}/listen?model=nova-3&smart_format=true&utterances=true&diarize_model=latest`,
         {
           method: 'POST',
           headers: {
@@ -305,6 +399,11 @@ export default function SpeechToText() {
         <View style={styles.hero}>
           <View style={styles.heroTop}>
             <StatusBadge tone={tone} label={toneLabel} />
+            {engine === 'flux' && turnEvent && sessionActive ? (
+              <View style={styles.turnChip}>
+                <Text style={styles.turnChipText}>{TURN_LABEL[turnEvent]}</Text>
+              </View>
+            ) : null}
           </View>
 
           <View style={styles.micWrap}>
@@ -354,55 +453,16 @@ export default function SpeechToText() {
             </View>
           ) : null}
 
-          <View style={styles.capabilityRow}>
-            <View style={styles.capabilityChip}>
-              <Text style={styles.capabilityChipText}>⏸ Pause / resume</Text>
-            </View>
-            <View
-              style={[
-                styles.capabilityChip,
-                isReconnecting && styles.capabilityChipActive,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.capabilityChipText,
-                  isReconnecting && styles.capabilityChipTextActive,
-                ]}
-              >
-                ↻ Auto-reconnect
-              </Text>
-            </View>
-            <View
-              style={[
-                styles.capabilityChip,
-                isCapturing && styles.capabilityChipActive,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.capabilityChipText,
-                  isCapturing && styles.capabilityChipTextActive,
-                ]}
-              >
-                🎚 Live level
-              </Text>
-            </View>
-            <View
-              style={[
-                styles.capabilityChip,
-                recordEnabled && styles.capabilityChipActive,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.capabilityChipText,
-                  recordEnabled && styles.capabilityChipTextActive,
-                ]}
-              >
-                💾 Record to file
-              </Text>
-            </View>
+          <View style={styles.pipeline}>
+            <Text style={styles.pipelineText} numberOfLines={1}>
+              {[
+                activeEngine.label,
+                'auto-reconnect',
+                recordEnabled ? 'recording to WAV' : null,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+            </Text>
           </View>
 
           <View style={styles.heroActions}>
@@ -415,6 +475,7 @@ export default function SpeechToText() {
                     size="lg"
                     iconLeft={isPaused ? '▶' : '⏸'}
                     onPress={() => (isPaused ? resume() : pause())}
+                    style={styles.flexButton}
                   />
                 ) : null}
                 <Button
@@ -422,6 +483,7 @@ export default function SpeechToText() {
                   variant="danger"
                   size="lg"
                   onPress={stopLive}
+                  style={styles.flexButton}
                 />
               </View>
             ) : (
@@ -430,11 +492,57 @@ export default function SpeechToText() {
                 variant="primary"
                 size="lg"
                 iconLeft="▶"
-                onPress={() => startListening({ keyterm: ['Deepgram'] })}
+                onPress={startLive}
               />
             )}
           </View>
         </View>
+
+        <Card
+          title="Model"
+          subtitle={sessionActive ? 'Stop to switch models' : activeEngine.hint}
+        >
+          <SegmentedControl
+            segments={ENGINE_SEGMENTS}
+            value={engine}
+            onChange={setEngine}
+            disabled={sessionActive}
+          />
+          <Field
+            label="Keyterms"
+            value={keytermInput}
+            onChangeText={setKeytermInput}
+            autoCapitalize="none"
+            autoCorrect={false}
+            placeholder="Deepgram, Nova, Flux"
+            hint="Comma-separated words to boost. While listening, Apply sends a Configure message — no reconnect."
+          />
+          {sessionActive ? (
+            <View style={styles.heroButtonRow}>
+              <Button
+                title="Apply keyterms"
+                size="sm"
+                variant="secondary"
+                onPress={applyKeyterms}
+                style={styles.flexButton}
+              />
+              {engine === 'flux' ? (
+                <Button
+                  title="End turn now"
+                  size="sm"
+                  variant="secondary"
+                  onPress={() => forceEndTurn()}
+                  style={styles.flexButton}
+                />
+              ) : null}
+            </View>
+          ) : null}
+          {configureStatus ? (
+            <Text style={[styles.recordHint, styles.configureStatus]}>
+              {configureStatus}
+            </Text>
+          ) : null}
+        </Card>
 
         {/* Record-to-file: opt in and choose where to save */}
         <Card
@@ -537,7 +645,6 @@ export default function SpeechToText() {
           )}
         </Card>
 
-        {/* Session stats (2.4.0) */}
         <Card
           title="Session stats"
           subtitle="Live telemetry — updates at most once per second"
@@ -629,7 +736,6 @@ export default function SpeechToText() {
           </View>
         </Card>
 
-        {/* Captions & speaker segments (2.4.0) */}
         <Card
           title="Captions & speakers"
           subtitle="Export SRT / WebVTT subtitles and split by speaker"
@@ -661,21 +767,11 @@ export default function SpeechToText() {
           {captionSrt ? (
             <>
               <View style={styles.captionTabs}>
-                {(
-                  [
-                    { key: 'srt', label: 'SRT' },
-                    { key: 'vtt', label: 'WebVTT' },
-                    { key: 'speakers', label: 'Speakers' },
-                  ] as const
-                ).map(({ key, label }) => (
-                  <Button
-                    key={key}
-                    title={label}
-                    size="sm"
-                    variant={captionView === key ? 'primary' : 'secondary'}
-                    onPress={() => setCaptionView(key)}
-                  />
-                ))}
+                <SegmentedControl
+                  segments={CAPTION_SEGMENTS}
+                  value={captionView}
+                  onChange={setCaptionView}
+                />
               </View>
 
               {captionView === 'speakers' ? (
@@ -743,7 +839,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.xl,
     borderWidth: 1,
     borderColor: colors.border,
-    padding: spacing.xl,
+    padding: spacing.lg,
     alignItems: 'center',
     marginBottom: spacing.lg,
   },
@@ -751,26 +847,43 @@ const styles = StyleSheet.create({
     width: '100%',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: spacing.md,
+    alignItems: 'center',
+    marginBottom: spacing.sm,
+  },
+  turnChip: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: radius.pill,
+    backgroundColor: colors.accentMuted,
+    borderWidth: 1,
+    borderColor: colors.accent,
+  },
+  turnChipText: {
+    ...type.smallMedium,
+    color: colors.accent,
+    fontSize: 12,
+  },
+  configureStatus: {
+    marginTop: spacing.sm,
   },
   micWrap: {
-    width: 120,
-    height: 120,
+    width: 96,
+    height: 96,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: spacing.lg,
+    marginBottom: spacing.md,
   },
   pulse: {
     position: 'absolute',
-    width: 120,
-    height: 120,
-    borderRadius: 60,
+    width: 96,
+    height: 96,
+    borderRadius: 48,
     backgroundColor: colors.primary,
   },
   micCircle: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
+    width: 72,
+    height: 72,
+    borderRadius: 36,
     backgroundColor: colors.surfaceMuted,
     alignItems: 'center',
     justifyContent: 'center',
@@ -785,7 +898,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceMuted,
     borderColor: colors.warning,
   },
-  micIcon: { fontSize: 36 },
+  micIcon: { fontSize: 30 },
   heroTitle: {
     ...type.h2,
     color: colors.text,
@@ -794,7 +907,7 @@ const styles = StyleSheet.create({
     ...type.small,
     color: colors.textMuted,
     marginTop: 4,
-    marginBottom: spacing.lg,
+    marginBottom: spacing.md,
     textAlign: 'center',
   },
   meterTrack: {
@@ -816,32 +929,23 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: spacing.md,
   },
-  capabilityRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    gap: spacing.sm,
-    marginBottom: spacing.lg,
+  flexButton: {
+    flexGrow: 1,
+    flexBasis: '45%',
   },
-  capabilityChip: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 5,
+  pipeline: {
+    maxWidth: '100%',
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
     borderRadius: radius.pill,
     backgroundColor: colors.surfaceMuted,
     borderWidth: 1,
     borderColor: colors.border,
+    marginBottom: spacing.lg,
   },
-  capabilityChipActive: {
-    backgroundColor: colors.accentMuted,
-    borderColor: colors.accent,
-  },
-  capabilityChipText: {
-    ...type.small,
+  pipelineText: {
+    ...type.mono,
     color: colors.textMuted,
-    fontSize: 12,
-  },
-  capabilityChipTextActive: {
-    color: colors.accent,
   },
   reconnectBanner: {
     backgroundColor: colors.accentMuted,
@@ -957,10 +1061,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   captionTabs: {
-    flexDirection: 'row',
-    gap: spacing.sm,
     marginTop: spacing.md,
-    marginBottom: spacing.md,
   },
   captionScroll: {
     maxHeight: 240,

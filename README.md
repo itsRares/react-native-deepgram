@@ -15,7 +15,7 @@ yarn add react-native-deepgram
 | --- | --- |
 | 🗣️ **Voice Agent** | Full-duplex agents over Deepgram's WebSocket. Hardware AEC on iOS (VPIO) and Android (`VOICE_COMMUNICATION` + `MODE_IN_COMMUNICATION`). Function calling, prompt updates, latency telemetry. |
 | 🎙️ **Speech-to-Text** | Live PCM streaming over WebSocket on STT v1 *or* Flux v2 (`flux-general-en`). File transcription with summarisation, topics, intents, entities. Optionally record the mic to a WAV file while you stream. |
-| 🔊 **Text-to-Speech** | One-shot HTTP synthesis or low-latency WebSocket streaming with `Speak` / `Flush` / `Clear` / `Close` controls. |
+| 🔊 **Text-to-Speech** | One-shot HTTP synthesis or low-latency WebSocket streaming for Aura and Flux TTS voices, with `Flush` / `Clear` / `Close` controls and Flux barge-in (`interrupt()`). |
 | 🧠 **Text Intelligence** | Summaries, topics, intents, sentiment over text or URLs. |
 | 🛠️ **Management API** | Typed wrapper for projects, models, keys, usage, balances, members, invitations, scopes, purchases, and temporary tokens. |
 | ⚙️ **Expo plugin** | One-line install — handles permissions, background-audio modes, and Android foreground service automatically. |
@@ -29,20 +29,21 @@ yarn add react-native-deepgram
 1. [Quick start (5 minutes)](#quick-start-5-minutes)
 2. [Requirements](#requirements)
 3. [Installation](#installation)
-4. [Core concepts](#core-concepts)
-5. [Audio session, AEC & background](#audio-session-aec--background)
-6. [Voice Agent](#voice-agent-usedeepgramvoiceagent)
-7. [Speech-to-Text](#speech-to-text-usedeepgramspeechtotext)
-8. [Text-to-Speech](#text-to-speech-usedeepgramtexttospeech)
-9. [Text Intelligence](#text-intelligence-usedeepgramtextintelligence)
-10. [Management API](#management-api-usedeepgrammanagement)
-11. [Expo config plugin reference](#expo-config-plugin-reference)
-12. [Common recipes](#common-recipes)
-13. [Troubleshooting](#troubleshooting)
-14. [Example app](#example-app)
-15. [Roadmap](#roadmap)
-16. [Contributing](#contributing)
-17. [License](#license)
+4. [Migrating from 2.x](#migrating-from-2x)
+5. [Core concepts](#core-concepts)
+6. [Audio session, AEC & background](#audio-session-aec--background)
+7. [Voice Agent](#voice-agent-usedeepgramvoiceagent)
+8. [Speech-to-Text](#speech-to-text-usedeepgramspeechtotext)
+9. [Text-to-Speech](#text-to-speech-usedeepgramtexttospeech)
+10. [Text Intelligence](#text-intelligence-usedeepgramtextintelligence)
+11. [Management API](#management-api-usedeepgrammanagement)
+12. [Expo config plugin reference](#expo-config-plugin-reference)
+13. [Common recipes](#common-recipes)
+14. [Troubleshooting](#troubleshooting)
+15. [Example app](#example-app)
+16. [Roadmap](#roadmap)
+17. [Contributing](#contributing)
+18. [License](#license)
 
 ---
 
@@ -116,7 +117,7 @@ export function LiveCaption() {
       <Text>{transcript} {interimTranscript}</Text>
       <Button title="Start" onPress={() => startListening()} />
       <Button title="Stop" onPress={stopListening} />
-      {state.error && <Text style={{ color: 'red' }}>{String(state.error)}</Text>}
+      {state?.error && <Text style={{ color: 'red' }}>{String(state.error)}</Text>}
     </View>
   );
 }
@@ -132,15 +133,14 @@ const agent = useDeepgramVoiceAgent({
   trackConversation: true,
   defaultSettings: {
     audio: {
-      input:  { encoding: 'linear16', sample_rate: 24_000 },
+      input:  { encoding: 'linear16', sample_rate: 16_000 }, // mic capture rate
       output: { encoding: 'linear16', sample_rate: 24_000, container: 'none' },
     },
     agent: {
-      language: 'en',
       greeting: 'Hi! What can I help you with?',
-      listen: { provider: { type: 'deepgram', model: 'nova-3' } },
+      listen: { provider: { type: 'deepgram', model: 'nova-3', language: 'en' } },
       think:  { provider: { type: 'open_ai', model: 'gpt-4o' }, prompt: 'You are a helpful assistant.' },
-      speak:  { provider: { type: 'deepgram', model: 'aura-2-asteria-en' } },
+      speak:  { provider: { type: 'deepgram', version: 'v2', model: 'flux-kit-en' } },
     },
   },
 });
@@ -159,13 +159,13 @@ That's a working, low-latency conversational agent with hardware echo cancellati
 | | Minimum |
 | --- | --- |
 | Node | 18 |
-| React | 18.0 |
-| React Native | 0.72 |
-| iOS | 13 (15+ recommended for VPIO AEC) |
+| React | 19.0 |
+| React Native | 0.80 (New Architecture) |
+| iOS | 15.1 (React Native's minimum) |
 | Android | API 24 (Android 7.0) |
-| Xcode | 15+ if building against the iOS 17 SDK |
+| Xcode | 16.1 (React Native 0.80's minimum) |
 
-> The library is published with the New Architecture in mind but works on the legacy renderer as well.
+> The native module is a TurboModule and requires the New Architecture (the default since React Native 0.76). The legacy architecture is no longer supported as of 3.0.
 
 ---
 
@@ -217,6 +217,47 @@ npx expo run:ios   # or expo run:android
 ```
 
 > Already running an existing development build? Re-run `expo prebuild` (and `pod install` on iOS) so the new permissions, background modes, and Android foreground service are picked up.
+
+---
+
+## Migrating from 2.x
+
+3.0 drops the legacy architecture and the APIs that were deprecated in 2.x. After upgrading, rebuild the native app (`npx expo prebuild --clean` or `pod install`) — a JS-only reload is not enough.
+
+**Platform**
+
+- React Native 0.80+, React 19 and the New Architecture are required.
+- The package is ESM-only; deep imports from `react-native-deepgram/lib/commonjs` no longer exist.
+- If you listened to native device events directly (`DeepgramAudioPCM` / `AudioChunk`, `DeepgramAudioLevel`, `DeepgramRouteChange`, `DeepgramInterruption`) or called `NativeModules.Deepgram` / `MicPermission`, use the typed `Deepgram` export instead: `Deepgram.onAudioPCM`, `onAudioLevel`, `onAudioRouteChange`, `onAudioInterruption` and `Deepgram.requestRecordPermission()`. `addAudioRouteChangeListener` and `addInterruptionListener` are unchanged.
+- `Deepgram.stopPlayer()` now returns a promise.
+
+**Speech-to-Text**
+
+| 2.x | 3.0 |
+| --- | --- |
+| `diarize: true` | `diarizeModel: 'latest'` |
+
+**Text-to-Speech**
+
+| 2.x | 3.0 |
+| --- | --- |
+| `options: { model, encoding, sampleRate, speed, mipOptOut }` | `options: { http: { … }, stream: { … } }` (set per transport) |
+| `options: { bitRate, container, tag, callback, callbackMethod }` | `options: { http: { … } }` |
+| `options.format` / `http.format` | `http.container` |
+| `sendMessage({ type: 'Text', text })` | `sendMessage({ type: 'Speak', text })` or `sendText(text)` |
+| `DeepgramTextToSpeechEncoding` | `DeepgramTextToSpeechHttpEncoding` / `DeepgramTextToSpeechStreamEncoding` |
+
+`synthesize()` only plays raw `linear16` output (the default) and respects `autoPlayAudio`; compressed formats are returned without playback.
+
+**Voice Agent**
+
+| 2.x | 3.0 |
+| --- | --- |
+| `agent.language` | `agent.listen.provider.language` (Deepgram voices take the language from the model name) |
+| `audio.input.sample_rate` above 16000 | Capped at 16000, the microphone capture rate |
+| `injectAgentMessage(message, 'queue')` | Unchanged, or `injectAgentMessage(message, { behavior, dynamic })` |
+
+See the [changelog](./CHANGELOG.md) for the full list, including the new Flux, Configure and Voice Agent APIs.
 
 ---
 
@@ -319,7 +360,7 @@ For tuning details, see [Audio session, AEC & background](#audio-session-aec--ba
 Every error the hooks surface — mic-permission denials, native start/stop failures, fetch and WebSocket errors — is normalized to a `DeepgramError` with a typed `code`, so you can branch on a stable enum instead of string-matching messages. The original failure is preserved on `cause`.
 
 ```ts
-import { DeepgramError, type DeepgramErrorCode } from 'react-native-deepgram';
+import { DeepgramError, useDeepgramSpeechToText } from 'react-native-deepgram';
 
 useDeepgramSpeechToText({
   onError: (err) => {
@@ -401,7 +442,7 @@ Things to know:
   ```
 
   Each entry is optional. Values can also reference string resources for localization (`android:resource="@string/..."` instead of `android:value`); `ICON` names a drawable/mipmap resource and safely falls back to the launcher icon if missing.
-- **Graceful degradation.** If the permissions aren't declared, everything still works while the app is in the foreground; the native module simply skips the keep-alive service instead of crashing.
+- **Graceful degradation.** If the permissions or the service's `foregroundServiceType` (it must include `mediaPlayback`) aren't declared, everything still works while the app is in the foreground; the native module simply skips the keep-alive service instead of crashing. Other libraries declaring `FOREGROUND_SERVICE` don't opt you in.
 
 ### Built-in resilience
 
@@ -412,7 +453,7 @@ The native modules handle the awkward edge cases for you:
 - **Audio focus loss (Android)** — transient losses pause playback; permanent losses tear down recording + playback so you don't fight other apps for the mic.
 - **mediaserverd resets (iOS)** — if iOS restarts its audio service mid-session, the audio engine is rebuilt from scratch on the next call.
 - **Bluetooth on iOS 17+** — uses `AllowBluetoothHFP` when available, with a deprecation-safe fallback for older toolchains.
-- **iOS 17+ permission API** — `requestMicPermission` calls `AVAudioApplication.requestRecordPermissionWithCompletionHandler` when available, falling back to `AVAudioSession` on older OS versions.
+- **iOS 17+ permission API** — `Deepgram.requestRecordPermission()` calls `AVAudioApplication.requestRecordPermissionWithCompletionHandler` when available, falling back to `AVAudioSession` on older OS versions.
 - **Bounded playback queue (Android)** — if JS feeds audio faster than the device can play it, the oldest chunks are dropped at ~1.5 MB so you never OOM mid-call.
 
 ### Interruption events
@@ -494,21 +535,26 @@ const {
   autoPlayAudio: true, // Automatically play agent audio
   defaultSettings: {
     audio: {
-      input: { encoding: 'linear16', sample_rate: 24_000 },
+      input: { encoding: 'linear16', sample_rate: 16_000 }, // mic capture rate
       output: { encoding: 'linear16', sample_rate: 24_000, container: 'none' },
     },
     agent: {
-      language: 'en',
       greeting: 'Hello! How can I help you today?',
       listen: {
-        provider: { type: 'deepgram', model: 'nova-3', smart_format: true },
+        provider: {
+          type: 'deepgram',
+          model: 'nova-3',
+          language: 'en',
+          smart_format: true,
+        },
       },
       think: {
         provider: { type: 'open_ai', model: 'gpt-4o', temperature: 0.7 },
         prompt: 'You are a helpful voice concierge.',
       },
       speak: {
-        provider: { type: 'deepgram', model: 'aura-2-asteria-en' },
+        // Flux TTS (v2); use version 'v1' with an aura-* voice for Aura.
+        provider: { type: 'deepgram', version: 'v2', model: 'flux-kit-en' },
       },
     },
     tags: ['demo'],
@@ -572,7 +618,8 @@ const {
   mute, unmute, isMuted,
   // Messaging
   sendMessage, sendSettings, sendMedia, sendKeepAlive,
-  injectUserMessage, injectAgentMessage, updatePrompt,
+  injectUserMessage, injectAgentMessage, forceEndTurn, updatePrompt,
+  updateListen, updateThink, updateSpeak, updateThinkLive,
   // Function calls
   sendFunctionCallResponse,
   // Reactive state (opt-in via track* flags)
@@ -601,6 +648,7 @@ const {
 | `trackState` | `false` | `state` return — connection status, error, warning. |
 | `trackConversation` | `false` | `conversation` return — running history of `{ role, content }`. |
 | `trackAgentStatus` | `false` | `agentStatus` return — thinking flag and latency metrics. |
+| `trackStats` | `false` | `stats` return — session telemetry, updated at most once per second. |
 
 #### Callbacks
 
@@ -634,10 +682,15 @@ const {
 | `onAgentStartedSpeaking` | `(message: DeepgramVoiceAgentAgentStartedSpeakingMessage) => void` | Response playback session begins (latency metrics included). |
 | `onAgentAudioDone` | `(message: DeepgramVoiceAgentAgentAudioDoneMessage) => void` | Agent finishes emitting audio for a turn. |
 | `onAudio` | `(audioData: ArrayBuffer) => void` | Raw binary audio chunk received from the socket. |
+| `onAudioConfig` | `(message: DeepgramVoiceAgentAudioConfigMessage) => void` | The server announces the output audio format (the native player is restarted at that rate). |
 | `onPromptUpdated` | `(message: DeepgramVoiceAgentPromptUpdatedMessage) => void` | Active prompt is updated (e.g. after `updatePrompt`). |
 | `onSpeakUpdated` | `(message: DeepgramVoiceAgentSpeakUpdatedMessage) => void` | Active speak configuration changes (server-driven). |
 | `onListenUpdated` | `(message: DeepgramVoiceAgentListenUpdatedMessage) => void` | Listen configuration is updated (e.g. after `updateListen`). |
 | `onThinkUpdated` | `(message: DeepgramVoiceAgentThinkUpdatedMessage) => void` | Think configuration is updated (e.g. after `updateThink`). |
+| `onThinkLiveUpdated` | `(message: DeepgramVoiceAgentThinkLiveUpdatedMessage) => void` | `think_live` behaviours are updated (after `updateThinkLive`). |
+| `onLatencyReport` | `(message: DeepgramVoiceAgentLatencyReportMessage) => void` | Per-turn latency breakdown (`stt_latency`, `ttt_*_latency`, `tts_latency`, `total_latency`). |
+| `onFrustrationDetected` | `(message: DeepgramVoiceAgentFrustrationDetectedMessage) => void` | `think_live` detected a frustrated user. |
+| `onCustomFromThinkProvider` | `(message: DeepgramVoiceAgentCustomFromThinkProviderMessage) => void` | A custom think provider forwarded a payload. |
 | `onHistory` | `(message: DeepgramVoiceAgentHistoryMessage) => void` | Conversation history (text turn or function calls) is replayed by the server. |
 | `onInjectionRefused` | `(message: DeepgramVoiceAgentInjectionRefusedMessage) => void` | Inject request rejected (typically while the agent is speaking). |
 | `onMessage` | `(message: DeepgramVoiceAgentServerMessage) => void` | Catch-all for every JSON message from the API. |
@@ -651,6 +704,7 @@ const {
 | -------- | --------- | ---------- |
 | `onFunctionCallRequest` | `(message: DeepgramVoiceAgentFunctionCallRequestMessage) => void` | Agent asks the client to execute a tool marked `client_side: true`. Respond with `sendFunctionCallResponse`. |
 | `onFunctionCallResponse` | `(message: DeepgramVoiceAgentReceiveFunctionCallResponseMessage) => void` | Server shares the outcome of a non-client-side function call. |
+| `onFunctionCallCancelled` | `(message: DeepgramVoiceAgentFunctionCallCancelledMessage) => void` | Pending calls were cancelled (e.g. the user kept talking); drop their results. |
 
 </details>
 
@@ -665,6 +719,7 @@ const {
 | `isConnected` | `() => boolean` | Returns `true` when the socket is open. |
 | `mute` | `() => void` | Stops forwarding mic audio while keeping the socket alive with periodic `KeepAlive` frames. |
 | `unmute` | `() => void` | Resumes forwarding microphone audio. |
+| `getStats` | `() => SessionStats` | Snapshot of the session telemetry (always available, never re-renders). |
 
 **Messaging**
 
@@ -675,11 +730,13 @@ const {
 | `sendMedia` | `(chunk: ArrayBuffer \| Uint8Array \| number[]) => boolean` | Stream additional PCM (e.g. pre-recorded buffer). |
 | `sendKeepAlive` | `() => boolean` | Emit a `KeepAlive` ping. |
 | `injectUserMessage` | `(content: string) => boolean` | Inject a user-side text turn. |
-| `injectAgentMessage` | `(message: string, behavior?: string) => boolean` | Inject an assistant-side text turn (optional `behavior`, e.g. `'default'`). |
+| `injectAgentMessage` | `(message: string, options?: DeepgramVoiceAgentInjectBehavior \| { behavior?; dynamic? }) => boolean` | Make the agent speak. `behavior`: `'default'` (refused mid-turn), `'queue'` or `'interrupt'`; `dynamic: true` lets the LLM phrase the reply from `message`. |
+| `forceEndTurn` | `() => boolean` | End the user's turn now (push-to-talk; pairs with Flux `eot_threshold: 1.0`). |
 | `updatePrompt` | `(prompt: string) => boolean` | Replace the active system prompt. |
 | `updateListen` | `(listen: DeepgramVoiceAgentListenConfig) => boolean` | Swap the speech-recognition (listen) provider mid-session. |
 | `updateThink` | `(think: DeepgramVoiceAgentThinkConfig) => boolean` | Swap the LLM (think) provider mid-session. |
-| `updateSpeak` | `(speak: DeepgramVoiceAgentSpeakConfig) => boolean` | Swap the text-to-speech (speak) provider mid-session. |
+| `updateSpeak` | `(speak: DeepgramVoiceAgentSpeakConfig \| DeepgramVoiceAgentSpeakConfig[]) => boolean` | Swap the text-to-speech (speak) provider mid-session. |
+| `updateThinkLive` | `(thinkLive: Record<string, unknown>) => boolean` | Update the `think_live` behaviours mid-session. |
 
 **Function calls**
 
@@ -698,6 +755,7 @@ Each value is `undefined` unless its corresponding `track*` flag is `true`.
 | `conversation` | `Array<{ role: string; content: string }>` | `trackConversation: true` |
 | `agentStatus` | `{ thinking: string \| null; latency: { total?: number; tts?: number; ttt?: number } \| null }` | `trackAgentStatus: true` |
 | `clearConversation` | `() => void` | `trackConversation: true` |
+| `stats` | `SessionStats` (`bytesSent`, `bytesReceived`, `framesDropped`, `reconnects`, `connectedAtMs`, `firstResultMs`) | `trackStats: true` |
 
 #### Settings payload (`DeepgramVoiceAgentSettings`)
 
@@ -710,13 +768,14 @@ Each value is `undefined` unless its corresponding `track*` flag is `true`.
 | `flags.history` | `boolean` | Enable prior history playback to the agent. |
 | `audio.input` | `DeepgramVoiceAgentAudioConfig` | Configure encoding/sample rate for microphone audio. |
 | `audio.output` | `DeepgramVoiceAgentAudioConfig` | Choose output encoding/sample rate/bitrate for agent speech. |
-| `agent.language` | `string` | Primary language for the conversation. |
+| `agent` | `DeepgramVoiceAgentAgentConfig \| string` | Inline configuration, or the UUID of a reusable agent configuration stored in your Deepgram project. |
 | `agent.context.messages` | `DeepgramVoiceAgentContextMessage[]` | Seed the conversation with prior turns or system notes. |
-| `agent.listen.provider` | `DeepgramVoiceAgentListenProvider` | Speech recognition provider/model configuration (Deepgram listen also accepts Flux fields: `version`, `eot_threshold`, `eager_eot_threshold`, `eot_timeout_ms`, `language_hints`). |
-| `agent.think.provider` | `DeepgramVoiceAgentThinkProvider` | LLM selection (`type`, `model`, `temperature`, etc.). |
-| `agent.think.functions` | `DeepgramVoiceAgentFunctionConfig[]` | Tooling exposed to the agent (name, parameters, optional endpoint metadata). |
+| `agent.listen.provider` | `DeepgramVoiceAgentListenProvider` | Speech recognition: `version` `'v1'` (Nova: `language`, `keyterms`, `smart_format`) or `'v2'` (Flux: `eot_threshold`, `eager_eot_threshold`, `eot_timeout_ms`, `language_hints`, `keyterms`). |
+| `agent.think.provider` | `DeepgramVoiceAgentThinkProvider` | LLM selection (`type`, `model`, `temperature`, `reasoning_mode`, `version`, etc.). |
+| `agent.think.functions` | `DeepgramVoiceAgentFunctionConfig[]` | Tooling exposed to the agent (name, parameters, optional endpoint, `defer_until_eot`). |
 | `agent.think.prompt` | `string` | System prompt presented to the thinking provider. |
-| `agent.speak.provider` | `Record<string, unknown>` | Text-to-speech model selection for spoken replies. |
+| `agent.think_live` | `Record<string, unknown>` | Conversational behaviours (backchannels, presence checks, frustration detection). |
+| `agent.speak` | `DeepgramVoiceAgentSpeakConfig \| DeepgramVoiceAgentSpeakConfig[]` | Text-to-speech provider (Deepgram `version` `'v2'` + `flux-*` model with `speed` / `expressivity`, or `'v1'` + `aura-*`); an array lists fallbacks. Defaults to `flux-kit-en`. |
 | `agent.greeting` | `string` | Optional greeting played once settings are applied. |
 | `mip_opt_out` | `boolean` | Opt the session out of the Model Improvement Program. |
 
@@ -745,7 +804,6 @@ const {
   live: {
     apiVersion: 'v2',
     model: 'flux-general-en',
-    punctuate: true,
     eotThreshold: 0.55,
   },
 });
@@ -763,6 +821,8 @@ const {
 ### File transcription quick start
 
 ```tsx
+import * as DocumentPicker from 'expo-document-picker';
+
 const { transcribeFile } = useDeepgramSpeechToText({
   onTranscribeSuccess: (text) => console.log(text),
   prerecorded: {
@@ -772,10 +832,10 @@ const { transcribeFile } = useDeepgramSpeechToText({
 });
 
 const pickFile = async () => {
-  const f = await DocumentPicker.getDocumentAsync({ type: 'audio/*' });
-  if (f.type === 'success') {
-    await transcribeFile(f, { topics: true, intents: true });
-  }
+  const res = await DocumentPicker.getDocumentAsync({ type: 'audio/*' });
+  if (res.canceled) return;
+  const { uri, name, mimeType } = res.assets[0]!;
+  await transcribeFile({ uri, name, type: mimeType }, { topics: true, intents: true });
 };
 ```
 
@@ -813,6 +873,8 @@ const {
 | `onBeforeStart` | `() => void` | Before requesting mic permissions or starting a stream. |
 | `onStart` | `() => void` | The WebSocket opens. |
 | `onTranscript` | `(transcript: string, event?: DeepgramTranscriptEvent) => void` | Every transcript update (partial and final). |
+| `onTurnInfo` | `(message: DeepgramFluxTurnInfo) => void` | Every Flux (v2) `TurnInfo` event, including `StartOfTurn`, `EagerEndOfTurn` and `TurnResumed`. |
+| `onMessage` | `(message: DeepgramListenServerMessage) => void` | Every JSON message from the live socket (`Results`, `UtteranceEnd`, `ConfigureSuccess`, `ConfigureFailure`, `Warning`, ...). |
 | `onError` | `(error: unknown) => void` | A streaming error occurs. |
 | `onAudioLevel` | `(level: number) => void` | A new mic audio level (`0..1` normalized RMS) is available. Requires `metering.enabled`. |
 | `onRecordingComplete` | `(uri: string) => void` | A `recordToFile` session finished; receives the `file://` URI of the saved WAV. Requires `recordToFile.enabled`. |
@@ -834,6 +896,7 @@ const {
 | ---- | ------- | ------- |
 | `trackState` | `false` | `state` return — status + last error. |
 | `trackTranscript` | `false` | `transcript` and `interimTranscript` returns. |
+| `trackStats` | `false` | `stats` return — session telemetry, updated at most once per second. |
 
 #### Returned methods
 
@@ -843,6 +906,9 @@ const {
 | `stopListening` | `() => void` | Stops recording and closes the active WebSocket. |
 | `pause` | `() => void` | Pauses mic streaming while keeping the socket alive via `KeepAlive`. On v1 a `Finalize` is sent first to flush buffered audio. |
 | `resume` | `() => void` | Resumes mic streaming after a `pause`. |
+| `configure` | `(options: DeepgramLiveConfigureOptions) => boolean` | Updates `keyterms` and `numerals` (Nova-3 and Flux) or Flux turn thresholds and `languageHints` mid-stream. The server replies with `ConfigureSuccess` / `ConfigureFailure` via `onMessage`. |
+| `forceEndTurn` | `() => boolean` | Flux only: ends the current turn now (e.g. push-to-talk release). |
+| `getStats` | `() => SessionStats` | Snapshot of the session telemetry (always available, never re-renders). |
 | `transcribeFile` | `(file: DeepgramPrerecordedSource, options?: DeepgramPrerecordedOptions) => Promise<void>` | Uploads a file/URI/URL and resolves via the success/error callbacks. |
 
 #### Reactive state
@@ -855,6 +921,7 @@ const {
 | `recordingUri` | `string` (last saved `file://` WAV) | `trackState: true` + `recordToFile.enabled` |
 | `transcript` | `string` | `trackTranscript: true` |
 | `interimTranscript` | `string` | `trackTranscript: true` |
+| `stats` | `SessionStats` (`bytesSent`, `bytesReceived`, `framesDropped`, `reconnects`, `connectedAtMs`, `firstResultMs`) | `trackStats: true` |
 
 #### Live transcription options (`DeepgramLiveListenOptions`)
 
@@ -866,7 +933,8 @@ const {
 | `apiVersion` | `'v1' \| 'v2'` | `'v1'` | Selects the realtime API generation (`'v2'` unlocks Flux streaming). |
 | `model` | `DeepgramLiveListenModel` | `'nova-3'` (v1) / `'flux-general-en'` (v2) | Streaming model. Flux also supports `'flux-general-multi'` for multilingual turns. |
 | `version` | `string` | – | Specific model version. |
-| `language` | `string` | Auto | BCP-47 hint (e.g. `en-US`). |
+| `language` | `string` | Auto | BCP-47 hint (e.g. `en-US`), or `'multi'` for Nova-3 multilingual. |
+| `languageHint` | `string \| string[]` | – | Bias language detection for Nova-3 `language: 'multi'` and `flux-general-multi`. |
 
 </details>
 
@@ -913,19 +981,19 @@ const {
 | `utteranceEndMs` | `number` | – | Delay before emitting utterance-end event. |
 | `vadEvents` | `boolean` | `false` | Emit voice activity detection events. |
 | `diarizeModel` | `DeepgramLiveListenDiarizeModel` | – | Diarisation model (`'latest'` / `'v1'`). Separates speakers. |
-| `diarize` | `boolean` | `false` | **Deprecated** — use `diarizeModel`. Separate speakers. |
 
 </details>
 
 <details>
 <summary><strong>Flux v2 (only when <code>apiVersion: 'v2'</code>)</strong></summary>
 
+Flux also accepts `keyterm`, `numerals`, `profanityFilter`, `redact` (`'numbers'` / `'aggressive_numbers'`), `mipOptOut` and `tag`. Other v1 options are dropped from the URL.
+
 | Option | Type | Purpose |
 | ------ | ---- | ------- |
-| `eotThreshold` | `number` | Confidence required to finalise a turn. |
+| `eotThreshold` | `number` | Confidence required to finalise a turn (0.5–1.0; `1.0` disables automatic end-of-turn). |
 | `eagerEotThreshold` | `number` | Confidence required to emit an eager turn. |
 | `eotTimeoutMs` | `number` | Silence timeout before closing a turn. |
-| `languageHint` | `string \| string[]` | Language hint(s) — only valid with the `flux-general-multi` model. |
 
 </details>
 
@@ -951,7 +1019,8 @@ const {
 | ------ | ---- | ------- | ------- |
 | `model` | `DeepgramPrerecordedModel` | API default | Transcription model. |
 | `version` | `DeepgramPrerecordedVersion` | `'latest'` | Specific model version. |
-| `language` | `string` | Auto | BCP-47 language hint. |
+| `language` | `string` | Auto | BCP-47 language hint, or `'multi'` for Nova-3 multilingual. |
+| `languageHint` | `string \| string[]` | – | Bias detection with Nova-3 `language: 'multi'`. |
 | `detectLanguage` | `boolean \| string \| string[]` | `false` | Auto-detect language or restrict detection. |
 
 </details>
@@ -993,7 +1062,6 @@ const {
 | Option | Type | Default | Purpose |
 | ------ | ---- | ------- | ------- |
 | `diarizeModel` | `DeepgramPrerecordedDiarizeModel` | – | Diarisation model (`'latest'` / `'v1'` / `'v2'`). Separates speakers. |
-| `diarize` | `boolean` | `false` | **Deprecated** — use `diarizeModel`. Speaker diarisation. |
 | `utterances` | `boolean` | `false` | Utterance-level timestamps. |
 | `uttSplit` | `number` | – | Pause duration (s) used to split utterances. |
 | `detectEntities` | `boolean` | `false` | Extract entities (names, places, etc.). |
@@ -1035,16 +1103,19 @@ const {
 
 Generate audio via a single HTTP call or stream interactive responses over WebSocket. The hook exposes granular configuration for both request paths.
 
-### Streaming protocol parity notes (Deepgram review)
+### Aura vs Flux TTS
 
-- WebSocket endpoint: `wss://api.deepgram.com/v1/speak`
-- Canonical streaming input message for text is `{ "type": "Speak", "text": "..." }`
-- Supported control messages: `Flush`, `Clear`, `Close`
-- Authorization supports both `Token <API_KEY>` and `Bearer <TEMP_TOKEN>` formats
-- Streaming media output settings supported by Deepgram: `encoding` in `linear16 | mulaw | alaw`, with streaming `sample_rate` options based on encoding
-- Flush limit: up to 20 `Flush` messages per 60 seconds (Deepgram sends warnings when exceeded)
+The hook picks the endpoint from the model name:
 
-For backward compatibility, `sendMessage` still accepts legacy `{ type: 'Text' }` payloads and maps them to `{ type: 'Speak' }` before sending.
+| | Aura (`aura-*`) | Flux TTS (`flux-*`) |
+| - | - | - |
+| Endpoint | `/v1/speak` | `/v2/speak` |
+| Turn model | Text buffer; `Flush` emits audio | `Flush` ends the turn; per-turn `SpeechStarted` / `SpeechMetadata` |
+| Barge-in | `clearStream()` sends `Clear` | `interrupt()` stops playback, cancels the turn and reports `text_spoken` / `text_remaining` |
+| Mid-stream changes | – | `configureStream({ speed })` |
+| Extra options | – | `expressivity` (`-2`..`2`, beta), `speed` `0.5`–`1.5` |
+
+Both stream raw `linear16` / `mulaw` / `alaw` and accept `Token` or `Bearer` auth. Aura allows up to 20 `Flush` messages per 60 seconds. Flux closes a session after 60 s without client messages; React Native's `WebSocket` cannot send ping frames, so start a new stream after long pauses.
 
 ### HTTP synthesis quick start
 
@@ -1098,6 +1169,26 @@ flushStream();
 closeStreamGracefully();
 ```
 
+### Flux TTS streaming with barge-in
+
+```tsx
+const { startStreaming, sendText, flushStream, interrupt } =
+  useDeepgramTextToSpeech({
+    options: {
+      stream: { model: 'flux-haley-en', expressivity: 1, autoFlush: false },
+    },
+    onSpeechMetadata: (turn) => console.log(turn.billable_character_count),
+    onSpeechInterrupted: ({ text_spoken }) => trimLlmContext(text_spoken),
+  });
+
+await startStreaming('Sure, ');
+for await (const token of llmTokens) sendText(token); // sent verbatim
+flushStream(); // ends the turn
+
+// User talks over the agent:
+interrupt({ playbackOffsetMs: playedMs });
+```
+
 ### API reference
 
 **Signature**
@@ -1108,7 +1199,7 @@ const {
   synthesize, synthesizeToBytes,
   // Streaming
   startStreaming, sendText, sendMessage,
-  flushStream, clearStream,
+  flushStream, clearStream, interrupt, configureStream,
   closeStreamGracefully, stopStreaming,
   // Reactive state (opt-in)
   state,
@@ -1140,10 +1231,14 @@ const {
 | `onBeforeStream` | `() => void` | Before opening the WebSocket. |
 | `onStreamStart` | `() => void` | Socket is open and ready. |
 | `onAudioChunk` | `(chunk: ArrayBuffer) => void` | Each PCM chunk arrives. |
-| `onStreamMetadata` | `(metadata: DeepgramTextToSpeechStreamMetadataMessage) => void` | Stream metadata arrives. |
+| `onStreamMetadata` | `(metadata: DeepgramTextToSpeechStreamMetadataMessage) => void` | Aura stream metadata arrives. |
 | `onStreamFlushed` | `(event: DeepgramTextToSpeechStreamFlushedMessage) => void` | Deepgram confirms a flush. |
-| `onStreamCleared` | `(event: DeepgramTextToSpeechStreamClearedMessage) => void` | Deepgram confirms a clear. |
+| `onStreamCleared` | `(event: DeepgramTextToSpeechStreamClearedMessage) => void` | Deepgram confirms an Aura clear. |
 | `onStreamWarning` | `(warning: DeepgramTextToSpeechStreamWarningMessage) => void` | Deepgram warns about the stream. |
+| `onSpeechStarted` | `(event: DeepgramTextToSpeechSpeechStartedMessage) => void` | Flux: a turn's audio starts. |
+| `onSpeechMetadata` | `(event: DeepgramTextToSpeechSpeechMetadataMessage) => void` | Flux: a turn finished (billing and timing). |
+| `onSpeechInterrupted` | `(event: DeepgramTextToSpeechSpeechInterruptedMessage) => void` | Flux: answer to `interrupt()`. |
+| `onStreamMessage` | `(message: DeepgramTextToSpeechStreamResponseMessage) => void` | Every JSON message (e.g. Flux `Connected`, `ConfigureSuccess`, `SessionMetadata`). |
 | `onStreamError` | `(error: unknown) => void` | The WebSocket errors. |
 | `onStreamEnd` | `() => void` | The stream closes (gracefully or otherwise). |
 
@@ -1153,7 +1248,7 @@ const {
 
 | Method | Signature | Description |
 | ------ | --------- | ----------- |
-| `synthesize` | `(text: string) => Promise<ArrayBuffer>` | Single-shot REST call; resolves with the full audio buffer. |
+| `synthesize` | `(text: string) => Promise<ArrayBuffer>` | Single-shot REST call; resolves with the full audio buffer and, for raw `linear16` output with `autoPlayAudio`, plays it. |
 | `synthesizeToBytes` | `(text: string, options?: DeepgramTextToSpeechHttpOptions) => Promise<{ data: ArrayBuffer; mimeType: string }>` | Like `synthesize` but **does not play** the audio — returns the raw bytes + MIME type for saving/caching. Results are cached in-memory (LRU) keyed by text + format, so repeated identical prompts skip the network. Pass `options` to override the format per call. |
 
 **Streaming**
@@ -1161,10 +1256,12 @@ const {
 | Method | Signature | Description |
 | ------ | --------- | ----------- |
 | `startStreaming` | `(text: string) => Promise<void>` | Open the WebSocket and queue the first message. |
-| `sendText` | `(text: string, options?: { flush?: boolean; sequenceId?: number }) => boolean` | Queue additional text; can suppress auto-flush or set sequence id. |
-| `sendMessage` | `(message: DeepgramTextToSpeechStreamInputMessage) => boolean` | Send a raw control message (`Speak`, `Flush`, `Clear`, `Close`). |
-| `flushStream` | `() => boolean` | Tell Deepgram to emit all buffered audio now. |
-| `clearStream` | `() => boolean` | Clear buffered text/audio without closing the socket. |
+| `sendText` | `(text: string, options?: { flush?: boolean; sequenceId?: number }) => boolean` | Queue additional text; can suppress auto-flush or set an Aura sequence id. Flux text is sent verbatim, Aura text is trimmed. |
+| `sendMessage` | `(message: DeepgramTextToSpeechStreamInputMessage) => boolean` | Send a raw control message (`Speak`, `Flush`, `Clear`, `Close`, `Interrupt`, `Configure`). |
+| `flushStream` | `() => boolean` | Aura: emit all buffered audio now. Flux: end the current turn. |
+| `clearStream` | `() => boolean` | Aura: clear buffered text/audio. Flux: same as `interrupt()`. |
+| `interrupt` | `(options?: { playbackOffsetMs?: number }) => boolean` | Flux: stop playback, cancel the turn and drop in-flight audio. |
+| `configureStream` | `(options: { speed?: number }) => boolean` | Flux: change the speed mid-stream. |
 | `closeStreamGracefully` | `() => boolean` | Drain outstanding audio, then close. |
 | `stopStreaming` | `() => void` | Force-close and release resources. |
 
@@ -1176,29 +1273,16 @@ const {
 
 #### Configuration (`UseDeepgramTextToSpeechOptions`)
 
-`UseDeepgramTextToSpeechOptions` mirrors the SDK's structure and is merged into both HTTP and WebSocket requests.
+`UseDeepgramTextToSpeechOptions` has one section per transport plus shared query parameters.
 
 <details>
 <summary>Global options</summary>
 
 | Option        | Type                                             | Applies to       | Purpose                                                                       |
 | ------------- | ------------------------------------------------ | ---------------- | ----------------------------------------------------------------------------- |
-| `model`*      | `DeepgramTextToSpeechModel \| (string & {})`     | Both             | Legacy shortcut for selecting a model (prefer per-transport `model`).         |
-| `encoding`*   | `DeepgramTextToSpeechEncoding`                   | Both             | Legacy shortcut for selecting encoding (prefer `http.encoding` / `stream.encoding`). |
-| `sampleRate`* | `DeepgramTextToSpeechSampleRate`                 | Both             | Legacy shortcut for sample rate (prefer transport-specific overrides).        |
-| `bitRate`*    | `DeepgramTextToSpeechBitRate`                    | HTTP             | Legacy shortcut for bit rate.                                                 |
-| `container`*  | `DeepgramTextToSpeechContainer`                  | HTTP             | Legacy shortcut for container.                                                |
-| `format`*     | `'mp3' \| 'wav' \| 'opus' \| 'pcm' \| (string & {})` | HTTP         | Legacy shortcut for container/format.                                        |
-| `callback`*   | `string`                                         | HTTP             | Legacy shortcut for callback URL.                                             |
-| `callbackMethod`* | `DeepgramTextToSpeechCallbackMethod`         | HTTP             | Legacy shortcut for callback method.                                          |
-| `speed`*      | `number`                                         | Both             | Legacy shortcut for playback speed (prefer `http.speed` / `stream.speed`).    |
-| `tag`*        | `string \| string[]`                             | HTTP             | Legacy shortcut for the usage-reporting tag (prefer `http.tag`).              |
-| `mipOptOut`*  | `boolean`                                        | Both             | Legacy shortcut for Model Improvement Program opt-out.                        |
 | `queryParams` | `Record<string, string \| number \| boolean>`   | Both             | Shared query string parameters appended to all requests.                      |
-| `http`        | `DeepgramTextToSpeechHttpOptions`                | HTTP             | Fine-grained HTTP synthesis configuration.                                    |
-| `stream`      | `DeepgramTextToSpeechStreamOptions`              | Streaming        | Fine-grained streaming configuration.                                         |
-
-<small>*Marked fields are supported for backwards compatibility but the transport-specific `http`/`stream` options are recommended.</small>
+| `http`        | `DeepgramTextToSpeechHttpOptions`                | HTTP             | HTTP synthesis configuration.                                                 |
+| `stream`      | `DeepgramTextToSpeechStreamOptions`              | Streaming        | Streaming configuration.                                                      |
 
 </details>
 
@@ -1207,13 +1291,13 @@ const {
 
 | Option         | Type                                               | Purpose                                                                       |
 | -------------- | -------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `model`        | `DeepgramTextToSpeechModel \| (string & {})`       | Select the TTS voice/model.                                                   |
+| `model`        | `DeepgramTextToSpeechModel`                        | Aura or Flux voice (`flux-*` uses `/v2/speak`).                               |
 | `encoding`     | `DeepgramTextToSpeechHttpEncoding`                 | Output audio codec.                                                           |
 | `sampleRate`   | `DeepgramTextToSpeechSampleRate`                   | Output sample rate in Hz.                                                     |
 | `container`    | `DeepgramTextToSpeechContainer`                    | Wrap audio in a container (`'none'`, `'wav'`, `'ogg'`).                       |
-| `format`       | `'mp3' \| 'wav' \| 'opus' \| 'pcm' \| (string & {})` | Deprecated alias for `container`.                                             |
 | `bitRate`      | `DeepgramTextToSpeechBitRate`                      | Bit rate for compressed formats (e.g. MP3).                                   |
-| `speed`        | `number`                                           | Playback speed multiplier (`0.7`–`1.5`, default `1`).                         |
+| `speed`        | `number`                                           | Speed multiplier (Aura-2 `0.7`–`1.5`, Flux `0.5`–`1.5`, default `1`).        |
+| `expressivity` | `number`                                           | Flux only (beta): `-2` (calm) to `2` (animated).                              |
 | `tag`          | `string \| string[]`                               | Label the request for usage reporting.                                       |
 | `callback`     | `string`                                           | Webhook URL invoked after synthesis completes.                                |
 | `callbackMethod` | `DeepgramTextToSpeechCallbackMethod`             | HTTP verb used for the callback.                                              |
@@ -1227,13 +1311,15 @@ const {
 
 | Option       | Type                                               | Purpose                                                                 |
 | ------------ | -------------------------------------------------- | ----------------------------------------------------------------------- |
-| `model`      | `DeepgramTextToSpeechModel \| (string & {})`       | Select the streaming voice/model.                                      |
+| `model`      | `DeepgramTextToSpeechModel`                        | Aura or Flux voice (`flux-*` uses `/v2/speak`).                        |
 | `encoding`   | `DeepgramTextToSpeechStreamEncoding`               | Output PCM encoding for streamed chunks.                               |
 | `sampleRate` | `DeepgramTextToSpeechSampleRate`                   | Output sample rate in Hz.                                              |
-| `speed`      | `number`                                           | Playback speed multiplier (`0.7`–`1.5`, default `1`).                  |
+| `speed`      | `number`                                           | Speed multiplier (Aura-2 `0.7`–`1.5`, Flux `0.5`–`1.5`, default `1`). |
+| `expressivity` | `number`                                         | Flux only (beta): `-2` (calm) to `2` (animated).                       |
+| `tag`        | `string \| string[]`                               | Flux only: label the session for usage reporting.                      |
 | `mipOptOut`  | `boolean`                                          | Opt out of the Model Improvement Program.                              |
 | `queryParams`| `Record<string, string \| number \| boolean>`     | Extra query parameters appended to the streaming URL.                  |
-| `autoFlush`  | `boolean`                                          | Automatically flush after each `sendText` call (defaults to `true`).   |
+| `autoFlush`  | `boolean`                                          | Flush after each `sendText` call (defaults to `true`). On Flux a flush ends the turn. |
 
 </details>
 
@@ -1276,7 +1362,7 @@ const {
 | `options` | `UseDeepgramTextIntelligenceOptions` | Defaults merged into every `analyze` call. |
 | `onBeforeAnalyze` | `() => void` | Before the request is dispatched. |
 | `onAnalyzeSuccess` | `(response: DeepgramTextIntelligenceResponse) => void` | Result arrives. |
-| `onAnalyzeError` | `(error: unknown) => void` | Request fails. |
+| `onAnalyzeError` | `(error: Error) => void` | Request fails. |
 | `trackState` | `boolean` | Enable `state` return (default `false`). |
 
 #### Options (`UseDeepgramTextIntelligenceOptions`)
@@ -1461,7 +1547,16 @@ const stt = useDeepgramSpeechToText({
       renderInterim(text);
     }
   },
+  onTurnInfo: (turn) => {
+    if (turn.event === 'StartOfTurn') stopAgentSpeech(); // barge-in
+  },
 });
+
+// Push-to-talk release: close the turn without waiting for the model.
+stt.forceEndTurn();
+
+// Tighten turn detection mid-stream without reconnecting.
+stt.configure({ eotThreshold: 0.8, keyterms: ['Deepgram'] });
 ```
 
 ### Pause and resume a live stream
@@ -1523,10 +1618,13 @@ const { transcribeFile } = useDeepgramSpeechToText({
 });
 
 const pick = async () => {
-  const f = await DocumentPicker.getDocumentAsync({ type: 'audio/*' });
-  if (f.type === 'success') {
-    await transcribeFile(f, { summarize: 'v2', topics: true, intents: true });
-  }
+  const res = await DocumentPicker.getDocumentAsync({ type: 'audio/*' });
+  if (res.canceled) return;
+  const { uri, name, mimeType } = res.assets[0]!;
+  await transcribeFile(
+    { uri, name, type: mimeType },
+    { summarize: 'v2', topics: true, intents: true }
+  );
 };
 ```
 
@@ -1536,14 +1634,14 @@ const pick = async () => {
 subtitle document — zero dependencies, pure functions. Request
 `utterances: true` for the best cue boundaries (the helpers fall back to
 word-level chunking otherwise), and pass `speakerLabels: true` alongside
-`diarize: true` to prefix cues with `Speaker N:`.
+`diarize_model=latest` to prefix cues with `Speaker N:`.
 
 ```tsx
 import { toSRT, toWebVTT } from 'react-native-deepgram';
 import type { DeepgramPrerecordedResponse } from 'react-native-deepgram';
 
 const res = await fetch(
-  'https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&utterances=true&diarize=true',
+  'https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&utterances=true&diarize_model=latest',
   {
     method: 'POST',
     headers: {
@@ -1562,7 +1660,7 @@ const vtt = toWebVTT(response, { speakerLabels: true });
 ### Split a transcript by speaker
 
 `toSpeakerSegments` folds the word-level diarization data of a response
-requested with `diarize: true` into per-speaker segments (it returns `[]`
+requested with `diarize_model` into per-speaker segments (it returns `[]`
 when diarization wasn't requested). Pairs naturally with the caption
 helpers' `speakerLabels` option above.
 
@@ -1599,7 +1697,8 @@ stopListening(); // onRecordingComplete fires with the finalized WAV
 ```
 
 > Want a specific destination? Pass a `path` (with or without a `file://`
-> prefix) — e.g. from `expo-file-system`'s `documentDirectory`. Only
+> prefix) — e.g. `new File(Paths.document, 'take.wav').uri` from
+> `expo-file-system`. Only
 > uncompressed `wav` is supported today.
 
 ### Voice Agent with a client-side function
@@ -1628,15 +1727,17 @@ const agent = useDeepgramVoiceAgent({
       // ...listen + speak providers
     },
   },
-  onFunctionCallRequest: async (call) => {
-    const args = JSON.parse(call.arguments);
-    const data = await fetchWeather(args.city);
-    agent.sendFunctionCallResponse({
-      id: call.function_call_id,
-      name: call.name,
-      content: JSON.stringify(data),
-      client_side: true,
-    });
+  onFunctionCallRequest: async ({ functions }) => {
+    for (const fn of functions) {
+      if (!fn.client_side || fn.name !== 'get_weather' || !fn.id) continue;
+      const args = JSON.parse(fn.arguments ?? '{}');
+      const data = await fetchWeather(args.city);
+      agent.sendFunctionCallResponse({
+        id: fn.id,
+        name: fn.name,
+        content: JSON.stringify(data),
+      });
+    }
   },
 });
 ```
@@ -1664,25 +1765,27 @@ flushStream();         // emit audio for the buffered text immediately
 closeStreamGracefully(); // finish remaining audio then close
 ```
 
-### One-shot HTTP TTS as MP3
+### One-shot HTTP TTS
 
-`synthesize` plays the audio through the device speaker **and** resolves with
-the buffer:
+`synthesize` resolves with the audio buffer. With the default raw `linear16`
+output (`container: 'none'`) and `autoPlayAudio` on, it also plays it through
+the native player at the requested sample rate. Compressed formats (MP3, Opus,
+AAC, FLAC) and WAV containers are returned without playback; play those with
+your own audio player.
 
 ```tsx
 const { synthesize } = useDeepgramTextToSpeech({
   options: {
     http: {
       model: 'aura-2-asteria-en',
-      encoding: 'mp3',
-      bitRate: 48000,
-      container: 'none',
+      encoding: 'linear16',
+      sampleRate: 24000,
     },
   },
 });
 
 const buffer = await synthesize('Hello from Deepgram.');
-// `buffer` is an ArrayBuffer of MP3 bytes — also played out loud.
+// `buffer` is raw 24 kHz PCM16 — also played out loud.
 ```
 
 ### Save TTS to a file without playing it
@@ -1692,8 +1795,8 @@ to disk). Unlike `synthesize`, it **does not** play the audio, and identical
 prompts are served from an in-memory LRU cache:
 
 ```tsx
-import { arrayBufferToBase64 } from 'react-native-deepgram';
-import * as FileSystem from 'expo-file-system';
+import { useDeepgramTextToSpeech } from 'react-native-deepgram';
+import { File, Paths } from 'expo-file-system';
 
 const { synthesizeToBytes } = useDeepgramTextToSpeech({
   options: {
@@ -1707,22 +1810,26 @@ const { synthesizeToBytes } = useDeepgramTextToSpeech({
 });
 
 const { data, mimeType } = await synthesizeToBytes('Hello from Deepgram.');
-const uri = `${FileSystem.documentDirectory}greeting.mp3`;
-await FileSystem.writeAsStringAsync(uri, arrayBufferToBase64(data), {
-  encoding: FileSystem.EncodingType.Base64,
-});
-// `uri` now points to a saved MP3 file; `mimeType` is "audio/mpeg".
+const file = new File(Paths.document, 'greeting.mp3');
+file.write(new Uint8Array(data));
+// `file.uri` now points to a saved MP3 file; `mimeType` is "audio/mpeg".
+// (Need base64 instead, e.g. for an upload? Use `arrayBufferToBase64(data)`.)
 ```
 
 ### Run text intelligence on a transcript
 
+`analyze` resolves when the request finishes; the response arrives through
+`onAnalyzeSuccess`:
+
 ```tsx
 const { analyze } = useDeepgramTextIntelligence({
   options: { summarize: true, topics: true, sentiment: true },
+  onAnalyzeSuccess: ({ results }) => {
+    console.log(results.summary?.text, results.topics, results.sentiments?.average);
+  },
 });
 
-const result = await analyze({ text: longTranscript });
-console.log(result.summary, result.topics, result.sentiment);
+await analyze({ text: longTranscript });
 ```
 
 ### Use the Management API to rotate keys
@@ -1767,24 +1874,24 @@ useDeepgramVoiceAgent({
 
 ### "I hear myself echo back through the agent's mic"
 
-You're not using hardware echo cancellation. If you're going through `useDeepgramVoiceAgent`, this should already be on — make sure you're testing on a **physical device**: VPIO (iOS hardware AEC) is not available in the iOS Simulator. If you're calling `Deepgram.startRecording` yourself, pass `{ enableVoiceProcessing: true }`.
+You're not using hardware echo cancellation. If you're going through `useDeepgramVoiceAgent`, this should already be on — make sure you're testing on a **physical device**: the iOS Simulator has no VPIO and the Android emulator exposes no `AcousticEchoCanceler`, so the mic picks up the agent through your computer's speakers and barge-in cuts it off. Use headphones when testing on a simulator/emulator. If you're calling `Deepgram.startRecording` yourself, pass `{ enableVoiceProcessing: true }`.
 
 ### "Recording stops when the app goes to the background"
 
-Make sure `backgroundAudio` is left at its default (`true`) on the Expo plugin and that you've re-prebuilt + re-installed after enabling it. On Android, check that the foreground-service notification is showing while audio is active — if it isn't, the manifest entries from the plugin haven't been picked up.
+Make sure `backgroundAudio` is left at its default (`true`) on the Expo plugin and that you've re-prebuilt + re-installed after enabling it. On Android, check that the foreground-service notification is showing while audio is active — if it isn't, the manifest entries haven't been picked up: the service needs the `FOREGROUND_SERVICE*` permissions **and** `android:foregroundServiceType` including `mediaPlayback` on `DeepgramAudioService` (see [Background audio](#background-audio)); without them the service is skipped.
 
 ### "Permission denied" on `startListening` / `connect`
 
 The microphone permission was never granted. Either:
 
-- Trigger the permission prompt manually (`requestMicPermission` is exported from the package), or
+- Trigger the permission prompt manually (`Deepgram.requestRecordPermission()` on iOS, `PermissionsAndroid.request(RECORD_AUDIO)` on Android), or
 - Make sure you're not on a secondary entitlement profile that strips `NSMicrophoneUsageDescription`.
 
 If you previously denied the prompt, the OS will silently refuse subsequent requests until the user re-enables the permission in Settings.
 
 ### Flux v2 returns no transcripts
 
-Flux only accepts a small set of query parameters. The hook builds the right query map for you when you set `apiVersion: 'v2'`, but if you bypass it, ensure you're sending only Flux-supported keys (`model`, `encoding`, `sample_rate`, `eager_eot_threshold`, `eot_threshold`, `eot_timeout_ms`, `keyterm`, `mip_opt_out`, `tag`).
+Flux only accepts a small set of query parameters. The hook builds the right query map for you when you set `apiVersion: 'v2'`, but if you bypass it, ensure you're sending only Flux-supported keys (`model`, `encoding`, `sample_rate`, `eager_eot_threshold`, `eot_threshold`, `eot_timeout_ms`, `keyterm`, `language_hint`, `numerals`, `profanity_filter`, `redact`, `mip_opt_out`, `measurements`, `tag`).
 
 ### "Sound disappears when I unplug headphones"
 
@@ -1795,24 +1902,19 @@ That's intentional. The native module pauses playback on `OldDeviceUnavailable` 
 Native edits require a rebuild. With the example app:
 
 ```bash
-yarn example:prebuild
-yarn example:pods      # iOS only
+yarn example:prebuild  # also runs pod install on iOS
 yarn example:ios       # or example:android
 ```
 
 If things look stale, `yarn example:clean` wipes the generated native folders and caches.
 
-### "Cannot read property 'startRecording' of undefined"
+### "react-native-deepgram: the native module is not linked"
 
-The native module didn't link. In a bare RN project, run `cd ios && pod install` and rebuild. In Expo, you must use a development build (the package can't run in Expo Go because it has native code).
+The native module didn't link. In a bare RN project, run `cd ios && pod install` and rebuild, and make sure the New Architecture is enabled. In Expo, you must use a development build (the package can't run in Expo Go because it has native code).
 
 ### Android builds fail with "minSdk too low"
 
 Bump `android/build.gradle` `minSdkVersion` to **24** (Android 7.0). Some required `AudioRecord.Builder` APIs aren't available below that.
-
-### Example app: `Failed to resolve plugin for module "react-native-deepgram"`
-
-You ran `yarn prebuild` from `example/` but the workspace symlink wasn't created. This repo's root `postinstall` script creates it for you — re-run `yarn install` from the **repo root**, then retry `yarn example:prebuild`. (Yarn 3 with `nmHoistingLimits: workspaces` skips the symlink because the root workspace and the dependency share a name; the postinstall script restores it.)
 
 ---
 
@@ -1823,6 +1925,13 @@ The repository includes an Expo-managed playground under `example/` that wires u
 <p align="center">
   <img src="assets/example.webp" alt="react-native-deepgram example app showing the Voice Agent, Speech-to-Text, Text-to-Speech, Text Intelligence, and Management screens" width="100%" />
 </p>
+
+| Screen | Shows |
+| --- | --- |
+| Voice Agent | Nova or Flux listening, Flux/Aura voices (switchable live), barge-in, end-of-turn, injected user/agent messages, per-turn latency report, audio routing, telemetry |
+| Speech-to-Text | Nova-3, Nova-3 multilingual or Flux; Flux turn events and End turn; live keyterm `configure()`; pause/resume, metering, record-to-file, file transcription, SRT/WebVTT captions and speaker segments |
+| Text-to-Speech | HTTP synthesis, save to file, Aura and Flux streaming with Flux interrupt, mid-stream speed and expressivity |
+| Text Intelligence / Management | Summaries, topics, intents, sentiment; the Management API |
 
 ### 1. Install workspace dependencies
 
@@ -1855,10 +1964,10 @@ These run `expo run:<platform>` under the hood, which generates the native proje
 Once the app is installed on the device/simulator you can iterate on the library's TypeScript without rebuilding native code:
 
 ```bash
-yarn example           # just starts Metro; the app on the device picks up changes
+yarn start             # just starts Metro; the app on the device picks up changes
 ```
 
-Edit anything in `src/**/*.ts` (or `example/src/**`) and the app reloads via Fast Refresh. Metro is configured to resolve `react-native-deepgram` directly to `src/` for this purpose.
+Edit anything in `src/**/*.ts` (or `example/src/**`) and the app reloads via Fast Refresh. Metro resolves `react-native-deepgram` to `src/` through the `react-native-deepgram-source` export condition.
 
 > Want to test the published JS build instead? Run `yarn build` once, then start with `yarn example:start:built` (sets `DEEPGRAM_USE_BUILT=1` so Metro resolves to `lib/module`).
 
@@ -1868,14 +1977,13 @@ You only need to recompile when you change one of:
 
 - `ios/**/*.{m,mm,h,swift}` or any podspec
 - `android/**/*.{kt,java,xml,gradle}`
-- `app.plugin.js` / `plugin/src/**` (Expo config plugin)
+- `app.plugin.js` / `plugin/src/**` (Expo config plugin — run `yarn build:plugin` first)
 - `example/app.json` or any other prebuild input
 
 Rebuild flow:
 
 ```bash
-yarn example:prebuild  # regenerates ios/ + android/ from app.json
-yarn example:pods      # (iOS) reinstall pods after native deps change
+yarn example:prebuild  # regenerates ios/ + android/ from app.json (and installs pods)
 yarn example:ios       # or yarn example:android
 ```
 
@@ -1885,12 +1993,12 @@ If the app gets into a weird state, `yarn example:clean` wipes the generated nat
 
 | Script | Purpose |
 | ------ | ------- |
-| `yarn example` | Start Metro bundler (Fast Refresh) |
+| `yarn start` | Start Metro bundler (Fast Refresh) |
 | `yarn example:ios` / `yarn example:android` | Build + run on simulator/device |
 | `yarn example:prebuild` | Regenerate native projects from `app.json` |
-| `yarn example:pods` | Reinstall iOS pods after native dep changes |
 | `yarn example:start:built` | Run Metro pointed at `lib/module` instead of `src/` |
 | `yarn example:clean` | Wipe generated native folders + caches |
+| `yarn example <cmd>` | Run any script/binary in the example workspace (e.g. `yarn example expo install`) |
 
 ---
 
@@ -1899,6 +2007,8 @@ If the app gets into a weird state, `yarn example:clean` wipes the generated nat
 - ✅ Speech-to-Text (WebSocket + REST)
 - ✅ Speech-to-Text v2 / Flux streaming support
 - ✅ Text-to-Speech (HTTP synthesis + WebSocket streaming)
+- ✅ Flux TTS (`/v2/speak`) with interrupt and mid-stream configure
+- ✅ New Architecture TurboModule with typed native events
 - ✅ Text Intelligence (summaries, topics, sentiment, intents)
 - ✅ Management API wrapper
 - ✅ Hardware echo cancellation (iOS VPIO + Android `VOICE_COMMUNICATION`)

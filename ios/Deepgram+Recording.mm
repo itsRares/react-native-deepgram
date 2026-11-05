@@ -104,37 +104,21 @@ static NSData *DGMakeWavHeader(uint32_t sampleRate, uint16_t channels,
       return;
     }
 
-    if (!weakSelf.hasListeners) {
-      DGLogDebug(@"[Deepgram] emitPCMChunk: no listeners, dropping %lu bytes",
-                 (unsigned long)chunkCopy.length);
-      return;
-    }
-
-    if (!weakSelf.bridge || !weakSelf.callableJSModules) {
-      DGLogDebug(
-          @"[Deepgram] Skipping DeepgramAudioPCM event (bridge not ready)");
-      return;
-    }
-
     DGLogDebug(@"[Deepgram] emitPCMChunk: sending %lu bytes sampleRate=%d",
                (unsigned long)chunkCopy.length, sampleRate);
     NSString *b64 = [chunkCopy base64EncodedStringWithOptions:0];
-    [weakSelf sendEventWithName:@"DeepgramAudioPCM"
-                           body:@{
-                             @"b64" : b64,
-                             @"sampleRate" : @(sampleRate)
-                           }];
+    [weakSelf emitOnAudioPCM:@{@"b64" : b64, @"sampleRate" : @(sampleRate)}];
   });
 }
 
 /**
  * Compute a normalized RMS amplitude (0..1) over a PCM16 buffer and emit it as
- * a `DeepgramAudioLevel` event, throttled to `meteringIntervalSeconds`. Called
+ * an `onAudioLevel` event, throttled to `meteringIntervalSeconds`. Called
  * from the shared capture sink so the AudioQueue (STT) and AVAudioEngine
  * (Voice Agent) paths are metered identically.
  */
 - (void)emitAudioLevelForPCM:(NSData *)pcmData {
-  if (!self.meteringEnabled || !self.hasListeners) {
+  if (!self.meteringEnabled) {
     return;
   }
   if (!pcmData || pcmData.length < sizeof(int16_t)) {
@@ -171,14 +155,10 @@ static NSData *DGMakeWavHeader(uint32_t sampleRate, uint16_t channels,
   dispatch_queue_t queue = self.emitterQueue ?: dispatch_get_main_queue();
   dispatch_async(queue, ^{
     __typeof(self) strongSelf = weakSelf;
-    if (!strongSelf || !strongSelf.hasListeners) {
+    if (!strongSelf) {
       return;
     }
-    if (!strongSelf.bridge || !strongSelf.callableJSModules) {
-      return;
-    }
-    [strongSelf sendEventWithName:@"DeepgramAudioLevel"
-                             body:@{@"level" : @(level)}];
+    [strongSelf emitOnAudioLevel:@{@"level" : @(level)}];
   });
 }
 
@@ -230,7 +210,7 @@ static NSData *DGMakeWavHeader(uint32_t sampleRate, uint16_t channels,
                @"bytes remaining=%lu",
                (unsigned long)chunk.length,
                (unsigned long)self.pendingPCMBuffer.length);
-    [self emitPCMChunk:chunk sampleRate:self.currentSampleRate];
+    [self emitPCMChunk:chunk sampleRate:self.captureSampleRate];
   }
 }
 
@@ -244,7 +224,7 @@ static NSData *DGMakeWavHeader(uint32_t sampleRate, uint16_t channels,
   [self.pendingPCMBuffer setLength:0];
   DGLogDebug(@"[Deepgram] flushPendingPCM: flushing %lu bytes",
              (unsigned long)remaining.length);
-  [self emitPCMChunk:remaining sampleRate:self.currentSampleRate];
+  [self emitPCMChunk:remaining sampleRate:self.captureSampleRate];
 }
 
 - (void)cleanupRecordingQueue {
@@ -318,7 +298,7 @@ static NSData *DGMakeWavHeader(uint32_t sampleRate, uint16_t channels,
   }
 
   // (Re)create the file and write the placeholder header (data size = 0).
-  NSData *header = DGMakeWavHeader((uint32_t)MAX(1, self.currentSampleRate), 1,
+  NSData *header = DGMakeWavHeader((uint32_t)MAX(1, self.captureSampleRate), 1,
                                    16, 0);
   if (![fm createFileAtPath:path contents:header attributes:nil]) {
     if (outError) {
@@ -368,7 +348,7 @@ static NSData *DGMakeWavHeader(uint32_t sampleRate, uint16_t channels,
   @try {
     // Patch the header with the final size and sample rate.
     NSData *header =
-        DGMakeWavHeader((uint32_t)MAX(1, self.currentSampleRate), 1, 16,
+        DGMakeWavHeader((uint32_t)MAX(1, self.captureSampleRate), 1, 16,
                         dataBytes);
     [handle seekToFileOffset:0];
     [handle writeData:header];
@@ -416,11 +396,11 @@ static NSData *DGMakeWavHeader(uint32_t sampleRate, uint16_t channels,
  * AudioQueue path remains for STT-only usage where AEC is undesirable.
  */
 - (BOOL)startEngineCaptureAndReturnError:(NSError **)outError {
-  self.currentSampleRate = 16000;
+  self.captureSampleRate = 16000;
 
   if (!self.audioEngine) {
     NSError *engineError = nil;
-    if (![self setupAudioEngineWithSampleRate:self.currentSampleRate
+    if (![self setupAudioEngineWithSampleRate:self.captureSampleRate
                                      channels:1
                         enableVoiceProcessing:YES
                                         error:&engineError]) {
@@ -473,6 +453,12 @@ static NSData *DGMakeWavHeader(uint32_t sampleRate, uint16_t channels,
   }
 
   AVAudioFormat *hwFormat = [inputNode inputFormatForBus:0];
+  if ((!hwFormat || hwFormat.sampleRate <= 0) && self.audioEngine.isRunning) {
+    // Input node created after a playback-only start: it only gets a real
+    // hardware format once the engine is restarted.
+    [self.audioEngine stop];
+    hwFormat = [inputNode inputFormatForBus:0];
+  }
   if (!hwFormat || hwFormat.sampleRate <= 0) {
     if (outError) {
       *outError =
@@ -487,7 +473,7 @@ static NSData *DGMakeWavHeader(uint32_t sampleRate, uint16_t channels,
 
   AVAudioFormat *outputFormat =
       [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatInt16
-                                       sampleRate:self.currentSampleRate
+                                       sampleRate:self.captureSampleRate
                                          channels:1
                                       interleaved:YES];
   self.captureOutputFormat = outputFormat;
@@ -589,7 +575,7 @@ static NSData *DGMakeWavHeader(uint32_t sampleRate, uint16_t channels,
   }
 
   self.chunkSizeBytes =
-      (NSUInteger)MAX(1, (int)round(self.currentSampleRate * 2 * 0.2));
+      (NSUInteger)MAX(1, (int)round(self.captureSampleRate * 2 * 0.2));
   self.engineCaptureActive = YES;
 
   if (!self.audioEngine.isRunning) {

@@ -1,15 +1,7 @@
 import { render, act } from '@testing-library/react-native';
 import { createElement } from 'react';
-import { NativeModules } from 'react-native';
 import { useDeepgramSpeechToText } from '../useDeepgramSpeechToText';
 import type { UseDeepgramSpeechToTextReturn } from '../types';
-
-jest.mock('../NativeDeepgram', () => ({
-  Deepgram: {
-    startRecording: jest.fn(() => Promise.resolve()),
-    stopRecording: jest.fn(() => Promise.resolve()),
-  },
-}));
 
 jest.mock('../helpers/askMicPermission', () => ({
   askMicPermission: jest.fn(() => Promise.resolve(true)),
@@ -55,10 +47,6 @@ function Harness(): null {
 
 describe('useDeepgramSpeechToText – live measurements', () => {
   beforeAll(() => {
-    (NativeModules as Record<string, unknown>).Deepgram = {
-      addListener: jest.fn(),
-      removeListeners: jest.fn(),
-    };
     globalRef.WebSocket = MockWebSocket;
     globalRef.__DEEPGRAM_API_KEY__ = 'test-key';
   });
@@ -68,7 +56,7 @@ describe('useDeepgramSpeechToText – live measurements', () => {
   });
 
   it('forwards measurements into the v1 live query URL', async () => {
-    render(createElement(Harness));
+    await render(createElement(Harness));
 
     await act(async () => {
       await hookApi.startListening({ measurements: true });
@@ -78,7 +66,7 @@ describe('useDeepgramSpeechToText – live measurements', () => {
   });
 
   it('forwards measurements into the v2 (Flux) live query URL', async () => {
-    render(createElement(Harness));
+    await render(createElement(Harness));
 
     await act(async () => {
       await hookApi.startListening({ apiVersion: 'v2', measurements: true });
@@ -88,7 +76,7 @@ describe('useDeepgramSpeechToText – live measurements', () => {
   });
 
   it('omits measurements from the live query when it is not provided', async () => {
-    render(createElement(Harness));
+    await render(createElement(Harness));
 
     await act(async () => {
       await hookApi.startListening();

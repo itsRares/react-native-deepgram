@@ -5,6 +5,147 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - 3.0.0
+
+### Breaking
+
+- **New Architecture only.** The native module is now a TurboModule generated
+  from `src/NativeDeepgram.ts` (iOS `NativeDeepgramSpec`, Android
+  `NativeDeepgramSpec`); the legacy bridge is no longer supported.
+- **Minimum versions:** React 19, React Native 0.80 (needed for
+  `CodegenTypes.EventEmitter` in the spec).
+- **ESM-only build.** The CommonJS output (`lib/commonjs`) is gone; the package
+  ships `lib/module` plus types and a `react-native-deepgram-source` export
+  condition.
+- **Unified native events.** The per-platform `DeepgramAudioPCM`/`AudioChunk`,
+  `DeepgramAudioLevel`/`AudioLevel`, `DeepgramRouteChange` and
+  `DeepgramInterruption` device events are replaced by typed TurboModule
+  emitters (`Deepgram.onAudioPCM`, `onAudioLevel`, `onAudioRouteChange`,
+  `onAudioInterruption`). `addAudioRouteChangeListener` and
+  `addInterruptionListener` keep working unchanged.
+- The separate iOS `MicPermission` native module is removed; use
+  `Deepgram.requestRecordPermission()`.
+- `Deepgram.stopPlayer()` now returns a `Promise<void>`.
+- Removed the deprecated `diarize` boolean from `DeepgramLiveListenOptions`
+  and `DeepgramPrerecordedOptions` (Deepgram deprecated it, and requests that
+  set both are rejected). Use `diarizeModel: 'latest'`.
+- Text-to-speech: removed the deprecated top-level
+  `UseDeepgramTextToSpeechOptions` shortcuts (`model`, `encoding`,
+  `sampleRate`, `bitRate`, `speed`, `tag`, `container`, `format`, `callback`,
+  `callbackMethod`, `mipOptOut`); use `options.http` / `options.stream`. Also
+  removed `http.format`, the `DeepgramTextToSpeechEncoding` alias and the
+  legacy `{ type: 'Text' }` stream message (send `Speak`).
+- `DeepgramTextToSpeechStreamFlushedMessage.sequence_id` is optional (Flux
+  sends `speech_id` instead).
+- Voice Agent: removed the deprecated `agent.language` setting type (use
+  `agent.listen.provider.language`; Deepgram voices take the language from
+  the model name). `createAgentSettings({ language })` now sets the listen
+  provider language. `injectAgentMessage`'s second argument is typed as
+  `DeepgramVoiceAgentInjectBehavior` (or an options object).
+
+### Added
+
+- **Speech-to-text `configure()`** updates keyterms and numerals (Nova-3 and
+  Flux) or Flux end-of-turn thresholds and language hints mid-stream, and
+  **`forceEndTurn()`** closes a Flux turn on demand.
+- `onTurnInfo` (every Flux `TurnInfo`, including `StartOfTurn`,
+  `EagerEndOfTurn` and `TurnResumed`) and `onMessage` (every live JSON
+  message, e.g. `ConfigureSuccess` / `Warning`) callbacks, plus the
+  `DeepgramFluxTurnInfo`, `DeepgramLiveConfigureOptions` and
+  `DeepgramListenServerMessage` types.
+- Flux streams forward `numerals` and `redact`; `languageHint` now also works
+  for Nova-3 multilingual (`language: 'multi'`), live and pre-recorded.
+- `nova-3-pharma` model and the `aggressive_numbers` redaction type.
+- **Flux TTS.** `flux-*` voices stream from `/v2/speak` and synthesize via
+  the v2 REST endpoint. New `interrupt({ playbackOffsetMs })` (stops local
+  playback, cancels the turn and drops in-flight audio) and
+  `configureStream({ speed })`, `expressivity` and stream `tag` options, and
+  `onSpeechStarted` / `onSpeechMetadata` / `onSpeechInterrupted` /
+  `onStreamMessage` callbacks. On Flux `clearStream()` interrupts and
+  `sendText()` keeps whitespace so streamed LLM tokens join correctly.
+- Model types list the Flux TTS English voices (any `flux-*` voice is
+  accepted) and the Aura-2 German, French, Dutch, Italian, Japanese and new
+  Spanish voices.
+- **Voice Agent:** `forceEndTurn()`, `updateThinkLive()`, dynamic and
+  `'interrupt'` agent-message injection, and `onLatencyReport`,
+  `onFunctionCallCancelled`, `onFrustrationDetected`, `onThinkLiveUpdated`
+  and `onCustomFromThinkProvider` callbacks. Settings types cover listen
+  providers v1/v2 (`language`), speak providers (`version`, `speed`,
+  `expressivity`, fallback arrays), `think_live`, function `defer_until_eot`,
+  think `reasoning_mode` / `version`, `thought_signature`, the new
+  `ConversationText` language fields, and `agent` as a stored agent
+  configuration id (kept as-is across `Update*` calls and reconnects).
+- `createAgentSettings` gains `speakModel` and builds Flux-correct providers
+  (`version: 'v2'`, no `smart_format`) for `flux-*` models.
+
+### Changed
+
+- Toolchain: Yarn 4, TypeScript 6, Jest 30, react-native-builder-bob 0.44,
+  Turbo 2, release-it 21, lefthook 2 (pre-commit hooks re-enabled).
+- Android `build.gradle` follows the current library template (AGP/Kotlin come
+  from the app; `compileSdk` 36).
+- Example app on Expo SDK 58 / React Native 0.88, using the library
+  template's monorepo Metro/Babel setup (no more `postinstall` symlink),
+  the new `expo-file-system` API and `react-native-safe-area-context`.
+- CI builds the example app for Android and iOS.
+- The speech-to-text, text-to-speech and Voice Agent hooks share one
+  socket/reconnect, KeepAlive, session-stats and PCM pipeline (`src/internal`)
+  instead of three copies; the hooks shrank from 1067/748/1551 to
+  570/415/698 lines.
+- `UseDeepgramVoiceAgentProps` / `UseDeepgramVoiceAgentReturn` are now part of
+  the exported types.
+
+### Fixed
+
+- `Deepgram.stopRecording()` resolves `null` on both platforms when no file
+  was recorded (iOS previously resolved `undefined`).
+- Stopping/disconnecting while the auth token is still resolving no longer
+  opens a socket afterwards (all streaming hooks); events from superseded
+  connections are ignored.
+- `startListening()` / `startStreaming()` close a still-running session first
+  instead of leaking it, and stop the recorder if the session was stopped
+  while it was starting.
+- Voice Agent: muting during an interruption no longer runs two KeepAlive
+  timers; `disconnect()` reports `connectionState: 'disconnected'` right away;
+  `agent.speak` provider arrays are no longer turned into objects when
+  settings are copied.
+- Speech-to-text: an error status is no longer overwritten with `idle` when the
+  socket closes afterwards; socket construction failures reach `onError`.
+- `stats.bytesSent` counts the exact decoded frame size; odd-length PCM frames
+  no longer throw; typed-array views passed to `sendMedia` / audio playback
+  respect their byte offset.
+- Native build warnings (unused iOS simulator variables, Android
+  `Notification.Builder` deprecation).
+- iOS: microphone PCM events kept reporting the playback rate after
+  `startPlayer` (e.g. 24000 for 16 kHz audio), which made the Voice Agent
+  downsample the mic by 2 and record-to-file WAV headers carry the wrong rate.
+  Capture and playback rates are now tracked separately.
+- iOS: a streaming TTS / Voice Agent player no longer deactivates the audio
+  session whenever its queue drains or after `interruptAudio()`; that stopped
+  the engine and silently dropped the next turn's audio. A stopped engine is
+  restarted on the next chunk, and one-shot playback resolves once the audio
+  has actually been played.
+- iOS: all spec methods and audio-session notifications run on one serial
+  queue (previously main and the module queue raced on engine/session state).
+- iOS: Voice Agent capture on the simulator failed with "Invalid input
+  format".
+- iOS: rejected promises and recoverable session fallbacks no longer raise a
+  development RedBox (logged as warnings).
+- `synthesize()` sets the player to the requested sample rate (it played at
+  whatever rate the last session used), respects `autoPlayAudio`, and no
+  longer plays compressed or WAV-wrapped audio as noise.
+- Voice Agent: `audio.input.sample_rate` above the 16 kHz microphone capture
+  rate is capped at 16000 with a warning (the audio was sent sped up).
+- Android: the keep-alive service is no longer sticky (a system restart left
+  a notification with no audio behind it), and `startPlayer` cannot throw.
+- Android: apps with `backgroundAudio: false` crashed on Android 10–13 when
+  another library declared `FOREGROUND_SERVICE`. The keep-alive service now
+  also requires `DeepgramAudioService` to declare a `mediaPlayback`
+  `foregroundServiceType`, and only adds the microphone type when declared.
+- `useDeepgramManagement` types now include the optional `query` argument
+  (pagination, date windows, filters) the methods already accepted at
+  runtime, via the new `DeepgramManagementQuery` type.
+
 ## [2.4.0] - 2026-07-08
 
 ### Added

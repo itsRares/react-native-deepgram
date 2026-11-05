@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -66,7 +67,29 @@ class DeepgramAudioService : Service() {
       ) {
         return false
       }
+      // Other libraries often declare FOREGROUND_SERVICE, so the permission alone
+      // doesn't prove opt-in. Without a declared mediaPlayback type startForeground
+      // throws, and the unfulfilled startForegroundService() then kills the app.
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+        declaredServiceTypes(context) and
+        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK == 0
+      ) {
+        return false
+      }
       return true
+    }
+
+    /** The `android:foregroundServiceType` bits declared for this service (0 when unreadable). */
+    private fun declaredServiceTypes(context: Context): Int {
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return 0
+      return try {
+        context.packageManager
+          .getServiceInfo(ComponentName(context, DeepgramAudioService::class.java), 0)
+          .foregroundServiceType
+      } catch (e: Exception) {
+        Log.w(TAG, "Unable to read foreground-service configuration", e)
+        0
+      }
     }
 
     fun start(context: Context, withMicrophone: Boolean) {
@@ -115,6 +138,8 @@ class DeepgramAudioService : Service() {
         // which is opt-in — degrade to playback-only when it's absent.
         var serviceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
         if (withMicrophone &&
+          declaredServiceTypes(this) and
+          ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE != 0 &&
           (Build.VERSION.SDK_INT < 34 ||
             isPermissionDeclared(this, PERMISSION_FGS_MICROPHONE))
         ) {
@@ -132,7 +157,9 @@ class DeepgramAudioService : Service() {
       return START_NOT_STICKY
     }
 
-    return START_STICKY
+    // Not sticky: a restart by the system would show the notification without
+    // any audio session behind it.
+    return START_NOT_STICKY
   }
 
   private fun createNotificationChannelIfNeeded() {
@@ -156,6 +183,7 @@ class DeepgramAudioService : Service() {
     val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       Notification.Builder(this, CHANNEL_ID)
     } else {
+      @Suppress("DEPRECATION") // Channel-less builder is the only option below API 26.
       Notification.Builder(this)
     }
 

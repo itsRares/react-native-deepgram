@@ -1,19 +1,5 @@
-import { NativeModules } from 'react-native';
-
-const mockSetAudioRoute = jest.fn((_route: string) => Promise.resolve());
-const mockGetAudioRoute = jest.fn(() => Promise.resolve('earpiece'));
-
-jest.mock('../NativeDeepgram', () => {
-  const actual = jest.requireActual('../NativeDeepgram');
-  return {
-    ...actual,
-    Deepgram: {
-      setAudioRoute: (route: string) => mockSetAudioRoute(route),
-      getAudioRoute: () => mockGetAudioRoute(),
-    },
-  };
-});
-
+import { DeviceEventEmitter } from 'react-native';
+import NativeDeepgram from '../NativeDeepgram';
 import {
   setAudioRoute,
   getAudioRoute,
@@ -21,14 +7,10 @@ import {
 } from '../audioRoute';
 import { DeepgramError } from '../types/errors';
 
-describe('audioRoute', () => {
-  beforeAll(() => {
-    (NativeModules as Record<string, unknown>).Deepgram = {
-      addListener: jest.fn(),
-      removeListeners: jest.fn(),
-    };
-  });
+const mockSetAudioRoute = jest.mocked(NativeDeepgram!.setAudioRoute);
+const mockGetAudioRoute = jest.mocked(NativeDeepgram!.getAudioRoute);
 
+describe('audioRoute', () => {
   beforeEach(() => {
     mockSetAudioRoute.mockClear();
     mockGetAudioRoute.mockClear();
@@ -40,6 +22,7 @@ describe('audioRoute', () => {
   });
 
   it('returns the active route from the native module', async () => {
+    mockGetAudioRoute.mockResolvedValueOnce('earpiece');
     await expect(getAudioRoute()).resolves.toBe('earpiece');
   });
 
@@ -52,10 +35,16 @@ describe('audioRoute', () => {
     expect(err.code).toBe('invalid_data');
   });
 
-  it('subscribes and unsubscribes route-change listeners', () => {
-    const sub = addAudioRouteChangeListener(() => {});
-    expect(typeof sub.remove).toBe('function');
-    expect(() => sub.remove()).not.toThrow();
+  it('delivers route changes until the subscription is removed', () => {
+    const listener = jest.fn();
+    const sub = addAudioRouteChangeListener(listener);
+
+    DeviceEventEmitter.emit('onAudioRouteChange', { route: 'bluetooth' });
+    sub.remove();
+    DeviceEventEmitter.emit('onAudioRouteChange', { route: 'speaker' });
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith('bluetooth');
   });
 });
 

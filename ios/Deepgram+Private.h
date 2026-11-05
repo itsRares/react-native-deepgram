@@ -3,7 +3,6 @@
 
 #import <AVFoundation/AVFoundation.h>
 #import <AudioToolbox/AudioQueue.h>
-#import <React/RCTEventEmitter.h>
 
 #include <atomic>
 
@@ -28,12 +27,17 @@ NS_ASSUME_NONNULL_BEGIN
 // Recording
 @property(nonatomic, strong, nullable) NSMutableData *pendingPCMBuffer;
 @property(nonatomic, strong) dispatch_queue_t emitterQueue;
+// Serial queue for every spec method and system notification, so session /
+// engine state is never mutated from two threads at once.
+@property(nonatomic, strong) dispatch_queue_t audioQueue;
+@property(nonatomic, strong) NSMutableArray<id<NSObject>> *notificationTokens;
 @property(nonatomic, assign) NSUInteger chunkSizeBytes;
-@property(atomic, assign) BOOL hasListeners;
 @property(atomic, assign) BOOL appIsActive;
+// Rate of the emitted mic PCM; independent of the playback rate below.
+@property(atomic, assign) int captureSampleRate;
 
 // Microphone metering: when enabled, the recording sink computes a normalized
-// RMS amplitude (0..1) and emits `DeepgramAudioLevel` at most once per
+// RMS amplitude (0..1) and emits `onAudioLevel` at most once per
 // interval (`lastMeterEmitTime` throttles via CACurrentMediaTime()).
 @property(atomic, assign) BOOL meteringEnabled;
 @property(atomic, assign) NSTimeInterval meteringIntervalSeconds;
@@ -53,6 +57,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, strong, nullable) AVAudioPlayerNode *playerNode;
 @property(nonatomic, strong, nullable) AVAudioFormat *playbackFormat;
 @property(atomic, assign) BOOL isPlaying;
+// Playback (player node) sample rate.
 @property(atomic, assign) int currentSampleRate;
 @property(nonatomic, assign) BOOL audioSessionConfigured;
 // YES while capturing via `audioEngine.inputNode` (Voice Agent / duplex):
@@ -76,12 +81,11 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, strong, nullable) AVAudioConverter *captureConverter;
 @property(nonatomic, strong, nullable) AVAudioFormat *captureOutputFormat;
 
-// Workers exported in Deepgram.mm (RCT_EXPORT_METHOD) but invoked before
-// their textual definition; declared here to avoid -Wundeclared-selector.
-- (void)startPlayer:(nonnull NSNumber *)sampleRate
-           channels:(nonnull NSNumber *)channels;
+// Spec methods invoked before their textual definition in Deepgram.mm;
+// declared here to avoid -Wundeclared-selector.
+- (void)startPlayer:(double)sampleRate channels:(double)channels;
 - (void)stopPlayer:(nullable RCTPromiseResolveBlock)resolve
-          rejecter:(nullable RCTPromiseRejectBlock)reject;
+            reject:(nullable RCTPromiseRejectBlock)reject;
 
 @end
 

@@ -1,173 +1,107 @@
-import { useRef, useCallback, useState, useEffect } from 'react';
-import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
-import { Deepgram } from './NativeDeepgram';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Deepgram, type AudioLevelEvent, type AudioPCMEvent } from './native';
 import { askMicPermission } from './helpers/askMicPermission';
-import { addInterruptionListener } from './interruption';
+import { hasAuthConfigured, resolveAuthHeader } from './helpers/auth';
+import {
+  addInterruptionListener,
+  type DeepgramInterruptionEvent,
+} from './interruption';
+import { createKeepAlive } from './internal/keepAlive';
+import {
+  buildLiveConfigureMessage,
+  buildLiveListenUrl,
+  buildPrerecordedUrl,
+  DEFAULT_LIVE_SAMPLE_RATE,
+  resolveLiveOptions,
+} from './internal/listenQuery';
+import {
+  ManagedSocket,
+  type ManagedSocketOptions,
+} from './internal/managedSocket';
+import {
+  computeDownsampleFactor,
+  decodePcmFrame,
+  NATIVE_SAMPLE_RATE,
+} from './internal/pcm';
+import { useLatest } from './internal/useLatest';
+import { useSessionStats } from './internal/useSessionStats';
+import { toDeepgramError } from './types/errors';
 import type {
+  DeepgramLiveConfigureOptions,
   DeepgramLiveListenOptions,
   DeepgramPrerecordedOptions,
   DeepgramPrerecordedSource,
-  DeepgramTranscriptEvent,
-  SessionStats,
   UseDeepgramSpeechToTextProps,
   UseDeepgramSpeechToTextReturn,
 } from './types';
-import { createEmptySessionStats } from './types/deepgram/stats';
-import { getBaseUrl, getBaseWss, getV2BaseWss } from './constants';
-import { buildParams, resolveAuthHeader, hasAuthConfigured } from './helpers';
-import { toDeepgramError } from './types';
 
-const DEFAULT_SAMPLE_RATE = 16_000;
-const BASE_NATIVE_SAMPLE_RATE = 16_000;
-
-const KEEPALIVE_INTERVAL_MS = 5_000;
-
-const STATS_PUBLISH_INTERVAL_MS = 1_000;
-
-const DEFAULT_RECONNECT = {
-  enabled: false,
-  maxRetries: 5,
-  initialDelayMs: 500,
-  maxDelayMs: 10_000,
-};
-
-let cachedEmitter: NativeEventEmitter | null = null;
-const getEmitter = (): NativeEventEmitter => {
-  if (!cachedEmitter) {
-    cachedEmitter = new NativeEventEmitter(NativeModules.Deepgram);
-  }
-  return cachedEmitter;
-};
-const AUDIO_EVENT = Platform.select({
-  ios: 'DeepgramAudioPCM',
-  android: 'AudioChunk',
-  default: 'DeepgramAudioPCM',
-}) as string;
-const AUDIO_LEVEL_EVENT = Platform.select({
-  ios: 'DeepgramAudioLevel',
-  android: 'AudioLevel',
-  default: 'DeepgramAudioLevel',
-}) as string;
 const DEFAULT_METERING_INTERVAL_MS = 100;
 
-const computeDownsampleFactor = (
-  target: number | undefined,
-  base: number = BASE_NATIVE_SAMPLE_RATE
-) => {
-  if (!target || target >= base || base <= 0) {
-    return 1;
+type ListenStatus = 'idle' | 'loading' | 'listening' | 'transcribing' | 'error';
+
+interface LiveSession {
+  active: boolean;
+  recording: boolean;
+  url: string;
+  apiVersion: 'v1' | 'v2';
+  targetSampleRate: number;
+  nativeSampleRate: number;
+  downsampleFactor: number;
+  paused: boolean;
+  interrupted: boolean;
+  lastPartial: string;
+  lastFinal: string;
+  subscriptions: Array<{ remove: () => void }>;
+}
+
+const createLiveSession = (): LiveSession => ({
+  active: false,
+  recording: false,
+  url: '',
+  apiVersion: 'v1',
+  targetSampleRate: DEFAULT_LIVE_SAMPLE_RATE,
+  nativeSampleRate: NATIVE_SAMPLE_RATE,
+  downsampleFactor: 1,
+  paused: false,
+  interrupted: false,
+  lastPartial: '',
+  lastFinal: '',
+  subscriptions: [],
+});
+
+/** Request body for pre-recorded audio: a hosted URL or an uploaded file. */
+function buildPrerecordedBody(file: DeepgramPrerecordedSource): {
+  body: FormData | string;
+  contentType?: string;
+} {
+  if (typeof file === 'string' || 'url' in file) {
+    const url = typeof file === 'string' ? file : file.url;
+    return { body: JSON.stringify({ url }), contentType: 'application/json' };
   }
-  const ratio = Math.round(base / target);
-  return ratio > 0 ? ratio : 1;
-};
-
-const downsampleInt16 = (
-  data: Int16Array<ArrayBufferLike>,
-  factor: number
-): Int16Array<ArrayBufferLike> => {
-  if (factor <= 1 || data.length < factor) {
-    return data;
+  const formData = new FormData();
+  if (file instanceof Blob) {
+    formData.append('audio', file, 'recording.wav');
+  } else {
+    formData.append('audio', {
+      uri: file.uri,
+      name: file.name || 'recording.wav',
+      type: file.type || 'audio/wav',
+    });
   }
+  return { body: formData };
+}
 
-  const downsampled = new Int16Array(Math.floor(data.length / factor));
-  for (let i = 0; i < downsampled.length; i++) {
-    downsampled[i] = data[i * factor]!;
-  }
-  return downsampled as Int16Array<ArrayBufferLike>;
-};
-
-export function useDeepgramSpeechToText({
-  onBeforeStart = () => {},
-  onStart = () => {},
-  onTranscript = () => {},
-  onError = () => {},
-  onEnd = () => {},
-  onBeforeTranscribe = () => {},
-  onTranscribeSuccess = () => {},
-  onTranscribeError = () => {},
-  live = {},
-  prerecorded = {},
-  trackState = false,
-  trackTranscript = false,
-  trackStats = false,
-  metering = {},
-  onAudioLevel = () => {},
-  recordToFile = {},
-  onRecordingComplete = () => {},
-  reconnect = {},
-  onReconnecting = () => {},
-  onReconnected = () => {},
-  onInterruption,
-}: UseDeepgramSpeechToTextProps = {}): UseDeepgramSpeechToTextReturn {
-  const [internalState, setInternalState] = useState<{
-    status: 'idle' | 'loading' | 'listening' | 'transcribing' | 'error';
-    error: Error | null;
-  }>({
-    status: 'idle',
-    error: null,
-  });
-  const ws = useRef<WebSocket | null>(null);
-  const audioSub = useRef<ReturnType<NativeEventEmitter['addListener']> | null>(
-    null
-  );
-  const meterSub = useRef<ReturnType<NativeEventEmitter['addListener']> | null>(
-    null
-  );
-  const interruptionSub = useRef<{ remove: () => void } | null>(null);
-  const apiVersionRef = useRef<'v1' | 'v2'>('v1');
-  const pausedRef = useRef(false);
-  const interruptedRef = useRef(false);
-  const keepAliveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const userClosedRef = useRef(false);
-  const reconnectAttemptRef = useRef(0);
-  const reconnectingRef = useRef(false);
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const wsGenerationRef = useRef(0);
-  const liveUrlRef = useRef('');
-  const reconnectConfigRef = useRef({ ...DEFAULT_RECONNECT });
-  const connectSocketRef = useRef<() => void>(() => {});
-  const nativeInputSampleRateRef = useRef(BASE_NATIVE_SAMPLE_RATE);
-  const targetSampleRateRef = useRef(DEFAULT_SAMPLE_RATE);
-  const downsampleFactorRef = useRef(1);
-  const lastPartialTranscriptRef = useRef('');
-  const lastFinalTranscriptRef = useRef('');
-
-  const statsRef = useRef<SessionStats>(createEmptySessionStats());
-  const statsDirtyRef = useRef(false);
-  const statsTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const onTranscriptRef = useRef(onTranscript);
-  const onErrorRef = useRef(onError);
-  const onEndRef = useRef(onEnd);
-  const onStartRef = useRef(onStart);
-  const onBeforeStartRef = useRef(onBeforeStart);
-  const onBeforeTranscribeRef = useRef(onBeforeTranscribe);
-  const onTranscribeSuccessRef = useRef(onTranscribeSuccess);
-  const onTranscribeErrorRef = useRef(onTranscribeError);
-  const onReconnectingRef = useRef(onReconnecting);
-  const onReconnectedRef = useRef(onReconnected);
-
-  onTranscriptRef.current = onTranscript;
-  onErrorRef.current = onError;
-  onEndRef.current = onEnd;
-  onStartRef.current = onStart;
-  onBeforeStartRef.current = onBeforeStart;
-  onBeforeTranscribeRef.current = onBeforeTranscribe;
-  onTranscribeSuccessRef.current = onTranscribeSuccess;
-  onTranscribeErrorRef.current = onTranscribeError;
-  onReconnectingRef.current = onReconnecting;
-  onReconnectedRef.current = onReconnected;
-  reconnectConfigRef.current = { ...DEFAULT_RECONNECT, ...reconnect };
-
-  const onAudioLevelRef = useRef(onAudioLevel);
-  onAudioLevelRef.current = onAudioLevel;
-  const onRecordingCompleteRef = useRef(onRecordingComplete);
-  onRecordingCompleteRef.current = onRecordingComplete;
-  const recordToFileRef = useRef(recordToFile);
-  recordToFileRef.current = recordToFile;
-
-  const onInterruptionRef = useRef(onInterruption);
-  onInterruptionRef.current = onInterruption;
+export function useDeepgramSpeechToText(
+  props: UseDeepgramSpeechToTextProps = {}
+): UseDeepgramSpeechToTextReturn {
+  const {
+    trackState = false,
+    trackTranscript = false,
+    trackStats = false,
+    metering = {},
+  } = props;
+  const propsRef = useLatest(props);
+  const flagsRef = useLatest({ trackState, trackTranscript });
 
   const meteringEnabled = metering.enabled === true;
   const meteringIntervalMs =
@@ -175,399 +109,317 @@ export function useDeepgramSpeechToText({
       ? metering.intervalMs
       : DEFAULT_METERING_INTERVAL_MS;
 
-  const [internalTranscript, setInternalTranscript] = useState('');
-  const [internalInterimTranscript, setInternalInterimTranscript] =
-    useState('');
-  const [internalIsPaused, setInternalIsPaused] = useState(false);
-  const [internalAudioLevel, setInternalAudioLevel] = useState(0);
-  const [internalRecordingUri, setInternalRecordingUri] = useState<
-    string | undefined
-  >(undefined);
-  const [internalStats, setInternalStats] = useState<SessionStats>(
-    createEmptySessionStats
+  const [state, setState] = useState<{
+    status: ListenStatus;
+    error: Error | null;
+  }>({ status: 'idle', error: null });
+  const [transcript, setTranscript] = useState('');
+  const [interimTranscript, setInterimTranscript] = useState('');
+  const [isPaused, setIsPaused] = useState(false);
+  const [audioLevel, setAudioLevel] = useState(0);
+  const [recordingUri, setRecordingUri] = useState<string | undefined>();
+  const stats = useSessionStats(trackStats);
+
+  const sessionRef = useRef<LiveSession>(createLiveSession());
+  const endFiredRef = useRef(true);
+  const socketEvents = useRef<ManagedSocketOptions | null>(null);
+
+  const [socket] = useState(
+    () =>
+      new ManagedSocket({
+        url: () => sessionRef.current.url,
+        reconnect: () => propsRef.current.reconnect,
+        onOpen: (info) => socketEvents.current?.onOpen(info),
+        onMessage: (message) => socketEvents.current?.onMessage(message),
+        onError: (error) => socketEvents.current?.onError(error),
+        onReconnecting: (attempt) =>
+          socketEvents.current?.onReconnecting?.(attempt),
+        onClose: (info) => socketEvents.current?.onClose(info),
+      })
   );
 
-  const endFiredRef = useRef(false);
-
-  const stopStatsPublisher = useCallback(() => {
-    if (statsTimerRef.current != null) {
-      clearInterval(statsTimerRef.current);
-      statsTimerRef.current = null;
-    }
-  }, []);
-
-  const startStatsPublisher = useCallback(() => {
-    if (statsTimerRef.current != null) {
-      return;
-    }
-    statsTimerRef.current = setInterval(() => {
-      if (!statsDirtyRef.current) {
-        return;
-      }
-      statsDirtyRef.current = false;
-      setInternalStats({ ...statsRef.current });
-    }, STATS_PUBLISH_INTERVAL_MS);
-  }, []);
-
-  // Deepgram closes a live socket that gets no audio and no KeepAlive frame
-  // for ~10 s (NET-0001); keep it warm while paused/interrupted.
-  const startKeepAlive = useCallback(() => {
-    if (keepAliveTimerRef.current != null) {
-      return;
-    }
-    keepAliveTimerRef.current = setInterval(() => {
-      const s = ws.current;
-      if (!s || s.readyState !== WebSocket.OPEN) {
-        return;
-      }
+  const trySendJson = useCallback(
+    (message: object): boolean => {
       try {
-        s.send(JSON.stringify({ type: 'KeepAlive' }));
-      } catch {}
-    }, KEEPALIVE_INTERVAL_MS);
-  }, []);
+        return socket.sendJson(message);
+      } catch {
+        // The socket is closing; the frame is not needed anymore.
+        return false;
+      }
+    },
+    [socket]
+  );
 
-  const stopKeepAlive = useCallback(() => {
-    if (keepAliveTimerRef.current != null) {
-      clearInterval(keepAliveTimerRef.current);
-      keepAliveTimerRef.current = null;
-    }
-  }, []);
+  const [keepAlive] = useState(() =>
+    createKeepAlive(() => trySendJson({ type: 'KeepAlive' }))
+  );
 
-  const closeResources = useCallback(() => {
-    if (keepAliveTimerRef.current != null) {
-      clearInterval(keepAliveTimerRef.current);
-      keepAliveTimerRef.current = null;
-    }
-    stopStatsPublisher();
-    if (reconnectTimerRef.current != null) {
-      clearTimeout(reconnectTimerRef.current);
-      reconnectTimerRef.current = null;
-    }
-    reconnectingRef.current = false;
-    pausedRef.current = false;
-    interruptedRef.current = false;
-    if (audioSub.current) {
-      audioSub.current.remove();
-      audioSub.current = null;
-    }
-    if (meterSub.current) {
-      meterSub.current.remove();
-      meterSub.current = null;
-    }
-    if (interruptionSub.current) {
-      interruptionSub.current.remove();
-      interruptionSub.current = null;
-    }
-    Deepgram.setMeteringEnabled?.(false, 0);
-    Deepgram.stopRecording()
-      .then((result) => {
-        const uri = result?.recordingUri;
-        if (uri) {
-          onRecordingCompleteRef.current?.(uri);
-          if (trackState) {
-            setInternalRecordingUri(uri);
-          }
-        }
-      })
-      .catch(() => {});
-    nativeInputSampleRateRef.current = BASE_NATIVE_SAMPLE_RATE;
-    targetSampleRateRef.current = DEFAULT_SAMPLE_RATE;
-    downsampleFactorRef.current = 1;
-    lastPartialTranscriptRef.current = '';
-    lastFinalTranscriptRef.current = '';
-    if (
-      apiVersionRef.current === 'v2' &&
-      ws.current?.readyState === WebSocket.OPEN
-    ) {
-      try {
-        ws.current.send(JSON.stringify({ type: 'CloseStream' }));
-      } catch {}
-    }
-    ws.current?.close(1000, 'cleanup');
-    ws.current = null;
-    apiVersionRef.current = 'v1';
-    if (trackState) {
-      setInternalState((prev) => ({ ...prev, status: 'idle' }));
-      setInternalIsPaused(false);
-      setInternalAudioLevel(0);
-    }
-    if (trackTranscript) {
-      setInternalTranscript('');
-      setInternalInterimTranscript('');
-    }
-  }, [stopStatsPublisher, trackState, trackTranscript]);
+  const setStatus = useCallback(
+    (status: ListenStatus, error: Error | null = null) => {
+      if (flagsRef.current.trackState) {
+        setState({ status, error });
+      }
+    },
+    [flagsRef]
+  );
 
   const fireEnd = useCallback(() => {
     if (endFiredRef.current) return;
     endFiredRef.current = true;
-    onEndRef.current();
-  }, []);
+    propsRef.current.onEnd?.();
+  }, [propsRef]);
 
-  const emitTranscript = useCallback(
-    (transcript: unknown, isFinal: boolean, raw: unknown) => {
-      if (typeof transcript !== 'string') {
-        return;
-      }
+  const { stopPublishing, update: updateStats } = stats;
+  const teardown = useCallback(() => {
+    const session = sessionRef.current;
+    sessionRef.current = createLiveSession();
+    keepAlive.clear();
+    stopPublishing();
+    session.subscriptions.forEach((subscription) => subscription.remove());
 
-      const normalized = transcript.trim();
-      if (!normalized) {
-        return;
-      }
+    if (session.recording) {
+      Deepgram.setMeteringEnabled(false, 0);
+      Deepgram.stopRecording()
+        .then((result) => {
+          const uri = result?.recordingUri;
+          if (!uri) return;
+          propsRef.current.onRecordingComplete?.(uri);
+          if (flagsRef.current.trackState) {
+            setRecordingUri(uri);
+          }
+        })
+        .catch(() => {});
+    }
 
-      if (
-        statsRef.current.firstResultMs == null &&
-        statsRef.current.connectedAtMs != null
-      ) {
-        statsRef.current.firstResultMs =
-          Date.now() - statsRef.current.connectedAtMs;
-        statsDirtyRef.current = true;
-      }
+    if (session.apiVersion === 'v2') {
+      trySendJson({ type: 'CloseStream' });
+    }
+    socket.close();
 
-      if (isFinal) {
-        if (lastFinalTranscriptRef.current === normalized) {
-          return;
-        }
-        lastFinalTranscriptRef.current = normalized;
-        lastPartialTranscriptRef.current = '';
-      } else {
-        if (lastPartialTranscriptRef.current === normalized) {
-          return;
-        }
-        lastPartialTranscriptRef.current = normalized;
-      }
+    if (flagsRef.current.trackState) {
+      setState((prev) => ({ ...prev, status: 'idle' }));
+      setIsPaused(false);
+      setAudioLevel(0);
+    }
+    if (flagsRef.current.trackTranscript) {
+      setTranscript('');
+      setInterimTranscript('');
+    }
+  }, [flagsRef, keepAlive, propsRef, socket, stopPublishing, trySendJson]);
 
-      const info: DeepgramTranscriptEvent = { isFinal: !!isFinal, raw };
-
-      if (trackTranscript) {
-        if (isFinal) {
-          setInternalTranscript((prev) => {
-            const next = prev ? `${prev} ${normalized}` : normalized;
-            return next.trim();
-          });
-          setInternalInterimTranscript('');
-        } else {
-          setInternalInterimTranscript(normalized);
-        }
-      }
-
-      onTranscriptRef.current(normalized, info);
-
-      if (isFinal) {
-        lastPartialTranscriptRef.current = '';
-      }
-    },
-    [trackTranscript]
-  );
-
-  const handleDisconnect = useCallback(
-    (event?: { code?: number }, failureError?: Error) => {
-      const cfg = reconnectConfigRef.current;
-      const shouldReconnect =
-        !userClosedRef.current &&
-        cfg.enabled &&
-        event?.code !== 1000 &&
-        reconnectAttemptRef.current < cfg.maxRetries;
-
-      if (shouldReconnect) {
-        const attempt = reconnectAttemptRef.current;
-        reconnectAttemptRef.current = attempt + 1;
-        reconnectingRef.current = true;
-        statsRef.current.reconnects += 1;
-        statsDirtyRef.current = true;
-
-        const backoff = Math.min(
-          cfg.maxDelayMs,
-          cfg.initialDelayMs * 2 ** attempt
-        );
-        const delay = backoff + Math.random() * backoff * 0.25;
-
-        if (trackState) {
-          setInternalState({ status: 'loading', error: null });
-        }
-        onReconnectingRef.current(attempt + 1);
-
-        if (reconnectTimerRef.current != null) {
-          clearTimeout(reconnectTimerRef.current);
-        }
-        reconnectTimerRef.current = setTimeout(() => {
-          reconnectTimerRef.current = null;
-          connectSocketRef.current();
-        }, delay);
-        return;
-      }
-
-      const exhausted =
-        !userClosedRef.current &&
-        cfg.enabled &&
-        reconnectAttemptRef.current >= cfg.maxRetries;
-
-      closeResources();
-
-      if (exhausted) {
-        const err = toDeepgramError(
-          new Error(
-            `Deepgram reconnect failed after ${cfg.maxRetries} attempts`
-          )
-        );
-        onErrorRef.current(err);
-        if (trackState) {
-          setInternalState({ status: 'error', error: err });
-        }
-      } else if (failureError && trackState) {
-        setInternalState({
-          status: 'error',
-          error: toDeepgramError(failureError),
-        });
-      }
-
+  const failSession = useCallback(
+    (error: Error) => {
+      const dgError = toDeepgramError(error);
+      propsRef.current.onError?.(dgError);
+      teardown();
+      setStatus('error', dgError);
       fireEnd();
     },
-    [closeResources, fireEnd, trackState]
+    [fireEnd, propsRef, setStatus, teardown]
   );
 
-  const connectSocket = useCallback(() => {
-    const isV2 = apiVersionRef.current === 'v2';
-    const generation = wsGenerationRef.current + 1;
-    wsGenerationRef.current = generation;
+  const emitTranscript = (text: unknown, isFinal: boolean, raw: unknown) => {
+    if (typeof text !== 'string') return;
+    const normalized = text.trim();
+    if (!normalized) return;
 
-    resolveAuthHeader()
-      .then((authHeader) => {
-        // A newer connection attempt superseded this one; abandon it.
-        if (generation !== wsGenerationRef.current) {
-          return;
-        }
+    stats.markFirstResult();
 
-        let socket: WebSocket;
-        try {
-          socket = new (WebSocket as any)(liveUrlRef.current, undefined, {
-            headers: { Authorization: authHeader },
-          });
-        } catch {
-          handleDisconnect();
-          return;
-        }
-        ws.current = socket;
+    const session = sessionRef.current;
+    if (isFinal) {
+      if (session.lastFinal === normalized) return;
+      session.lastFinal = normalized;
+      session.lastPartial = '';
+    } else {
+      if (session.lastPartial === normalized) return;
+      session.lastPartial = normalized;
+    }
 
-        socket.onopen = () => {
-          if (generation !== wsGenerationRef.current) return;
-          const wasReconnecting = reconnectingRef.current;
-          reconnectingRef.current = false;
-          reconnectAttemptRef.current = 0;
-          statsRef.current.connectedAtMs = Date.now();
-          statsDirtyRef.current = true;
-          onStartRef.current();
-          if (wasReconnecting) {
-            onReconnectedRef.current();
-          }
-          if (trackState) {
-            setInternalState({ status: 'listening', error: null });
-          }
-        };
+    if (trackTranscript) {
+      if (isFinal) {
+        setTranscript((prev) => (prev ? `${prev} ${normalized}` : normalized));
+        setInterimTranscript('');
+      } else {
+        setInterimTranscript(normalized);
+      }
+    }
 
-        socket.onmessage = (ev: any) => {
-          if (generation !== wsGenerationRef.current) return;
-          if (typeof ev.data !== 'string') {
-            // Binary frame (not expected from the STT APIs) — count bytes only.
-            const size =
-              typeof ev?.data?.byteLength === 'number' ? ev.data.byteLength : 0;
-            if (size > 0) {
-              statsRef.current.bytesReceived += size;
-              statsDirtyRef.current = true;
-            }
-            return;
-          }
-          try {
-            const msg = JSON.parse(ev.data);
-            if (isV2) {
-              // Flux (v2) envelope:
-              // https://developers.deepgram.com/reference/speech-to-text-api/listen-flux
-              if (msg.type === 'Error') {
-                const description = msg.description || 'Deepgram stream error';
-                const streamError = toDeepgramError(new Error(description));
-                onErrorRef.current(streamError);
-                // Fatal stream error: tear down without auto-reconnecting.
-                userClosedRef.current = true;
-                closeResources();
-                if (trackState) {
-                  setInternalState({
-                    status: 'error',
-                    error: streamError,
-                  });
-                }
-                fireEnd();
-                return;
-              }
+    propsRef.current.onTranscript?.(normalized, { isFinal, raw });
+  };
 
-              if (msg.type !== 'TurnInfo') {
-                return;
-              }
-
-              const transcript = msg.transcript;
-              if (typeof transcript === 'string' && transcript.length > 0) {
-                const isFinal = msg.event === 'EndOfTurn';
-                emitTranscript(transcript, isFinal, msg);
-              }
-              return;
-            }
-
-            const transcript = msg.channel?.alternatives?.[0]?.transcript;
-            if (typeof transcript === 'string') {
-              const isFinal =
-                msg.is_final === true || msg.speech_final === true;
-              emitTranscript(transcript, Boolean(isFinal), msg);
-            }
-          } catch {}
-        };
-
-        socket.onerror = (err: any) => {
-          if (generation !== wsGenerationRef.current) return;
-          onErrorRef.current(toDeepgramError(err));
-        };
-
-        socket.onclose = (event: any) => {
-          if (generation !== wsGenerationRef.current) return;
-          handleDisconnect(event);
-        };
-      })
-      .catch((err) => {
-        if (generation !== wsGenerationRef.current) return;
-        const authError = toDeepgramError(err);
-        onErrorRef.current(authError);
-        handleDisconnect(undefined, authError);
+  socketEvents.current = {
+    url: () => sessionRef.current.url,
+    reconnect: () => propsRef.current.reconnect,
+    onOpen: ({ reconnected }) => {
+      stats.update((s) => {
+        s.connectedAtMs = Date.now();
       });
-  }, [closeResources, emitTranscript, fireEnd, handleDisconnect, trackState]);
+      propsRef.current.onStart?.();
+      if (reconnected) {
+        propsRef.current.onReconnected?.();
+      }
+      setStatus('listening');
+    },
+    onMessage: ({ data }) => {
+      if (typeof data !== 'string') {
+        // Binary frames are not expected from the STT APIs; count them only.
+        const size = (data as ArrayBuffer | null)?.byteLength;
+        if (typeof size === 'number' && size > 0) {
+          stats.update((s) => {
+            s.bytesReceived += size;
+          });
+        }
+        return;
+      }
 
-  connectSocketRef.current = connectSocket;
-
-  const startListening = useCallback(
-    async (overrideOptions: DeepgramLiveListenOptions = {}) => {
+      let msg: any;
       try {
-        onBeforeStartRef.current();
+        msg = JSON.parse(data);
+      } catch {
+        return;
+      }
+      if (typeof msg?.type === 'string') {
+        propsRef.current.onMessage?.(msg);
+      }
+
+      if (sessionRef.current.apiVersion === 'v2') {
+        // https://developers.deepgram.com/reference/speech-to-text-api/listen-flux
+        if (msg.type === 'Error') {
+          failSession(new Error(msg.description || 'Deepgram stream error'));
+        } else if (msg.type === 'TurnInfo') {
+          propsRef.current.onTurnInfo?.(msg);
+          emitTranscript(msg.transcript, msg.event === 'EndOfTurn', msg);
+        }
+        return;
+      }
+
+      emitTranscript(
+        msg.channel?.alternatives?.[0]?.transcript,
+        msg.is_final === true || msg.speech_final === true,
+        msg
+      );
+    },
+    onError: (error) => propsRef.current.onError?.(error),
+    onReconnecting: (attempt) => {
+      stats.update((s) => {
+        s.reconnects += 1;
+      });
+      setStatus('loading');
+      propsRef.current.onReconnecting?.(attempt);
+    },
+    onClose: ({ exhausted, maxRetries, error }) => {
+      if (sessionRef.current.active) {
+        teardown();
+        if (exhausted) {
+          const reconnectError = toDeepgramError(
+            new Error(`Deepgram reconnect failed after ${maxRetries} attempts`)
+          );
+          propsRef.current.onError?.(reconnectError);
+          setStatus('error', reconnectError);
+        } else if (error) {
+          setStatus('error', error);
+        }
+      }
+      fireEnd();
+    },
+  };
+
+  const handleAudio = useCallback(
+    (event: AudioPCMEvent) => {
+      const session = sessionRef.current;
+      if (session.paused) {
+        updateStats((s) => {
+          s.framesDropped += 1;
+        });
+        return;
+      }
+      if (
+        event.sampleRate > 0 &&
+        event.sampleRate !== session.nativeSampleRate
+      ) {
+        session.nativeSampleRate = event.sampleRate;
+        session.downsampleFactor = computeDownsampleFactor(
+          session.targetSampleRate,
+          event.sampleRate
+        );
+      }
+
+      const frame = decodePcmFrame(event.b64, session.downsampleFactor);
+      const sent = socket.send(frame.audio);
+      updateStats((s) => {
+        if (sent) {
+          s.bytesSent += frame.decodedBytes;
+        } else {
+          // Socket not open (e.g. reconnect gap); the frame is lost.
+          s.framesDropped += 1;
+        }
+      });
+    },
+    [socket, updateStats]
+  );
+
+  const handleAudioLevel = useCallback(
+    ({ level }: AudioLevelEvent) => {
+      const normalized = Number.isFinite(level) ? level : 0;
+      if (flagsRef.current.trackState) {
+        setAudioLevel(normalized);
+      }
+      propsRef.current.onAudioLevel?.(normalized);
+    },
+    [flagsRef, propsRef]
+  );
+
+  // Native capture pauses during system interruptions; KeepAlive frames
+  // bridge Deepgram's idle timeout until the interruption ends.
+  const handleInterruption = useCallback(
+    (event: DeepgramInterruptionEvent) => {
+      propsRef.current.onInterruption?.(event);
+      const session = sessionRef.current;
+      if (event.type === 'began') {
+        if (session.interrupted) return;
+        session.interrupted = true;
+        // Flux is turn-based and has no Finalize message.
+        if (session.apiVersion !== 'v2') {
+          trySendJson({ type: 'Finalize' });
+        }
+        keepAlive.hold('interruption');
+      } else if (event.type === 'ended') {
+        if (!session.interrupted) return;
+        session.interrupted = false;
+        keepAlive.release('interruption');
+      } else {
+        // Permanent focus loss: the native session is gone.
+        teardown();
+        fireEnd();
+      }
+    },
+    [fireEnd, keepAlive, propsRef, teardown, trySendJson]
+  );
+
+  const { reset: resetStats, startPublishing } = stats;
+  const startListening = useCallback(
+    async (overrides: DeepgramLiveListenOptions = {}) => {
+      try {
+        propsRef.current.onBeforeStart?.();
+        if (sessionRef.current.active) {
+          teardown();
+        }
+        const session = createLiveSession();
+        session.active = true;
+        sessionRef.current = session;
         endFiredRef.current = false;
-        pausedRef.current = false;
-        userClosedRef.current = false;
-        reconnectAttemptRef.current = 0;
-        reconnectingRef.current = false;
-        statsRef.current = createEmptySessionStats();
-        statsDirtyRef.current = false;
-        if (trackStats) {
-          setInternalStats({ ...statsRef.current });
-          startStatsPublisher();
-        }
+        resetStats();
+        startPublishing();
+        setStatus('loading');
         if (trackState) {
-          setInternalState({ status: 'loading', error: null });
-          setInternalIsPaused(false);
+          setIsPaused(false);
+          setRecordingUri(undefined);
         }
-        lastPartialTranscriptRef.current = '';
-        lastFinalTranscriptRef.current = '';
 
         const granted = await askMicPermission();
         if (!granted) throw new Error('Microphone permission denied');
 
-        const rtf = recordToFileRef.current;
-        if (trackState) {
-          setInternalRecordingUri(undefined);
-        }
+        const rtf = propsRef.current.recordToFile ?? {};
         await Deepgram.startRecording(
           rtf.enabled === true
             ? {
@@ -577,467 +429,149 @@ export function useDeepgramSpeechToText({
                   format: rtf.format,
                 },
               }
-            : undefined
+            : {}
         );
+        session.recording = true;
 
         if (!hasAuthConfigured()) throw new Error('Deepgram API key missing');
 
         if (meteringEnabled) {
-          Deepgram.setMeteringEnabled?.(true, meteringIntervalMs);
+          Deepgram.setMeteringEnabled(true, meteringIntervalMs);
         }
 
-        const requestedVersion: 'v1' | 'v2' =
-          overrideOptions.apiVersion ?? live.apiVersion ?? 'v1';
-
-        const merged: DeepgramLiveListenOptions = {
-          encoding: 'linear16',
-          sampleRate: DEFAULT_SAMPLE_RATE,
-          model: requestedVersion === 'v2' ? 'flux-general-en' : 'nova-3',
-          apiVersion: requestedVersion,
-          ...live,
-          ...overrideOptions,
-        };
-
-        targetSampleRateRef.current =
-          typeof merged.sampleRate === 'number' && merged.sampleRate > 0
-            ? merged.sampleRate
-            : DEFAULT_SAMPLE_RATE;
-        downsampleFactorRef.current = computeDownsampleFactor(
-          targetSampleRateRef.current,
-          nativeInputSampleRateRef.current
+        const options = resolveLiveOptions(
+          propsRef.current.live ?? {},
+          overrides
         );
+        session.apiVersion = options.apiVersion === 'v2' ? 'v2' : 'v1';
+        session.targetSampleRate =
+          typeof options.sampleRate === 'number' && options.sampleRate > 0
+            ? options.sampleRate
+            : DEFAULT_LIVE_SAMPLE_RATE;
+        session.downsampleFactor = computeDownsampleFactor(
+          session.targetSampleRate,
+          session.nativeSampleRate
+        );
+        session.url = buildLiveListenUrl(options);
+        socket.open();
 
-        const isV2 = merged.apiVersion === 'v2';
-        apiVersionRef.current = isV2 ? 'v2' : 'v1';
-        const usesKeyterm =
-          isV2 ||
-          (typeof merged.model === 'string' &&
-            merged.model.startsWith('nova-3'));
-        const keyterm =
-          merged.keyterm ?? (usesKeyterm ? merged.keywords : undefined);
-        const keywords = usesKeyterm ? undefined : merged.keywords;
-
-        // Flux (v2) accepts only a small set of query params; v1-only params
-        // can make the server reject the connection.
-        const query: Record<
-          string,
-          | string
-          | number
-          | boolean
-          | null
-          | undefined
-          | Array<string | number | boolean | null | undefined>
-        > = isV2
-          ? {
-              model: merged.model,
-              encoding: merged.encoding,
-              sample_rate: merged.sampleRate,
-              eager_eot_threshold: merged.eagerEotThreshold,
-              eot_threshold: merged.eotThreshold,
-              eot_timeout_ms: merged.eotTimeoutMs,
-              keyterm,
-              language_hint: merged.languageHint,
-              profanity_filter: merged.profanityFilter,
-              mip_opt_out: merged.mipOptOut,
-              measurements: merged.measurements,
-              tag: merged.tag,
-            }
-          : {
-              callback: merged.callback,
-              callback_method: merged.callbackMethod,
-              channels: merged.channels,
-              detect_entities: merged.detectEntities,
-              diarize: merged.diarize,
-              diarize_model: merged.diarizeModel,
-              dictation: merged.dictation,
-              encoding: merged.encoding,
-              endpointing: merged.endpointing,
-              filler_words: merged.fillerWords,
-              interim_results: merged.interimResults,
-              keyterm,
-              keywords,
-              language: merged.language,
-              mip_opt_out: merged.mipOptOut,
-              measurements: merged.measurements,
-              model: merged.model,
-              multichannel: merged.multichannel,
-              numerals: merged.numerals,
-              profanity_filter: merged.profanityFilter,
-              punctuate: merged.punctuate,
-              replace: merged.replace,
-              sample_rate: merged.sampleRate,
-              search: merged.search,
-              smart_format: merged.smartFormat,
-              tag: merged.tag,
-              utterance_end_ms: merged.utteranceEndMs,
-              vad_events: merged.vadEvents,
-              version: merged.version,
-            };
-
-        if (!isV2 && merged.redact) {
-          query.redact = Array.isArray(merged.redact)
-            ? merged.redact
-            : [merged.redact];
-        }
-
-        if (merged.extra) {
-          Object.entries(merged.extra).forEach(([key, value]) => {
-            query[`extra.${key}`] = value;
-          });
-        }
-
-        const params = buildParams(query);
-
-        const baseWss = isV2 ? getV2BaseWss() : getBaseWss();
-        const baseListenUrl = `${baseWss}/listen`;
-        const url = params ? `${baseListenUrl}?${params}` : baseListenUrl;
-
-        liveUrlRef.current = url;
-
-        connectSocket();
-
-        // System interruptions pause native capture; bridge the NET-0001 ~10 s
-        // idle timeout with KeepAlive frames until the interruption ends. A
-        // permanent focus loss ('stopped') tears the session down natively.
-        interruptionSub.current?.remove();
-        interruptionSub.current = addInterruptionListener((e) => {
-          onInterruptionRef.current?.(e);
-          if (e.type === 'began') {
-            if (interruptedRef.current) {
-              return;
-            }
-            interruptedRef.current = true;
-            // Flush buffered audio into finals (Flux has no Finalize message).
-            if (
-              apiVersionRef.current !== 'v2' &&
-              ws.current?.readyState === WebSocket.OPEN
-            ) {
-              try {
-                ws.current.send(JSON.stringify({ type: 'Finalize' }));
-              } catch {}
-            }
-            startKeepAlive();
-          } else if (e.type === 'ended') {
-            if (!interruptedRef.current) {
-              return;
-            }
-            interruptedRef.current = false;
-            if (!pausedRef.current) {
-              stopKeepAlive();
-            }
-          } else {
-            // 'stopped' — the native session is gone; end cleanly.
-            userClosedRef.current = true;
-            closeResources();
-            fireEnd();
-          }
-        });
-
-        audioSub.current = getEmitter().addListener(AUDIO_EVENT, (ev: any) => {
-          if (pausedRef.current) {
-            statsRef.current.framesDropped += 1;
-            statsDirtyRef.current = true;
-            return;
-          }
-          if (typeof ev?.sampleRate === 'number' && ev.sampleRate > 0) {
-            if (ev.sampleRate !== nativeInputSampleRateRef.current) {
-              nativeInputSampleRateRef.current = ev.sampleRate;
-              downsampleFactorRef.current = computeDownsampleFactor(
-                targetSampleRateRef.current,
-                nativeInputSampleRateRef.current
-              );
-            }
-          }
-
-          const factor = downsampleFactorRef.current;
-          let chunk: ArrayBuffer | undefined;
-          let decodedBytes = 0;
-          if (typeof ev?.b64 === 'string') {
-            decodedBytes = Math.floor((ev.b64.length * 3) / 4);
-            const bytes = Uint8Array.from(atob(ev.b64), (c) => c.charCodeAt(0));
-            let int16 = new Int16Array(bytes.buffer);
-            int16 = downsampleInt16(int16, factor) as Int16Array<ArrayBuffer>;
-            chunk = int16.buffer as ArrayBuffer;
-          }
-
-          if (chunk && ws.current?.readyState === WebSocket.OPEN) {
-            ws.current.send(chunk);
-            statsRef.current.bytesSent += decodedBytes;
-            statsDirtyRef.current = true;
-          } else if (chunk) {
-            // Socket not open (e.g. reconnect gap) — the frame is lost.
-            statsRef.current.framesDropped += 1;
-            statsDirtyRef.current = true;
-          }
-        });
-
+        session.subscriptions.push(
+          addInterruptionListener(handleInterruption),
+          Deepgram.onAudioPCM(handleAudio)
+        );
         if (meteringEnabled) {
-          meterSub.current = getEmitter().addListener(
-            AUDIO_LEVEL_EVENT,
-            (ev: any) => {
-              const level =
-                typeof ev?.level === 'number' && Number.isFinite(ev.level)
-                  ? ev.level
-                  : 0;
-              if (trackState) {
-                setInternalAudioLevel(level);
-              }
-              onAudioLevelRef.current(level);
-            }
-          );
+          session.subscriptions.push(Deepgram.onAudioLevel(handleAudioLevel));
         }
       } catch (err) {
         const dgError = toDeepgramError(err);
-        onErrorRef.current(dgError);
-        if (trackState) {
-          setInternalState({
-            status: 'error',
-            error: dgError,
-          });
-        }
-        closeResources();
+        propsRef.current.onError?.(dgError);
+        teardown();
+        setStatus('error', dgError);
       }
     },
     [
-      connectSocket,
-      live,
-      trackState,
-      trackStats,
-      closeResources,
-      fireEnd,
-      startKeepAlive,
-      startStatsPublisher,
-      stopKeepAlive,
+      handleAudio,
+      handleAudioLevel,
+      handleInterruption,
       meteringEnabled,
       meteringIntervalMs,
+      propsRef,
+      resetStats,
+      setStatus,
+      socket,
+      startPublishing,
+      teardown,
+      trackState,
     ]
   );
 
   const stopListening = useCallback(() => {
-    try {
-      userClosedRef.current = true;
-      closeResources();
-      fireEnd();
-    } catch (err) {
-      const dgError = toDeepgramError(err);
-      onErrorRef.current(dgError);
-      if (trackState) {
-        setInternalState({
-          status: 'error',
-          error: dgError,
-        });
-      }
-    }
-  }, [closeResources, trackState, fireEnd]);
+    teardown();
+    fireEnd();
+  }, [fireEnd, teardown]);
 
   const pause = useCallback(() => {
-    if (pausedRef.current) {
-      return;
+    const session = sessionRef.current;
+    if (session.paused) return;
+    session.paused = true;
+    // Finalize flushes buffered audio into finals (Flux has no Finalize).
+    if (session.apiVersion !== 'v2') {
+      trySendJson({ type: 'Finalize' });
     }
-    pausedRef.current = true;
-
-    const socket = ws.current;
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      // Finalize flushes buffered audio into finals; Flux (v2) is turn-based
-      // and has no Finalize control message.
-      if (apiVersionRef.current !== 'v2') {
-        try {
-          socket.send(JSON.stringify({ type: 'Finalize' }));
-        } catch {}
-      }
-    }
-
-    if (keepAliveTimerRef.current == null) {
-      startKeepAlive();
-    }
-
-    if (trackState) {
-      setInternalIsPaused(true);
-    }
-  }, [startKeepAlive, trackState]);
+    keepAlive.hold('pause');
+    if (trackState) setIsPaused(true);
+  }, [keepAlive, trackState, trySendJson]);
 
   const resume = useCallback(() => {
-    if (!pausedRef.current) {
-      return;
-    }
-    pausedRef.current = false;
+    const session = sessionRef.current;
+    if (!session.paused) return;
+    session.paused = false;
+    keepAlive.release('pause');
+    if (trackState) setIsPaused(false);
+  }, [keepAlive, trackState]);
 
-    // A system interruption may still hold the mic; keep KeepAlive until it ends.
-    if (!interruptedRef.current) {
-      stopKeepAlive();
-    }
-
-    if (trackState) {
-      setInternalIsPaused(false);
-    }
-  }, [stopKeepAlive, trackState]);
-
-  const getStats = useCallback(
-    (): SessionStats => ({ ...statsRef.current }),
-    []
+  const configure = useCallback(
+    (options: DeepgramLiveConfigureOptions) => {
+      const session = sessionRef.current;
+      if (!session.active) return false;
+      return trySendJson(
+        buildLiveConfigureMessage(options, session.apiVersion)
+      );
+    },
+    [trySendJson]
   );
+
+  const forceEndTurn = useCallback(() => {
+    const session = sessionRef.current;
+    if (!session.active || session.apiVersion !== 'v2') return false;
+    return trySendJson({ type: 'ForceEndTurn' });
+  }, [trySendJson]);
 
   const transcribeFile = useCallback(
     async (
       file: DeepgramPrerecordedSource,
-      overrideOptions: DeepgramPrerecordedOptions = {}
+      overrides: DeepgramPrerecordedOptions = {}
     ) => {
-      onBeforeTranscribeRef.current();
-      if (trackState) {
-        setInternalState({ status: 'transcribing', error: null });
-      }
+      const p = propsRef.current;
+      p.onBeforeTranscribe?.();
+      setStatus('transcribing');
       try {
         const authHeader = await resolveAuthHeader();
-
-        const merged: DeepgramPrerecordedOptions = {
-          ...prerecorded,
-          ...overrideOptions,
-        };
-
-        const query: Record<
-          string,
-          | string
-          | number
-          | boolean
-          | null
-          | undefined
-          | Array<string | number | boolean | null | undefined>
-        > = {
-          callback: merged.callback,
-          callback_method: merged.callbackMethod,
-          sentiment: merged.sentiment,
-          summarize: merged.summarize,
-          tag: merged.tag,
-          topics: merged.topics,
-          custom_topic_mode: merged.customTopicMode,
-          intents: merged.intents,
-          custom_intent_mode: merged.customIntentMode,
-          detect_entities: merged.detectEntities,
-          diarize: merged.diarize,
-          diarize_model: merged.diarizeModel,
-          dictation: merged.dictation,
-          encoding: merged.encoding,
-          filler_words: merged.fillerWords,
-          keyterm: merged.keyterm,
-          keywords: merged.keywords,
-          language: merged.language,
-          measurements: merged.measurements,
-          mip_opt_out: merged.mipOptOut,
-          model: merged.model,
-          multichannel: merged.multichannel,
-          numerals: merged.numerals,
-          paragraphs: merged.paragraphs,
-          profanity_filter: merged.profanityFilter,
-          punctuate: merged.punctuate,
-          replace: merged.replace,
-          search: merged.search,
-          smart_format: merged.smartFormat,
-          utterances: merged.utterances,
-          utt_split: merged.uttSplit,
-          version: merged.version,
-        };
-
-        if (merged.customTopic) {
-          query.custom_topic = merged.customTopic;
-        }
-
-        if (merged.customIntent) {
-          query.custom_intent = merged.customIntent;
-        }
-
-        if (merged.detectLanguage !== undefined) {
-          query.detect_language = merged.detectLanguage;
-        }
-
-        if (merged.redact) {
-          query.redact = Array.isArray(merged.redact)
-            ? merged.redact
-            : [merged.redact];
-        }
-
-        if (merged.extra) {
-          if (typeof merged.extra === 'string' || Array.isArray(merged.extra)) {
-            query.extra = merged.extra;
-          } else {
-            Object.entries(merged.extra).forEach(([key, value]) => {
-              if (value == null) return;
-              query[`extra.${key}`] = value;
-            });
-          }
-        }
-
-        const params = buildParams(query);
-        const baseUrl = `${getBaseUrl()}/listen`;
-        const url = params ? `${baseUrl}?${params}` : baseUrl;
-
-        const headers: Record<string, string> = {
-          Authorization: authHeader,
-        };
-
-        let body: FormData | string;
-        if (typeof file === 'string') {
-          headers['Content-Type'] = 'application/json';
-          body = JSON.stringify({ url: file });
-        } else if (typeof file === 'object' && file !== null && 'url' in file) {
-          headers['Content-Type'] = 'application/json';
-          body = JSON.stringify({ url: (file as { url: string }).url });
-        } else {
-          const formData = new FormData();
-          if (file instanceof Blob) {
-            formData.append('audio', file, 'recording.wav');
-          } else {
-            formData.append('audio', {
-              uri: (file as { uri: string; name?: string; type?: string }).uri,
-              name: (file as { name?: string }).name || 'recording.wav',
-              type: (file as { type?: string }).type || 'audio/wav',
-            } as any);
-          }
-          body = formData;
-        }
-
+        const url = buildPrerecordedUrl({
+          ...(p.prerecorded ?? {}),
+          ...overrides,
+        });
+        const { body, contentType } = buildPrerecordedBody(file);
         const res = await fetch(url, {
           method: 'POST',
-          headers,
+          headers: {
+            Authorization: authHeader,
+            ...(contentType ? { 'Content-Type': contentType } : {}),
+          },
           body,
         });
 
         if (!res.ok) {
-          const errBody = await res.text();
-          throw new Error(`HTTP ${res.status}: ${errBody}`);
+          throw new Error(`HTTP ${res.status}: ${await res.text()}`);
         }
 
         const json = await res.json();
-        const transcript =
-          json.results?.channels?.[0]?.alternatives?.[0]?.transcript;
-        if (transcript) {
-          onTranscribeSuccessRef.current(transcript);
-          if (trackState) {
-            setInternalState({ status: 'idle', error: null });
-          }
-        } else {
+        const text = json.results?.channels?.[0]?.alternatives?.[0]?.transcript;
+        if (!text) {
           throw new Error('No transcript present in Deepgram response');
         }
+        propsRef.current.onTranscribeSuccess?.(text);
+        setStatus('idle');
       } catch (err) {
         const dgError = toDeepgramError(err);
-        onTranscribeErrorRef.current(dgError);
-        if (trackState) {
-          setInternalState({
-            status: 'error',
-            error: dgError,
-          });
-        }
+        propsRef.current.onTranscribeError?.(dgError);
+        setStatus('error', dgError);
       }
     },
-    [prerecorded, trackState]
+    [propsRef, setStatus]
   );
 
-  useEffect(
-    () => () => {
-      userClosedRef.current = true;
-      closeResources();
-    },
-    [closeResources]
-  );
+  useEffect(() => teardown, [teardown]);
 
   return {
     startListening,
@@ -1045,23 +579,18 @@ export function useDeepgramSpeechToText({
     transcribeFile,
     pause,
     resume,
-    getStats,
+    configure,
+    forceEndTurn,
+    getStats: stats.getStats,
     ...(trackState
       ? {
-          state: internalState,
-          isPaused: internalIsPaused,
-          ...(meteringEnabled ? { audioLevel: internalAudioLevel } : {}),
-          ...(internalRecordingUri !== undefined
-            ? { recordingUri: internalRecordingUri }
-            : {}),
+          state,
+          isPaused,
+          ...(meteringEnabled ? { audioLevel } : {}),
+          ...(recordingUri !== undefined ? { recordingUri } : {}),
         }
       : {}),
-    ...(trackTranscript
-      ? {
-          transcript: internalTranscript,
-          interimTranscript: internalInterimTranscript,
-        }
-      : {}),
-    ...(trackStats ? { stats: internalStats } : {}),
+    ...(trackTranscript ? { transcript, interimTranscript } : {}),
+    ...(trackStats ? { stats: stats.stats } : {}),
   };
 }

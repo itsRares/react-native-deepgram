@@ -1,24 +1,11 @@
 import { render, act } from '@testing-library/react-native';
 import { createElement } from 'react';
-import { DeviceEventEmitter, NativeModules } from 'react-native';
+import { DeviceEventEmitter } from 'react-native';
 import { useDeepgramVoiceAgent } from '../useDeepgramVoiceAgent';
 import type {
   UseDeepgramVoiceAgentProps,
   UseDeepgramVoiceAgentReturn,
 } from '../useDeepgramVoiceAgent';
-
-jest.mock('../NativeDeepgram', () => ({
-  Deepgram: {
-    startRecording: jest.fn(() => Promise.resolve()),
-    stopRecording: jest.fn(() => Promise.resolve()),
-    startAudio: jest.fn(() => Promise.resolve()),
-    stopAudio: jest.fn(() => Promise.resolve()),
-    startPlayer: jest.fn(),
-    stopPlayer: jest.fn(),
-    feedAudio: jest.fn(),
-    interruptAudio: jest.fn(),
-  },
-}));
 
 jest.mock('../helpers/askMicPermission', () => ({
   askMicPermission: jest.fn(() => Promise.resolve(true)),
@@ -64,9 +51,9 @@ const frameB64 = (() => {
   }
   return btoa(binary);
 })();
-const DECODED_FRAME_BYTES = Math.floor((frameB64.length * 3) / 4);
+const DECODED_FRAME_BYTES = FRAME_BYTES;
 
-const AUDIO_EVENT = 'DeepgramAudioPCM'; // jest runs with Platform.OS === 'ios'
+const AUDIO_EVENT = 'onAudioPCM';
 
 let hookApi: UseDeepgramVoiceAgentReturn;
 let harnessProps: UseDeepgramVoiceAgentProps = {};
@@ -82,13 +69,13 @@ const lastSocket = () =>
   MockWebSocket.instances[MockWebSocket.instances.length - 1]!;
 
 async function connectSession() {
-  render(createElement(Harness));
+  await render(createElement(Harness));
   await act(async () => {
     await hookApi.connect();
   });
   // Flush the async socket construction (auth header resolution).
   await act(async () => {});
-  act(() => {
+  await act(() => {
     lastSocket().onopen?.();
   });
 }
@@ -99,10 +86,6 @@ const emitMicFrame = () => {
 
 describe('useDeepgramVoiceAgent – session stats', () => {
   beforeAll(() => {
-    (NativeModules as Record<string, unknown>).Deepgram = {
-      addListener: jest.fn(),
-      removeListeners: jest.fn(),
-    };
     globalRef.WebSocket = MockWebSocket;
     globalRef.__DEEPGRAM_API_KEY__ = 'test-key';
   });
@@ -118,7 +101,7 @@ describe('useDeepgramVoiceAgent – session stats', () => {
   it('counts bytesSent for forwarded mic frames', async () => {
     await connectSession();
 
-    act(() => {
+    await act(() => {
       emitMicFrame();
       emitMicFrame();
       emitMicFrame();
@@ -132,14 +115,14 @@ describe('useDeepgramVoiceAgent – session stats', () => {
   it('counts framesDropped while muted and when the socket is not open', async () => {
     await connectSession();
 
-    act(() => {
+    await act(() => {
       hookApi.mute();
       emitMicFrame();
       emitMicFrame();
       hookApi.unmute();
     });
 
-    act(() => {
+    await act(() => {
       lastSocket().readyState = 0;
       emitMicFrame();
     });
@@ -156,7 +139,7 @@ describe('useDeepgramVoiceAgent – session stats', () => {
     expect(stats0.connectedAtMs).not.toBeNull();
     expect(stats0.firstResultMs).toBeNull();
 
-    act(() => {
+    await act(() => {
       lastSocket().onmessage?.({ data: new ArrayBuffer(48) });
       lastSocket().onmessage?.({ data: new ArrayBuffer(16) });
     });
@@ -170,7 +153,7 @@ describe('useDeepgramVoiceAgent – session stats', () => {
     harnessProps = { reconnect: { enabled: true } };
     await connectSession();
 
-    act(() => {
+    await act(() => {
       lastSocket().onclose?.({ code: 1006 });
     });
 
@@ -180,7 +163,7 @@ describe('useDeepgramVoiceAgent – session stats', () => {
   it('resets counters on a new connect()', async () => {
     await connectSession();
 
-    act(() => {
+    await act(() => {
       emitMicFrame();
     });
     expect(hookApi.getStats().bytesSent).toBe(DECODED_FRAME_BYTES);
@@ -197,20 +180,20 @@ describe('useDeepgramVoiceAgent – session stats', () => {
       harnessProps = { trackStats: true };
       await connectSession();
 
-      act(() => {
+      await act(() => {
         emitMicFrame();
       });
       // Counter mutations alone must not re-render.
       expect(hookApi.stats!.bytesSent).toBe(0);
 
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(1_000);
       });
       expect(hookApi.stats!.bytesSent).toBe(DECODED_FRAME_BYTES);
 
       // Ticks without new data must not publish (no extra re-renders).
       const rendersAfterPublish = renderCount;
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(2_000);
       });
       expect(renderCount).toBe(rendersAfterPublish);
@@ -223,7 +206,7 @@ describe('useDeepgramVoiceAgent – session stats', () => {
     await connectSession();
 
     const rendersAfterConnect = renderCount;
-    act(() => {
+    await act(() => {
       emitMicFrame();
     });
 
@@ -236,7 +219,7 @@ describe('useDeepgramVoiceAgent – session stats', () => {
     await connectSession();
 
     const a = hookApi.getStats();
-    act(() => {
+    await act(() => {
       emitMicFrame();
     });
     const b = hookApi.getStats();

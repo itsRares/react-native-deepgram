@@ -1,11 +1,21 @@
-import type { DeepgramVoiceAgentSettings } from '../types';
+import type {
+  DeepgramVoiceAgentListenProvider,
+  DeepgramVoiceAgentSettings,
+} from '../types';
 
 export function createAgentSettings(
   opts: {
+    /** Listen language for Nova models (Flux takes it from the model name). */
     language?: string;
     greeting?: string;
+    /** `flux-*` models use the v2 listen provider. */
     listenModel?: string;
     thinkModel?: string;
+    /**
+     * Deepgram voice; `flux-*` uses Flux TTS (v2), `aura-*` Aura (v1).
+     * Omit to use Deepgram's default (`flux-kit-en`).
+     */
+    speakModel?: string;
     prompt?: string;
     temperature?: number | string;
     tags?: string | string[];
@@ -44,6 +54,20 @@ export function createAgentSettings(
     return 16000;
   })();
 
+  const listenModel = opts.listenModel?.trim() || 'nova-3';
+  // Flux rejects smart_format and reads the language from the model name.
+  const listenProvider: DeepgramVoiceAgentListenProvider =
+    listenModel.startsWith('flux-')
+      ? { type: 'deepgram', version: 'v2', model: listenModel }
+      : {
+          type: 'deepgram',
+          version: 'v1',
+          model: listenModel,
+          language: opts.language?.trim() || 'en',
+          smart_format: true,
+        };
+  const speakModel = opts.speakModel?.trim();
+
   const settings: DeepgramVoiceAgentSettings = {
     audio: {
       input: { encoding: 'linear16', sample_rate: sampleRate },
@@ -54,15 +78,8 @@ export function createAgentSettings(
       },
     },
     agent: {
-      language: opts.language?.trim() || 'en',
       greeting: opts.greeting?.trim() || 'Hello! How can I help you today?',
-      listen: {
-        provider: {
-          type: 'deepgram',
-          model: opts.listenModel?.trim() || 'nova-3',
-          smart_format: true,
-        },
-      },
+      listen: { provider: listenProvider },
       think: {
         provider: {
           type: 'open_ai',
@@ -71,6 +88,17 @@ export function createAgentSettings(
         },
         prompt: opts.prompt?.trim() || 'You are a helpful assistant.',
       },
+      ...(speakModel
+        ? {
+            speak: {
+              provider: {
+                type: 'deepgram',
+                version: speakModel.startsWith('flux-') ? 'v2' : 'v1',
+                model: speakModel,
+              },
+            },
+          }
+        : {}),
     },
   };
 

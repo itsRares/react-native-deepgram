@@ -191,7 +191,8 @@ internal class AudioPlayer(
   // -------------------------------------------------------------------
 
   fun startPlayer(sampleRate: Int, channels: Int) {
-    stopStreamingPlayback()
+    // Void spec method: an exception here would crash the app.
+    stopStreamingPlayback(throwOnError = false)
     playbackSampleRate = if (sampleRate > 0) sampleRate else DEFAULT_PLAYBACK_SAMPLE_RATE
     currentOutputChannels = if (channels >= 2) 2 else 1
     audioQueue.clear()

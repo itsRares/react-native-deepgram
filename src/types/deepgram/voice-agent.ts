@@ -1,3 +1,7 @@
+import type { DeepgramReconnectOptions } from './shared';
+import type { SessionStats } from './stats';
+import type { DeepgramInterruptionEvent } from '../../interruption';
+
 /**
  * Message in the conversation history.
  */
@@ -57,8 +61,13 @@ export interface DeepgramVoiceAgentListenProvider {
   type?: string;
   /** Deepgram speech-to-text model to use. */
   model?: string;
-  /** Listen API version, e.g. `'v2'` for Flux models (`'v1'` otherwise). */
-  version?: string;
+  /** Listen API version: `'v2'` for Flux models, `'v1'` otherwise. */
+  version?: 'v1' | 'v2' | (string & {});
+  /**
+   * Transcription language for Nova models (`'multi'` for multilingual).
+   * Flux models take the language from the model name.
+   */
+  language?: string;
   /** Key terms to increase recognition accuracy for. */
   keyterms?: string[];
   /**
@@ -67,9 +76,9 @@ export interface DeepgramVoiceAgentListenProvider {
    */
   language_hints?: string[];
   /**
-   * Confidence threshold required to trigger an end-of-turn event. Higher
-   * values reduce false positives but increase latency. Valid range
-   * `0.5`–`0.9`, defaults to `0.7`. Flux models only.
+   * Confidence threshold required to trigger an end-of-turn event. Valid
+   * range `0.5`–`1.0`, defaults to `0.7`; `1.0` disables natural
+   * end-of-turn so turns end via `forceEndTurn()`. Flux models only.
    */
   eot_threshold?: number;
   /**
@@ -99,8 +108,15 @@ export interface DeepgramVoiceAgentThinkProvider {
   type?: string;
   /** LLM model to use. */
   model?: string;
+  /**
+   * Provider API version, e.g. `'ai-studio-v1beta'` or
+   * `'gemini-enterprise-agent-v1'` for `google`.
+   */
+  version?: string;
   /** Controls randomness of the LLM output. Range depends on the provider. */
   temperature?: number;
+  /** OpenAI reasoning models: `'low'`, `'medium'` or `'high'`. */
+  reasoning_mode?: 'low' | 'medium' | 'high' | (string & {});
   [key: string]: unknown;
 }
 
@@ -118,6 +134,8 @@ export interface DeepgramVoiceAgentFunctionDefinition {
   arguments?: string;
   /** Whether the function is executed on the client rather than via endpoint. */
   client_side?: boolean;
+  /** Opaque provider value; echo it back unchanged if present. */
+  thought_signature?: string;
   [key: string]: unknown;
 }
 
@@ -146,6 +164,11 @@ export interface DeepgramVoiceAgentFunctionConfig {
   parameters?: Record<string, unknown>;
   /** Endpoint to call; if omitted, the function is executed client-side. */
   endpoint?: DeepgramVoiceAgentFunctionEndpoint;
+  /**
+   * Hold the call until the user's turn is confirmed instead of dispatching
+   * it speculatively. Use for side effects that cannot be undone.
+   */
+  defer_until_eot?: boolean;
   [key: string]: unknown;
 }
 
@@ -177,24 +200,46 @@ export interface DeepgramVoiceAgentThinkConfig {
 }
 
 /**
- * Text-to-speech configuration for the agent's `speak` stage.
+ * Text-to-speech provider for the agent's `speak` stage.
  */
-export interface DeepgramVoiceAgentSpeakConfig {
-  /** Text-to-speech provider configuration. */
-  provider?: Record<string, unknown>;
+export interface DeepgramVoiceAgentSpeakProvider {
+  /** e.g. `'deepgram'`, `'eleven_labs'`, `'cartesia'`, `'open_ai'`, `'aws_polly'`. */
+  type?: string;
+  /**
+   * Deepgram only: `'v2'` for Flux TTS (`flux-*` models), `'v1'` (default)
+   * for Aura. Change `version` and `model` together.
+   */
+  version?: 'v1' | 'v2' | (string & {});
+  /** Deepgram or OpenAI model, e.g. `'flux-kit-en'` or `'aura-2-thalia-en'`. */
+  model?: string;
+  /** Aura `0.7`–`1.5`, Flux `0.5`–`1.5` in `0.05` steps. */
+  speed?: number | string;
+  /** Flux TTS only (beta): whole numbers `-2` (calm) to `2` (animated). */
+  expressivity?: number;
+  /**
+   * Cartesia / Eleven Labs only. Deepgram voices reject this field (their
+   * language is part of the model name).
+   */
+  language?: string;
   [key: string]: unknown;
 }
 
 /**
- * Core agent configuration covering language, context, and the
- * listen/think/speak provider pipeline.
+ * Text-to-speech configuration for the agent's `speak` stage.
+ */
+export interface DeepgramVoiceAgentSpeakConfig {
+  /** Text-to-speech provider configuration. */
+  provider?: DeepgramVoiceAgentSpeakProvider;
+  /** Required for non-Deepgram providers. */
+  endpoint?: DeepgramVoiceAgentFunctionEndpoint;
+  [key: string]: unknown;
+}
+
+/**
+ * Core agent configuration covering context and the listen/think/speak
+ * provider pipeline.
  */
 export interface DeepgramVoiceAgentAgentConfig {
-  /**
-   * Language code for the agent. Defaults to `'en'`.
-   * @deprecated Use `listen.provider.language` and `speak.provider.language`.
-   */
-  language?: string;
   /** Optional conversation context, including prior messages and function calls. */
   context?: {
     /** Previous conversation messages and function calls for agent context. */
@@ -205,10 +250,19 @@ export interface DeepgramVoiceAgentAgentConfig {
   listen?: DeepgramVoiceAgentListenConfig;
   /** LLM (reasoning) configuration. */
   think?: DeepgramVoiceAgentThinkConfig;
-  /** Text-to-speech configuration. */
-  speak?: DeepgramVoiceAgentSpeakConfig;
+  /**
+   * Text-to-speech configuration; pass an array for fallback providers.
+   * Deepgram uses Flux TTS `flux-kit-en` when omitted.
+   */
+  speak?: DeepgramVoiceAgentSpeakConfig | DeepgramVoiceAgentSpeakConfig[];
   /** Initial message the agent speaks when the conversation starts. */
   greeting?: string;
+  /**
+   * Conversational behaviours such as backchannels, presence checks and
+   * frustration detection. Update with `updateThinkLive()`.
+   * @see https://developers.deepgram.com/reference/voice-agent/voice-agent
+   */
+  think_live?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -219,8 +273,10 @@ export interface DeepgramVoiceAgentAgentConfig {
  * const settings: DeepgramVoiceAgentSettings = {
  *   agent: {
  *     think: {
- *       provider: { type: 'open_ai' },
- *       model: 'gpt-4o'
+ *       provider: { type: 'open_ai', model: 'gpt-4o-mini' }
+ *     },
+ *     speak: {
+ *       provider: { type: 'deepgram', version: 'v2', model: 'flux-kit-en' }
  *     }
  *   }
  * };
@@ -238,16 +294,18 @@ export interface DeepgramVoiceAgentSettings {
   mip_opt_out?: boolean;
   /** Input and output audio media configuration. */
   audio?: DeepgramVoiceAgentAudioSettings;
-  /** Core agent (listen/think/speak) configuration. */
-  agent?: DeepgramVoiceAgentAgentConfig;
+  /**
+   * Core agent (listen/think/speak) configuration, or the UUID of a
+   * reusable agent configuration stored in your Deepgram project.
+   */
+  agent?: DeepgramVoiceAgentAgentConfig | string;
   [key: string]: unknown;
 }
 
 /**
  * Settings message sent immediately after connecting to initialize the agent.
  */
-export interface DeepgramVoiceAgentSettingsMessage
-  extends DeepgramVoiceAgentSettings {
+export interface DeepgramVoiceAgentSettingsMessage extends DeepgramVoiceAgentSettings {
   type: 'Settings';
 }
 
@@ -277,7 +335,32 @@ export interface DeepgramVoiceAgentUpdateThinkMessage {
 export interface DeepgramVoiceAgentUpdateSpeakMessage {
   type: 'UpdateSpeak';
   /** New text-to-speech configuration to apply. */
-  speak: DeepgramVoiceAgentSpeakConfig;
+  speak: DeepgramVoiceAgentSpeakConfig | DeepgramVoiceAgentSpeakConfig[];
+  [key: string]: unknown;
+}
+
+/**
+ * Update the agent's `think_live` behaviours mid-conversation.
+ */
+export interface DeepgramVoiceAgentUpdateThinkLiveMessage {
+  type: 'UpdateThink_Live';
+  think_live: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+/**
+ * End the user's turn now (e.g. push-to-talk release). Useful with
+ * `eot_threshold: 1.0` on a Flux listen provider.
+ */
+export interface DeepgramVoiceAgentForceEndTurnMessage {
+  type: 'ForceEndTurn';
+  [key: string]: unknown;
+}
+
+/** Forward an arbitrary payload to a custom think provider. */
+export interface DeepgramVoiceAgentCustomToThinkProviderMessage {
+  type: '__customToThinkProvider';
+  content: unknown;
   [key: string]: unknown;
 }
 
@@ -292,19 +375,25 @@ export interface DeepgramVoiceAgentInjectUserMessage {
 }
 
 /**
+ * How an injected agent message interacts with the current turn.
+ * `'default'` speaks only when neither party is mid-turn (otherwise the
+ * server replies with `InjectionRefused`), `'queue'` appends after queued
+ * speech and `'interrupt'` cuts off the agent's current speech.
+ */
+export type DeepgramVoiceAgentInjectBehavior =
+  'default' | 'queue' | 'interrupt' | (string & {});
+
+/**
  * Immediately trigger an agent statement mid-conversation.
  */
 export interface DeepgramVoiceAgentInjectAgentMessage {
   type: 'InjectAgentMessage';
-  /** The statement the agent should say. */
+  /** The statement the agent should say (or, when dynamic, an instruction). */
   message: string;
-  /**
-   * How the injection interacts with the current turn. `'default'` speaks only
-   * when neither party is mid-turn (otherwise the server replies with
-   * `InjectionRefused`); `'queue'` appends after any queued speech without
-   * interrupting. Defaults to `'default'`.
-   */
-  behavior?: string;
+  /** Defaults to `'default'`. */
+  behavior?: DeepgramVoiceAgentInjectBehavior;
+  /** Let the LLM phrase the reply from `message` instead of speaking it verbatim. */
+  is_dynamic?: boolean;
   [key: string]: unknown;
 }
 
@@ -354,7 +443,10 @@ export type DeepgramVoiceAgentClientMessage =
   | DeepgramVoiceAgentInjectAgentMessage
   | DeepgramVoiceAgentFunctionCallResponseMessage
   | DeepgramVoiceAgentKeepAliveMessage
-  | DeepgramVoiceAgentUpdatePromptMessage;
+  | DeepgramVoiceAgentUpdatePromptMessage
+  | DeepgramVoiceAgentUpdateThinkLiveMessage
+  | DeepgramVoiceAgentForceEndTurnMessage
+  | DeepgramVoiceAgentCustomToThinkProviderMessage;
 
 /**
  * First message from the server confirming the connection is established.
@@ -383,6 +475,11 @@ export interface DeepgramVoiceAgentConversationTextMessage {
   role: string;
   /** Text content of the conversation turn. */
   content: string;
+  /** Detected languages (multilingual listen models). */
+  languages?: string[];
+  languages_hinted?: string[];
+  /** Set on non-reply agent speech such as backchannels or presence checks. */
+  conversational_behavior?: string;
   [key: string]: unknown;
 }
 
@@ -481,6 +578,56 @@ export interface DeepgramVoiceAgentThinkUpdatedMessage {
  */
 export interface DeepgramVoiceAgentSpeakUpdatedMessage {
   type: 'SpeakUpdated';
+  [key: string]: unknown;
+}
+
+/**
+ * Confirms an `UpdateThink_Live` message was applied.
+ */
+export interface DeepgramVoiceAgentThinkLiveUpdatedMessage {
+  type: 'ThinkLiveUpdated';
+  [key: string]: unknown;
+}
+
+/**
+ * Per-turn latency breakdown, in seconds.
+ */
+export interface DeepgramVoiceAgentLatencyReportMessage {
+  type: 'LatencyReport';
+  stt_latency?: number;
+  ttt_token_latency?: number;
+  ttt_text_latency?: number;
+  ttt_tool_latency?: number;
+  ttt_thinking_latency?: number;
+  tts_latency?: number;
+  total_latency?: number;
+  [key: string]: unknown;
+}
+
+/**
+ * Pending function calls were cancelled (e.g. the user kept speaking).
+ * Drop their results instead of sending `FunctionCallResponse`.
+ */
+export interface DeepgramVoiceAgentFunctionCallCancelledMessage {
+  type: 'FunctionCallCancelled';
+  functions: Array<{ id: string; name?: string; [key: string]: unknown }>;
+  [key: string]: unknown;
+}
+
+/**
+ * `think_live` detected user frustration.
+ */
+export interface DeepgramVoiceAgentFrustrationDetectedMessage {
+  type: 'FrustrationDetected';
+  [key: string]: unknown;
+}
+
+/**
+ * Payload forwarded from a custom think provider.
+ */
+export interface DeepgramVoiceAgentCustomFromThinkProviderMessage {
+  type: '__customFromThinkProvider';
+  content?: unknown;
   [key: string]: unknown;
 }
 
@@ -590,6 +737,11 @@ export type DeepgramVoiceAgentServerMessage =
   | DeepgramVoiceAgentListenUpdatedMessage
   | DeepgramVoiceAgentThinkUpdatedMessage
   | DeepgramVoiceAgentSpeakUpdatedMessage
+  | DeepgramVoiceAgentThinkLiveUpdatedMessage
+  | DeepgramVoiceAgentLatencyReportMessage
+  | DeepgramVoiceAgentFunctionCallCancelledMessage
+  | DeepgramVoiceAgentFrustrationDetectedMessage
+  | DeepgramVoiceAgentCustomFromThinkProviderMessage
   | DeepgramVoiceAgentInjectionRefusedMessage
   | DeepgramVoiceAgentErrorMessage
   | DeepgramVoiceAgentWarningMessage
@@ -604,3 +756,149 @@ export type DeepgramVoiceAgentServerMessage =
   | DeepgramVoiceAgentKeepAliveMessage
   | DeepgramVoiceAgentUpdatePromptMessage
   | { type: string; [key: string]: unknown };
+
+export interface UseDeepgramVoiceAgentProps {
+  endpoint?: string;
+  defaultSettings?: DeepgramVoiceAgentSettings;
+  autoStartMicrophone?: boolean;
+  downsampleFactor?: number;
+  autoPlayAudio?: boolean;
+  trackState?: boolean;
+  trackConversation?: boolean;
+  trackAgentStatus?: boolean;
+  /**
+   * Publish live session telemetry via `stats`, throttled to ≤1 update/s.
+   * @default false
+   */
+  trackStats?: boolean;
+  /**
+   * Auto-reconnect configuration for the agent socket. Disabled by default;
+   * set `reconnect.enabled` to opt in. On reconnect the stored `Settings`
+   * message is automatically re-sent.
+   */
+  reconnect?: DeepgramReconnectOptions;
+  /** Called when a reconnect attempt begins (1-based attempt number). */
+  onReconnecting?: (attempt: number) => void;
+  /** Called once the agent socket has successfully reconnected. */
+  onReconnected?: () => void;
+  /**
+   * Flush queued agent audio on `UserStartedSpeaking` so the agent stops
+   * talking when the user interrupts. Requires `autoPlayAudio`.
+   * @default false
+   */
+  bargeIn?: boolean;
+  /** Called after a barge-in flush actually happened. */
+  onBargeIn?: () => void;
+  onBeforeConnect?: () => void;
+  onConnect?: () => void;
+  onClose?: (event?: any) => void;
+  onError?: (error: unknown) => void;
+  /**
+   * Called when the system interrupts audio (phone call, Siri, another app
+   * taking audio focus). While a session is connected the hook also keeps
+   * the agent socket alive with KeepAlive frames until the interruption
+   * ends, and disconnects gracefully on a permanent focus loss.
+   */
+  onInterruption?: (event: DeepgramInterruptionEvent) => void;
+  onMessage?: (message: DeepgramVoiceAgentServerMessage) => void;
+  onWelcome?: (message: DeepgramVoiceAgentWelcomeMessage) => void;
+  onSettingsApplied?: (
+    message: DeepgramVoiceAgentSettingsAppliedMessage
+  ) => void;
+  onConversationText?: (
+    message: DeepgramVoiceAgentConversationTextMessage
+  ) => void;
+  onAgentThinking?: (message: DeepgramVoiceAgentAgentThinkingMessage) => void;
+  onAgentStartedSpeaking?: (
+    message: DeepgramVoiceAgentAgentStartedSpeakingMessage
+  ) => void;
+  onAgentAudioDone?: (message: DeepgramVoiceAgentAgentAudioDoneMessage) => void;
+  onUserStartedSpeaking?: (
+    message: DeepgramVoiceAgentUserStartedSpeakingMessage
+  ) => void;
+  onFunctionCallRequest?: (
+    message: DeepgramVoiceAgentFunctionCallRequestMessage
+  ) => void;
+  onFunctionCallResponse?: (
+    message: DeepgramVoiceAgentReceiveFunctionCallResponseMessage
+  ) => void;
+  onPromptUpdated?: (message: DeepgramVoiceAgentPromptUpdatedMessage) => void;
+  onListenUpdated?: (message: DeepgramVoiceAgentListenUpdatedMessage) => void;
+  onThinkUpdated?: (message: DeepgramVoiceAgentThinkUpdatedMessage) => void;
+  onSpeakUpdated?: (message: DeepgramVoiceAgentSpeakUpdatedMessage) => void;
+  onThinkLiveUpdated?: (
+    message: DeepgramVoiceAgentThinkLiveUpdatedMessage
+  ) => void;
+  onLatencyReport?: (message: DeepgramVoiceAgentLatencyReportMessage) => void;
+  onFunctionCallCancelled?: (
+    message: DeepgramVoiceAgentFunctionCallCancelledMessage
+  ) => void;
+  onFrustrationDetected?: (
+    message: DeepgramVoiceAgentFrustrationDetectedMessage
+  ) => void;
+  onCustomFromThinkProvider?: (
+    message: DeepgramVoiceAgentCustomFromThinkProviderMessage
+  ) => void;
+  onInjectionRefused?: (
+    message: DeepgramVoiceAgentInjectionRefusedMessage
+  ) => void;
+  onHistory?: (message: DeepgramVoiceAgentHistoryMessage) => void;
+  onWarning?: (message: DeepgramVoiceAgentWarningMessage) => void;
+  onServerError?: (message: DeepgramVoiceAgentErrorMessage) => void;
+  onAudioConfig?: (message: DeepgramVoiceAgentAudioConfigMessage) => void;
+  onAudio?: (audioData: ArrayBuffer) => void;
+}
+
+export interface UseDeepgramVoiceAgentReturn {
+  connect: (settings?: DeepgramVoiceAgentSettings) => Promise<void>;
+  disconnect: () => void;
+  sendMessage: (message: DeepgramVoiceAgentClientMessage) => boolean;
+  sendSettings: (settings: DeepgramVoiceAgentSettings) => boolean;
+  injectUserMessage: (content: string) => boolean;
+  /**
+   * Make the agent speak `message`. With `{ dynamic: true }` the LLM
+   * phrases the reply from `message` (an instruction) instead.
+   */
+  injectAgentMessage: (
+    message: string,
+    options?:
+      | DeepgramVoiceAgentInjectBehavior
+      | { behavior?: DeepgramVoiceAgentInjectBehavior; dynamic?: boolean }
+  ) => boolean;
+  /** End the user's turn now (e.g. push-to-talk release). */
+  forceEndTurn: () => boolean;
+  sendFunctionCallResponse: (
+    response: Omit<DeepgramVoiceAgentFunctionCallResponseMessage, 'type'>
+  ) => boolean;
+  sendKeepAlive: () => boolean;
+  updatePrompt: (prompt: string) => boolean;
+  updateListen: (listen: DeepgramVoiceAgentListenConfig) => boolean;
+  updateThink: (think: DeepgramVoiceAgentThinkConfig) => boolean;
+  updateSpeak: (
+    speak: DeepgramVoiceAgentSpeakConfig | DeepgramVoiceAgentSpeakConfig[]
+  ) => boolean;
+  updateThinkLive: (thinkLive: Record<string, unknown>) => boolean;
+  sendMedia: (chunk: ArrayBuffer | Uint8Array | number[]) => boolean;
+  /** Stop forwarding mic frames; keep the socket alive with KeepAlive. */
+  mute: () => void;
+  /** Resume forwarding mic frames after {@link mute}. */
+  unmute: () => void;
+  /** Imperative snapshot of the session telemetry counters. */
+  getStats: () => SessionStats;
+  isConnected: () => boolean;
+  state?: {
+    connectionState: 'idle' | 'connecting' | 'connected' | 'disconnected';
+    error: string | null;
+    warning: string | null;
+  };
+  /** Whether the microphone is currently muted (only when trackState is enabled). */
+  isMuted?: boolean;
+  conversation?: Array<{ role: string; content: string }>;
+  clearConversation?: () => void;
+  agentStatus?: {
+    thinking: string | null;
+    latency: { total?: number; tts?: number; ttt?: number } | null;
+  };
+  /** Live session telemetry (only when `trackStats` is enabled). */
+  stats?: SessionStats;
+}

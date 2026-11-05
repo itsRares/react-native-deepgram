@@ -1,18 +1,6 @@
 {
-  "extends": "@react-native/typescript-config/tsconfig.json",
+  "extends": "../tsconfig",
   "compilerOptions": {
-    "types": [
-      "expo"
-    ],
-    "ignoreDeprecations": "6.0",
-    "strict": true,
-    "baseUrl": ".",
-  },
-  "include": [
-    "**/*.ts",
-    "**/*.tsx"
-  ],
-  "exclude": [
-    "node_modules"
-  ]
+    // Avoid expo-cli auto-generating a tsconfig
+  }
 }

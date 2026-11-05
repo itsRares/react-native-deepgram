@@ -139,7 +139,7 @@
                     options:options
                       error:&error] ||
       error) {
-    DGLogError(@"[Deepgram] configureAudioSession: category failed error=%@",
+    DGLogDebug(@"[Deepgram] configureAudioSession: category failed error=%@",
                error.localizedDescription ?: error);
     if (outError) {
       *outError = error;
@@ -149,7 +149,7 @@
 
   NSError *activeError = nil;
   if (![session setActive:YES error:&activeError]) {
-    DGLogError(@"[Deepgram] configureAudioSession: setActive failed error=%@",
+    DGLogDebug(@"[Deepgram] configureAudioSession: setActive failed error=%@",
                activeError.localizedDescription ?: activeError);
     if (outError) {
       *outError = activeError;
@@ -189,7 +189,6 @@
   // `speaker`/`earpiece` drop HFP; `earpiece`/`bluetooth` also drop
   // DefaultToSpeaker (the receiver is unreachable with it set).
   NSString *route = self.requestedAudioRoute;
-  BOOL routeWantsBluetooth = [route isEqualToString:@"bluetooth"];
   BOOL routeBlocksBluetooth =
       [route isEqualToString:@"speaker"] || [route isEqualToString:@"earpiece"];
 
@@ -197,9 +196,6 @@
   NSMutableArray<NSDictionary *> *attempts = [NSMutableArray array];
 
   if (needsMicrophone) {
-    BOOL needsAEC = self.engineCaptureActive || self.voiceProcessingRequested ||
-                    self.isPlaying;
-
     // Input-safe options for PlayAndRecord. DefaultToSpeaker + HFP are valid
     // here; A2DP/AirPlay are intentionally excluded (see rule 1 above).
     AVAudioSessionCategoryOptions recordOptions = 0;
@@ -214,8 +210,10 @@
     // Preferred: hardware AEC via VoiceChat (device only). DefaultToSpeaker
     // must NOT be combined with VoiceChat (-50 on some iOS versions); only
     // MixWithOthers/HFP layer safely, with the bare attempts as -50 fallbacks.
+    BOOL needsAEC = self.engineCaptureActive || self.voiceProcessingRequested ||
+                    self.isPlaying;
     if (needsAEC) {
-      if (routeWantsBluetooth) {
+      if ([route isEqualToString:@"bluetooth"]) {
         [attempts addObject:@{
           @"category" : AVAudioSessionCategoryPlayAndRecord,
           @"mode" : AVAudioSessionModeVoiceChat,
@@ -363,12 +361,9 @@
 }
 
 - (void)emitRouteChange {
-  if (!self.hasListeners) {
-    return;
-  }
   NSString *route = [self currentAudioRouteString];
   DGLogDebug(@"[Deepgram] emitRouteChange: %@", route);
-  [self sendEventWithName:@"DeepgramRouteChange" body:@{@"route" : route}];
+  [self emitOnAudioRouteChange:@{@"route" : route}];
 }
 
 /**
@@ -643,7 +638,7 @@
   // Retry-based resume: Siri posts this route change while it still HOLDS the
   // hardware (sometimes before, or entirely without, an interruption
   // notification), so the first activation attempt routinely fails.
-  dispatch_async(dispatch_get_main_queue(), ^{
+  dispatch_async(self.audioQueue, ^{
     [self resumeAfterInterruption:0];
   });
 }
@@ -660,7 +655,7 @@
     return; // stale notification from a discarded engine instance
   }
   DGLogDebug(@"[Deepgram] handleEngineConfigurationChange");
-  dispatch_async(dispatch_get_main_queue(), ^{
+  dispatch_async(self.audioQueue, ^{
     [self restartEngineAfterConfigurationChange];
   });
 }
@@ -776,7 +771,7 @@
                  attempt);
       dispatch_after(
           dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)),
-          dispatch_get_main_queue(), ^{
+          self.audioQueue, ^{
             [self resumeAfterInterruption:attempt + 1];
           });
     } else {
@@ -842,7 +837,7 @@
     if (wasSuspended) {
       DGLogDebug(@"[Deepgram] handleAudioInterruption: stale was-suspended "
                  @"notification, resuming");
-      dispatch_async(dispatch_get_main_queue(), ^{
+      dispatch_async(self.audioQueue, ^{
         [self resumeAfterInterruption:0];
       });
       return;
@@ -860,10 +855,7 @@
       [self.playerNode pause];
     }
     // Observability only — the system doesn't say why (call, Siri, alarm, …).
-    if (self.hasListeners) {
-      [self sendEventWithName:@"DeepgramInterruption"
-                         body:@{@"type" : @"began", @"reason" : @"unknown"}];
-    }
+    [self emitOnAudioInterruption:@{@"type" : @"began", @"reason" : @"unknown"}];
   } else if (type == AVAudioSessionInterruptionTypeEnded) {
     DGLogDebug(@"[Deepgram] handleAudioInterruption: interruption ended");
     self.sessionInterrupted = NO;
@@ -874,17 +866,14 @@
         (options & AVAudioSessionInterruptionOptionShouldResume) != 0;
     // Resume regardless of the ShouldResume hint — Siri regularly omits it,
     // and for a live mic/agent session "keep going" is always right. Runs
-    // async on main since activation may need retries.
-    dispatch_async(dispatch_get_main_queue(), ^{
+    // async since activation may need retries.
+    dispatch_async(self.audioQueue, ^{
       [self resumeAfterInterruption:0];
     });
-    if (self.hasListeners) {
-      [self sendEventWithName:@"DeepgramInterruption"
-                         body:@{
-                           @"type" : @"ended",
-                           @"shouldResume" : @(shouldResume)
-                         }];
-    }
+    [self emitOnAudioInterruption:@{
+      @"type" : @"ended",
+      @"shouldResume" : @(shouldResume)
+    }];
   }
 }
 

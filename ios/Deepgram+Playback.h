@@ -17,5 +17,6 @@
                  enableVoiceProcessing:(BOOL)enableVoiceProcessing
                                  error:(NSError **)outError;
 - (AVAudioPCMBuffer *)createPCMBufferFromData:(NSData *)data;
+- (BOOL)ensurePlaybackEngineRunning;
 
 @end

@@ -33,6 +33,7 @@ export type DeepgramLiveListenModel =
   | 'nova-3'
   | 'nova-3-general'
   | 'nova-3-medical'
+  | 'nova-3-pharma'
   | 'nova-2'
   | 'nova-2-general'
   | 'nova-2-meeting'
@@ -66,10 +67,12 @@ export type DeepgramLiveListenModel =
 
 /**
  * Types of sensitive information that can be redacted from transcripts.
+ * Flux (v2) only supports `numbers` and `aggressive_numbers`.
  */
 export type DeepgramLiveListenRedaction =
   | 'pci'
   | 'numbers'
+  | 'aggressive_numbers'
   | 'dates'
   | 'names'
   | 'addresses'
@@ -77,15 +80,11 @@ export type DeepgramLiveListenRedaction =
   | (string & {});
 
 export type DeepgramLiveListenCallbackMethod =
-  | 'POST'
-  | 'GET'
-  | 'PUT'
-  | 'DELETE';
+  'POST' | 'GET' | 'PUT' | 'DELETE';
 
 /**
  * Diarization model versions available for live streaming. Setting this
- * enables diarization without also passing `diarize`. Streaming supports
- * `v1` and `latest`.
+ * enables diarization. Streaming supports `v1` and `latest`.
  */
 export type DeepgramLiveListenDiarizeModel = 'latest' | 'v1' | (string & {});
 
@@ -94,7 +93,7 @@ export type DeepgramLiveListenDiarizeModel = 'latest' | 'v1' | (string & {});
  * @example
  * ```typescript
  * const options: DeepgramLiveListenOptions = {
- *   model: 'nova-2',
+ *   model: 'nova-3',
  *   smartFormat: true,
  *   interimResults: true,
  *   language: 'en-US'
@@ -111,13 +110,8 @@ export type DeepgramLiveListenOptions = {
   /** Number of audio channels in the input. */
   channels?: number;
   /**
-   * Enable speaker diarization.
-   * @deprecated Use `diarizeModel` instead.
-   */
-  diarize?: boolean;
-  /**
-   * Select a diarization model version. Setting this enables diarization
-   * without also passing `diarize`. Streaming supports `v1` and `latest`.
+   * Enable speaker diarization and select the diarizer version. Streaming
+   * supports `v1` and `latest`.
    */
   diarizeModel?: DeepgramLiveListenDiarizeModel;
   /**
@@ -147,9 +141,8 @@ export type DeepgramLiveListenOptions = {
   /** Primary spoken language hint (BCP-47). */
   language?: string;
   /**
-   * Language hints that constrain and prioritize language detection. Only
-   * valid with the `flux-general-multi` model on the v2/Flux API. Pass an
-   * array to specify multiple language codes.
+   * Language hints that bias language detection. Supported by Nova-3 with
+   * `language: 'multi'` and by Flux `flux-general-multi`.
    */
   languageHint?: string | string[];
   /** Opt out of the Model Improvement Program. */
@@ -160,13 +153,19 @@ export type DeepgramLiveListenOptions = {
   model?: DeepgramLiveListenModel;
   /** Transcribe each channel independently. */
   multichannel?: boolean;
-  /** Convert written numbers into numerals. */
+  /**
+   * Convert written numbers into numerals (Nova and Flux). Can be toggled
+   * mid-stream with `configure({ numerals })`.
+   */
   numerals?: boolean;
   /** Enable or disable the profanity filter. */
   profanityFilter?: boolean;
   /** Automatically add punctuation and capitalization. */
   punctuate?: boolean;
-  /** Remove sensitive content from transcripts. */
+  /**
+   * Remove sensitive content from transcripts. Flux accepts only `numbers`
+   * and `aggressive_numbers`.
+   */
   redact?: DeepgramLiveListenRedaction | DeepgramLiveListenRedaction[];
   /** Replace terms or phrases within the audio. */
   replace?: string | string[];
@@ -184,7 +183,9 @@ export type DeepgramLiveListenOptions = {
    */
   eagerEotThreshold?: number;
   /**
-   * End-of-turn confidence required to finish a turn when using the v2 API.
+   * End-of-turn confidence required to finish a turn (v2/Flux, 0.5-1.0).
+   * `1.0` disables automatic end-of-turn so turns end via `forceEndTurn()`
+   * or `eotTimeoutMs`.
    */
   eotThreshold?: number;
   /**
@@ -218,45 +219,33 @@ export type DeepgramPrerecordedEncoding =
 export type DeepgramPrerecordedModel = DeepgramLiveListenModel | (string & {});
 
 export type DeepgramPrerecordedRedaction =
-  | 'pci'
-  | 'pii'
-  | 'numbers'
-  | (string & {});
+  'pci' | 'pii' | 'numbers' | (string & {});
 
 /**
  * Diarization model versions available for pre-recorded transcription.
- * Setting this enables diarization without also passing `diarize`. Batch
- * supports `latest`, `v1`, and `v2`.
+ * Setting this enables diarization. Batch supports `latest`, `v1`, and `v2`.
  */
 export type DeepgramPrerecordedDiarizeModel =
-  | 'latest'
-  | 'v1'
-  | 'v2'
-  | (string & {});
+  'latest' | 'v1' | 'v2' | (string & {});
 
 export type DeepgramPrerecordedCustomMode = DeepgramCustomMode;
 
 export type DeepgramPrerecordedSummarize =
-  | boolean
-  | 'v1'
-  | 'v2'
-  | (string & {});
+  boolean | 'v1' | 'v2' | (string & {});
 
 export type DeepgramPrerecordedVersion = 'latest' | (string & {});
 
 export type DeepgramPrerecordedExtra =
-  | string
-  | string[]
-  | Record<string, string | number | boolean>;
+  string | string[] | Record<string, string | number | boolean>;
 
 /**
  * Configuration options for Deepgram Pre-recorded (File) Transcription.
  * @example
  * ```typescript
  * const options: DeepgramPrerecordedOptions = {
- *   model: 'nova-2',
+ *   model: 'nova-3',
  *   smartFormat: true,
- *   diarize: true,
+ *   diarizeModel: 'latest',
  *   summarize: 'v2'
  * };
  * ```
@@ -291,13 +280,8 @@ export type DeepgramPrerecordedOptions = {
   /** Detect the dominant language (or limit detection to specific languages). */
   detectLanguage?: boolean | string | string[];
   /**
-   * Enable speaker diarization.
-   * @deprecated Use `diarizeModel` instead.
-   */
-  diarize?: boolean;
-  /**
-   * Select a diarization model version. Setting this enables diarization
-   * without also passing `diarize`. Batch supports `latest`, `v1`, and `v2`.
+   * Enable speaker diarization and select the diarizer version. Batch
+   * supports `latest`, `v1`, and `v2`.
    */
   diarizeModel?: DeepgramPrerecordedDiarizeModel;
   /** Enable dictation intelligence. */
@@ -312,6 +296,8 @@ export type DeepgramPrerecordedOptions = {
   keywords?: string | string[];
   /** Primary spoken language hint (BCP-47). */
   language?: string;
+  /** Language hints for Nova-3 with `language: 'multi'`. */
+  languageHint?: string | string[];
   /** Convert spoken measurements into abbreviations. */
   measurements?: boolean;
   /** Opt out of the Deepgram Model Improvement Program. */
@@ -369,9 +355,9 @@ export type DeepgramPrerecordedWord = {
   confidence?: number;
   /** Punctuated/formatted word (present with `punctuate`/`smartFormat`). */
   punctuated_word?: string;
-  /** Speaker index (present with `diarize`). */
+  /** Speaker index (present with diarization). */
   speaker?: number;
-  /** Speaker attribution confidence (present with `diarize`). */
+  /** Speaker attribution confidence (present with diarization). */
   speaker_confidence?: number;
 };
 
@@ -392,7 +378,7 @@ export type DeepgramPrerecordedUtterance = {
   transcript: string;
   /** Word-level detail for the utterance. */
   words?: DeepgramPrerecordedWord[];
-  /** Speaker index (present with `diarize`). */
+  /** Speaker index (present with diarization). */
   speaker?: number;
   /** Unique identifier of the utterance. */
   id?: string;
@@ -444,6 +430,64 @@ export type DeepgramTranscriptEvent = {
   metadata?: Record<string, unknown>;
 };
 
+/** Flux turn lifecycle events. */
+export type DeepgramFluxTurnEvent =
+  'Update' | 'StartOfTurn' | 'EagerEndOfTurn' | 'TurnResumed' | 'EndOfTurn';
+
+/**
+ * Flux (v2) `TurnInfo` message.
+ * @see https://developers.deepgram.com/reference/speech-to-text/listen-flux
+ */
+export type DeepgramFluxTurnInfo = {
+  type: 'TurnInfo';
+  request_id: string;
+  sequence_id: number;
+  event: DeepgramFluxTurnEvent;
+  turn_index: number;
+  audio_window_start: number;
+  audio_window_end: number;
+  transcript: string;
+  words: Array<{
+    word: string;
+    confidence: number;
+    start?: number;
+    end?: number;
+  }>;
+  end_of_turn_confidence: number;
+  /** What ended the turn; present on `EndOfTurn` only. Open-ended enum. */
+  trigger?: 'model' | 'manual' | 'timeout' | (string & {});
+  /** Detected languages (`flux-general-multi`). */
+  languages?: string[];
+  languages_hinted?: string[];
+};
+
+/**
+ * Mid-stream update sent with `configure()`. Omitted fields keep their
+ * current values; `keyterms` replaces the whole list (`[]` clears it).
+ * @see https://developers.deepgram.com/docs/configure
+ * @see https://developers.deepgram.com/docs/flux/configure
+ */
+export type DeepgramLiveConfigureOptions = {
+  /** Nova-3 and Flux. */
+  keyterms?: string[];
+  /** Nova-3 and Flux. */
+  numerals?: boolean;
+  /** Flux only. */
+  eotThreshold?: number;
+  /** Flux only. */
+  eagerEotThreshold?: number;
+  /** Flux only. */
+  eotTimeoutMs?: number;
+  /** Flux `flux-general-multi` only; `[]` reverts to auto-detect. */
+  languageHints?: string[];
+};
+
+/** Any JSON message received on a live `/listen` socket. */
+export type DeepgramListenServerMessage = {
+  type: string;
+  [key: string]: unknown;
+};
+
 /**
  * Props for the `useDeepgramSpeechToText` hook.
  */
@@ -454,6 +498,16 @@ export type UseDeepgramSpeechToTextProps = {
   onStart?: () => void;
   /** Called on every transcript update */
   onTranscript?: (transcript: string, event?: DeepgramTranscriptEvent) => void;
+  /**
+   * Called with every Flux (v2) `TurnInfo` message, including events without
+   * new text (`StartOfTurn`, `EagerEndOfTurn`, `TurnResumed`).
+   */
+  onTurnInfo?: (message: DeepgramFluxTurnInfo) => void;
+  /**
+   * Called with every JSON message from the live socket (e.g. `Results`,
+   * `UtteranceEnd`, `ConfigureSuccess`, `ConfigureFailure`, `Warning`).
+   */
+  onMessage?: (message: DeepgramListenServerMessage) => void;
   /** Called on any error */
   onError?: (error: unknown) => void;
   /** Called when the session ends or WebSocket closes */
@@ -569,6 +623,17 @@ export type UseDeepgramSpeechToTextReturn = {
   pause: () => void;
   /** Resume streaming after {@link pause}: forward mic frames again. */
   resume: () => void;
+  /**
+   * Update keyterms, numerals and (Flux) turn detection mid-stream without
+   * reconnecting. The server answers with `ConfigureSuccess` /
+   * `ConfigureFailure` (see `onMessage`). Returns `false` when not connected.
+   */
+  configure: (options: DeepgramLiveConfigureOptions) => boolean;
+  /**
+   * Flux (v2) only: end the current turn now (e.g. push-to-talk release).
+   * Returns `false` when not connected or on the v1 API.
+   */
+  forceEndTurn: () => boolean;
   /**
    * Imperative snapshot of the current session telemetry counters. Always
    * available (no re-renders); returns a fresh object on every call.

@@ -5,7 +5,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - 3.0.0
+## [3.0.1] - 2026-11-18
+
+### Fixed
+
+- Speech-to-text: ignore a late socket close from the previous session arriving
+  while `startListening()` is still awaiting microphone permission, preventing
+  the new session from being torn down and opening a socket with an empty URL.
+
+## [3.0.0] - 2026-11-05
 
 ### Breaking
 

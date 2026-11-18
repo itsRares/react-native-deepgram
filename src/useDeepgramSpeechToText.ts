@@ -307,7 +307,10 @@ export function useDeepgramSpeechToText(
       setStatus('loading');
       propsRef.current.onReconnecting?.(attempt);
     },
-    onClose: ({ exhausted, maxRetries, error }) => {
+    onClose: ({ exhausted, maxRetries, error, closedByUser }) => {
+      // The previous session's close handshake can land while the next session
+      // is still acquiring the mic, before open() supersedes the old socket.
+      if (closedByUser && sessionRef.current.active) return;
       if (sessionRef.current.active) {
         teardown();
         if (exhausted) {

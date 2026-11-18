@@ -20,6 +20,8 @@ export interface SocketCloseInfo {
   maxRetries: number;
   /** Set when the connection could not be established (e.g. auth failed). */
   error?: DeepgramError;
+  /** `close()` was called before this close arrived. */
+  closedByUser: boolean;
 }
 
 export interface ManagedSocketOptions {
@@ -175,6 +177,7 @@ export class ManagedSocket {
       exhausted: unexpected && this.attempt >= cfg.maxRetries,
       maxRetries: cfg.maxRetries,
       error,
+      closedByUser: this.closedByUser,
     });
   }
 

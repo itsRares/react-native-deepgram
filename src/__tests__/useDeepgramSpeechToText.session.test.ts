@@ -9,6 +9,7 @@ import type {
 import NativeDeepgram from '../NativeDeepgram';
 import { clearCachedAuthToken } from '../helpers/auth';
 import { MockWebSocket, installMockWebSocket } from '../../jest/mockWebSocket';
+import { askMicPermission } from '../helpers/askMicPermission';
 
 jest.mock('../helpers/askMicPermission', () => ({
   askMicPermission: jest.fn(() => Promise.resolve(true)),
@@ -285,6 +286,42 @@ describe('useDeepgramSpeechToText – live session', () => {
     });
 
     expect(socket.sentTypes()).toContain('CloseStream');
+    expect(onEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores the previous socket closing while the next session starts', async () => {
+    const onEnd = jest.fn();
+    harnessProps = { onEnd };
+    await startSession();
+    const first = MockWebSocket.last();
+    await act(() => {
+      hookApi.stopListening();
+    });
+    expect(NativeDeepgram!.stopRecording).toHaveBeenCalledTimes(1);
+
+    let grantMic: (granted: boolean) => void = () => {};
+    (askMicPermission as jest.Mock).mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => (grantMic = resolve))
+    );
+    let starting: Promise<void> = Promise.resolve();
+    await act(() => {
+      starting = hookApi.startListening();
+    });
+    await act(() => {
+      first.onclose?.({ code: 1000 });
+    });
+    await act(async () => {
+      grantMic(true);
+      await starting;
+    });
+    await flushAuth();
+    await act(() => {
+      MockWebSocket.last().onopen?.();
+    });
+
+    expect(MockWebSocket.instances).toHaveLength(2);
+    expect(MockWebSocket.last().url).toContain('/v1/listen');
+    expect(NativeDeepgram!.stopRecording).toHaveBeenCalledTimes(1);
     expect(onEnd).toHaveBeenCalledTimes(1);
   });
 
